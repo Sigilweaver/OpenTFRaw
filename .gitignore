@@ -1,0 +1,26 @@
+# Cargo build output
+/target
+
+# Corpus sample files — pulled on demand via scripts/fetch_corpus.py,
+# not redistributed through this repo (multi-GB PRIDE datasets)
+/samples/
+
+# Reverse-engineering scratch: hexdump analysers, ad-hoc probes, and
+# early validation harnesses — kept out of the public repo
+/analyze_*.py
+/validate_*.py
+/trace_*.py
+
+# Imported 3rd-party reference material
+/unfinnigan_field_definitions.md
+
+# Python bytecode (scripts/ uses plain Python)
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor / tooling
+.vscode/
+.idea/
+*.swp
+.DS_Store
