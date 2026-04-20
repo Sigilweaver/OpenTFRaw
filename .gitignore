@@ -10,6 +10,7 @@
 /analyze_*.py
 /validate_*.py
 /trace_*.py
+/examples/*_survey.rs
 
 # Imported 3rd-party reference material
 /unfinnigan_field_definitions.md
