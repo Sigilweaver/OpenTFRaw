@@ -16,7 +16,7 @@ pub mod scan_format;
 pub mod scan_index;
 pub mod seq_row;
 
-pub use device::DeviceFamily;
+pub use device::{DetectedInstrument, DeviceFamily};
 pub use error::{Error, Result};
 pub use reader::RawFileReader;
 pub use scan_format::ScanDataFormat;

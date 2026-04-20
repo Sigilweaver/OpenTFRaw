@@ -195,6 +195,10 @@ pub struct RawFileReader {
     pub scan_format: crate::scan_format::ScanDataFormat,
     /// Detected device family (informational).
     pub device_family: crate::device::DeviceFamily,
+    /// Canonical instrument model name if one was detected in the file's
+    /// metadata region (e.g. `"Orbitrap Fusion Lumos"`). `None` means only
+    /// the coarse family could be inferred.
+    pub instrument_model: Option<&'static str>,
 }
 
 impl RawFileReader {
@@ -354,11 +358,27 @@ impl RawFileReader {
         // Classify scan format and device family.
         let scan_format = crate::scan_format::ScanDataFormat::detect(version, flat_peaks);
         let first_analyzer = scan_events.first().and_then(|e| e.preamble.analyzer());
-        let device_family = crate::device::DeviceFamily::detect(
+
+        // Scan a prefix of the file for the canonical instrument model string.
+        // Thermo embeds the model as a UTF-16LE string in the metadata region
+        // preceding the scan data — almost always within the first ~16 KB.
+        // Cap at 64 KB to give plenty of headroom without scanning large files.
+        let scan_window_cap = 64 * 1024u64;
+        let window_len = scan_window_cap.min(data_addr);
+        let metadata_window = if window_len > 0 {
+            r.seek_to(0)?;
+            r.read_bytes(window_len as usize).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let detected = crate::device::DeviceFamily::detect_instrument(
+            &metadata_window,
             &header.audit_start.tag2,
             &seq_row.inst_method,
             first_analyzer,
         );
+        let device_family = detected.family;
+        let instrument_model = detected.model;
 
         Ok(Self {
             header,
@@ -378,6 +398,7 @@ impl RawFileReader {
             flat_peaks,
             scan_format,
             device_family,
+            instrument_model,
         })
     }
 

@@ -19,6 +19,11 @@ fn main() {
             println!("=== Thermo RAW File ===");
             println!("Version:  {}", raw.version);
             println!(
+                "Instrument: {} ({})",
+                raw.instrument_model.unwrap_or("unknown model"),
+                raw.device_family.display_name()
+            );
+            println!(
                 "Scans:    {} ({} to {})",
                 raw.num_scans,
                 raw.run_header.sample_info.first_scan_number,
