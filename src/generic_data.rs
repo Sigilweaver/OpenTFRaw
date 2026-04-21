@@ -47,7 +47,10 @@ impl GenericDataHeader {
     pub(crate) fn try_read<R: Read + Seek>(r: &mut BinaryReader<R>) -> Result<Option<Self>> {
         let saved_pos = r.position();
         let n = r.read_u32()?;
-        if n > 1000 {
+        // A genuine schema has at least a couple of fields and fewer than ~500.
+        // The error-log "gap" region that precedes the schema in v64+ can
+        // otherwise mislead us by looking like a 0- or 1-field header.
+        if !(2..=500).contains(&n) {
             r.seek_to(saved_pos)?;
             return Ok(None);
         }
@@ -57,7 +60,21 @@ impl GenericDataHeader {
             match GenericType::from_u32(type_code) {
                 Some(field_type) => {
                     let length = r.read_u32()?;
+                    // Character count of the label. Real Thermo labels are
+                    // short and printable; require it to look sane or the
+                    // whole header is bogus.
+                    let label_start = r.position();
+                    let char_count = r.read_u32()?;
+                    if char_count > 200 {
+                        r.seek_to(saved_pos)?;
+                        return Ok(None);
+                    }
+                    r.seek_to(label_start)?;
                     let label = r.read_pascal_string()?;
+                    if !label_is_plausible(&label) {
+                        r.seek_to(saved_pos)?;
+                        return Ok(None);
+                    }
                     fields.push(GenericDataDescriptor {
                         field_type,
                         length,
@@ -70,8 +87,97 @@ impl GenericDataHeader {
                 }
             }
         }
-        Ok(Some(Self { fields }))
+        let hdr = Self { fields };
+        if !hdr.looks_meaningful() {
+            r.seek_to(saved_pos)?;
+            return Ok(None);
+        }
+        Ok(Some(hdr))
     }
+
+    /// A schema is "meaningful" if it contains at least a few fields with
+    /// real labels and has a non-trivial fixed record size. Used to reject
+    /// false positives picked up by the forward scan.
+    fn looks_meaningful(&self) -> bool {
+        let named = self
+            .fields
+            .iter()
+            .filter(|f| !f.label.is_empty())
+            .count();
+        named >= 2 && self.fixed_record_size() > 0
+    }
+
+    /// Sum of fixed byte sizes contributed by each descriptor. For variable
+    /// types (String/WideString) the descriptor's `length` field is used as
+    /// the storage allocation — which is the fixed on-disk size per record.
+    pub(crate) fn fixed_record_size(&self) -> usize {
+        self.fields
+            .iter()
+            .map(|f| match f.field_type {
+                GenericType::Gap => 0,
+                GenericType::Int8
+                | GenericType::Bool
+                | GenericType::BoolYesNo
+                | GenericType::BoolOnOff
+                | GenericType::UInt8 => 1,
+                GenericType::Int16 | GenericType::UInt16 => 2,
+                GenericType::Int32 | GenericType::UInt32 | GenericType::Float32 => 4,
+                GenericType::Float64 => 8,
+                GenericType::AsciiString => f.length as usize,
+                GenericType::WideString => f.length as usize * 2,
+            })
+            .sum()
+    }
+
+    /// Scan forward from the current position for a plausible GenericDataHeader
+    /// in a bounded window. The v64+ error-log region contains padding bytes
+    /// before the scan-parameters schema whose size isn't easily computed, so
+    /// we locate the schema by scanning for a valid signature.
+    pub(crate) fn find_forward<R: Read + Seek>(
+        r: &mut BinaryReader<R>,
+        max_scan: u64,
+        expected_record_size: Option<usize>,
+    ) -> Result<Option<Self>> {
+        let start = r.position();
+        let cap = max_scan.min(4 * 1024 * 1024) as usize;
+        r.seek_to(start)?;
+        let buf = r.read_bytes(cap)?;
+        r.seek_to(start)?;
+        let buf = buf.as_slice();
+        // Two passes: first require the schema's fixed record size to match
+        // the tail; second accept any meaningful schema.
+        for pass in 0..2 {
+            let mut offset = 0usize;
+            while offset + 4 <= buf.len() {
+                let n = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap());
+                if (2..=500).contains(&n) {
+                    r.seek_to(start + offset as u64)?;
+                    if let Some(hdr) = Self::try_read(r)? {
+                        let size_ok = match (pass, expected_record_size) {
+                            (0, Some(want)) => hdr.fixed_record_size() == want,
+                            _ => true,
+                        };
+                        if size_ok {
+                            return Ok(Some(hdr));
+                        }
+                    }
+                }
+                offset += 2;
+            }
+            if expected_record_size.is_none() {
+                break;
+            }
+        }
+        r.seek_to(start)?;
+        Ok(None)
+    }
+}
+
+/// Heuristic: a GDH field label must either be empty or have reasonable
+/// length. Labels are sometimes short single-character sentinels so we
+/// don't require printability.
+fn label_is_plausible(s: &str) -> bool {
+    s.len() <= 200
 }
 
 impl GenericRecord {

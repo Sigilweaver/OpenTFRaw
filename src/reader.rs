@@ -71,6 +71,14 @@ impl<R: Read + Seek> BinaryReader<R> {
         Ok(())
     }
 
+    pub fn length(&mut self) -> Result<u64> {
+        let cur = self.pos;
+        let end = self.inner.seek(SeekFrom::End(0))?;
+        self.inner.seek(SeekFrom::Start(cur))?;
+        self.pos = cur;
+        Ok(end)
+    }
+
     pub fn read_u8(&mut self) -> Result<u8> {
         let mut buf = [0u8; 1];
         self.read_bytes_into(&mut buf)?;
@@ -293,24 +301,9 @@ impl RawFileReader {
             scan_events.push(ScanEvent::read(&mut r, version)?);
         }
 
-        // 9. Scan parameters (trailer extra) — GenericData format in v64+
-        let (scan_parameters_header, scan_parameters) = if version >= 64 {
-            r.seek_to(run_header.scan_params_addr)?;
-            match GenericDataHeader::try_read(&mut r)? {
-                Some(hdr) => {
-                    let mut params = Vec::with_capacity(num_scans as usize);
-                    for _ in 0..num_scans {
-                        params.push(GenericRecord::read(&mut r, &hdr)?);
-                    }
-                    (hdr, params)
-                }
-                None => (GenericDataHeader { fields: Vec::new() }, Vec::new()),
-            }
-        } else {
-            (GenericDataHeader { fields: Vec::new() }, Vec::new())
-        };
-
-        // 10. Error log
+        // 9. Error log — in v64+ the error log is followed by the
+        //    GenericDataHeader for scan parameters (after some opaque padding),
+        //    so we read it first.
         let n_errors = run_header.sample_info.error_log_length;
         let error_log = if n_errors > 0 {
             r.seek_to(run_header.error_log_addr)?;
@@ -324,6 +317,46 @@ impl RawFileReader {
             log
         } else {
             Vec::new()
+        };
+
+        // 10. Scan parameters (trailer extra) — GenericData format in v64+.
+        //     The schema (GDH) is written between the error-log region and
+        //     the scan-trailer stream; the records are written at
+        //     `scan_params_addr` (tail of file) with a u32 preamble.
+        //     We scan forward from the error-log address to locate the
+        //     schema — the intervening padding varies by instrument.
+        let (scan_parameters_header, scan_parameters) = if version >= 64 {
+            r.seek_to(run_header.error_log_addr)?;
+            let scan_distance =
+                run_header.scan_trailer_addr.saturating_sub(run_header.error_log_addr);
+            // Compute the per-record size implied by the tail of the file so
+            // we can discriminate between multiple plausible GDH candidates
+            // in the error-log region.
+            let file_size = r.length()?;
+            let tail = file_size.saturating_sub(run_header.scan_params_addr + 4);
+            let expected_record_size = if num_scans > 0 && tail % num_scans as u64 == 0 {
+                Some((tail / num_scans as u64) as usize)
+            } else {
+                None
+            };
+            match GenericDataHeader::find_forward(
+                &mut r,
+                scan_distance,
+                expected_record_size,
+            )? {
+                Some(hdr) => {
+                    r.seek_to(run_header.scan_params_addr)?;
+                    let _preamble = r.read_u32()?;
+                    let mut params = Vec::with_capacity(num_scans as usize);
+                    for _ in 0..num_scans {
+                        params.push(GenericRecord::read(&mut r, &hdr)?);
+                    }
+                    (hdr, params)
+                }
+                None => (GenericDataHeader { fields: Vec::new() }, Vec::new()),
+            }
+        } else {
+            (GenericDataHeader { fields: Vec::new() }, Vec::new())
         };
 
         // 11. Instrument log — GenericData format in v64+
