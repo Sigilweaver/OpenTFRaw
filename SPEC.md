@@ -936,36 +936,74 @@ M/z acquisition range for a scan event.
 ## 25. ScanParameters
 
 Per-scan metadata (also called "trailer extra" in Thermo parlance). Located at
-`RunHeader.scan_params_addr`. This is a **self-describing** data stream: a
-GenericDataHeader defines the field layout, followed by one GenericRecord per
-scan.
+`RunHeader.scan_params_addr`.
 
-### 25.1 Stream Layout
+This stream is **self-describing**: a GenericDataHeader defines the field
+layout, followed by one GenericRecord per scan. The GenericDataHeader is NOT
+stored at `scan_params_addr` itself; it is located somewhere between
+`RunHeader.error_log_addr` and `RunHeader.scan_trailer_addr` in the file,
+typically near the instrument log. It is found by scanning forward from
+`error_log_addr` looking for a valid GDH whose `fixed_record_size()` matches
+`(file_size − scan_params_addr) / num_scans`.
 
-| Order | Type | Description |
-|-------|------|-------------|
-| 1 | GenericDataHeader | Describes the field types and labels |
-| 2 | GenericRecord[n] | One record per scan, decoded using the header's templates |
+### 25.1 Stream Layout at `scan_params_addr`
 
-### 25.2 Common Trailer Extra Fields
+Records begin **directly** at `scan_params_addr` — there is no preamble u32 or
+any other header at this offset. The file may contain a few trailing bytes
+(typically 4–8) after the last record; these are not part of any scan.
 
-These are the field labels commonly found in the GenericDataHeader (the exact
-set and order varies by instrument and software version):
+| Byte offset | Description |
+|-------------|-------------|
+| 0 | First byte of Record[0] (first scan) |
+| record_size | First byte of Record[1] |
+| … | … |
+| (num_scans − 1) × record_size | First byte of Record[num_scans − 1] |
+| num_scans × record_size | Optional trailing bytes (instrument-dependent) |
+
+### 25.2 Locating the GenericDataHeader
+
+The GDH for the ScanParameters stream is stored in the region bounded by
+`RunHeader.error_log_addr` (inclusive) and `RunHeader.scan_trailer_addr`
+(exclusive). Because the instrument log, error log, and ScanParameters GDH may
+be interleaved in this region, the reader locates the GDH by linear forward
+scan:
+
+1. Compute `expected_record_size = (file_size − scan_params_addr) / num_scans`
+   (integer division).
+2. Scan from `error_log_addr` toward `scan_trailer_addr`, attempting to decode
+   a GenericDataHeader at each plausible alignment.
+3. Accept the first GDH whose `fixed_record_size()` equals `expected_record_size`
+   (first pass). If no exact match is found, accept any structurally valid GDH
+   (second pass).
+
+### 25.3 Common Fields
+
+The exact field set and order vary by instrument family and firmware version.
+Representative fields:
 
 | Label | Type | Description |
 |-------|------|-------------|
-| "Ion Injection Time (ms):" | Float64 | Time ions were accumulated |
-| "Charge State:" | Int16 | Precursor charge state (for MS2+) |
-| "Monoisotopic M/Z:" | Float64 | Monoisotopic precursor M/z |
-| "Master Scan Number:" | Int32 | Scan number of the parent MS1 scan |
-| "Micro Scan Count:" | Int16 | Number of micro-scans averaged |
-| "Scan Segment:" | Int16 | Segment index |
-| "Scan Event:" | Int16 | Event index |
-| "HCD Energy:" | Float64 or string | Collision energy (may be "27.0 30.0 33.0" for stepped HCD) |
-| "Elapsed Scan Time (sec):" | Float64 | Duration of the scan |
-| "Master Index:" | Int32 | Alternative master scan reference |
-| "AGC:" | Float64 | Automatic Gain Control target |
-| "FT Resolution:" | Float64 | Orbitrap/FTMS resolution setting |
+| `"Ion Injection Time (ms):"` | Float32 or Float64 | Fill time in ms |
+| `"Charge State:"` | Int32 | Precursor charge (0 = MS1 / unknown) |
+| `"Monoisotopic M/Z:"` | Float64 | Monoisotopic precursor m/z (0 = not determined) |
+| `"Master Scan Number:"` | Int32 | Parent MS1 scan number (−1 = none) |
+| `"Master Index:"` | Int32 | Alternative master scan reference (newer firmware) |
+| `"Micro Scan Count:"` | Int32 | Number of micro-scans averaged |
+| `"Scan Segment:"` | Int32 | Segment index |
+| `"Scan Event:"` | Int32 | Event index within segment |
+| `"Orbitrap Resolution:"` | Int32 | Resolving power (older firmware) |
+| `"FT Resolution:"` | Int32 | Resolving power (newer firmware) |
+| `"HCD Energy:"` | AsciiString | Collision energy (may be stepped, e.g. `"27 30 33"`) |
+| `"Elapsed Scan Time (sec):"` | Float32 or Float64 | Scan duration |
+| `"AGC:"` | Bool or AsciiString | AGC on/off (`"On "` / `"Off"`) |
+| `"AGC Target:"` | Int32 | Target ion count |
+| `"Max. Ion Time (ms):"` | Float64 | Maximum allowed fill time |
+| `"Number of LM Found:"` | Int32 | Number of lock masses matched |
+| `"LM Correction (ppm):"` | Float64 | Applied lock-mass correction |
+
+Older LTQ Orbitrap instruments prepend one or more empty-label `AsciiString`
+fields (containing `\t`-separated internal state) before the human-readable
+fields above.
 
 ---
 
