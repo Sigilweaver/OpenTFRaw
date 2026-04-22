@@ -322,20 +322,22 @@ impl RawFileReader {
         // 10. Scan parameters (trailer extra) — GenericData format in v64+.
         //     The schema (GDH) is written between the error-log region and
         //     the scan-trailer stream; the records are written at
-        //     `scan_params_addr` (tail of file) with a u32 preamble.
+        //     `scan_params_addr` (tail of file) with NO stream preamble —
+        //     records begin directly at scan_params_addr. Any bytes after
+        //     the last record are trailing padding and can be ignored.
         //     We scan forward from the error-log address to locate the
         //     schema — the intervening padding varies by instrument.
         let (scan_parameters_header, scan_parameters) = if version >= 64 {
             r.seek_to(run_header.error_log_addr)?;
             let scan_distance =
                 run_header.scan_trailer_addr.saturating_sub(run_header.error_log_addr);
-            // Compute the per-record size implied by the tail of the file so
-            // we can discriminate between multiple plausible GDH candidates
-            // in the error-log region.
+            // Estimate per-record size from the tail of the file using integer
+            // division. Any remainder bytes are trailing data, not a preamble.
             let file_size = r.length()?;
-            let tail = file_size.saturating_sub(run_header.scan_params_addr + 4);
-            let expected_record_size = if num_scans > 0 && tail % num_scans as u64 == 0 {
-                Some((tail / num_scans as u64) as usize)
+            let tail = file_size.saturating_sub(run_header.scan_params_addr);
+            let expected_record_size = if num_scans > 0 && tail > 0 {
+                let per_scan = tail / num_scans as u64;
+                if per_scan >= 4 { Some(per_scan as usize) } else { None }
             } else {
                 None
             };
@@ -345,8 +347,8 @@ impl RawFileReader {
                 expected_record_size,
             )? {
                 Some(hdr) => {
+                    // Records start directly at scan_params_addr — no stream preamble.
                     r.seek_to(run_header.scan_params_addr)?;
-                    let _preamble = r.read_u32()?;
                     let mut params = Vec::with_capacity(num_scans as usize);
                     for _ in 0..num_scans {
                         params.push(GenericRecord::read(&mut r, &hdr)?);
