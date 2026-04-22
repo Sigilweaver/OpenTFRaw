@@ -2,7 +2,7 @@ use std::io::{Read, Seek, SeekFrom};
 
 use crate::error::{Error, Result};
 use crate::error_log::ErrorEntry;
-use crate::generic_data::{GenericDataHeader, GenericRecord};
+use crate::generic_data::{GenericDataHeader, GenericRecord, GenericValue};
 use crate::header::FileHeader;
 use crate::raw_file_info::RawFileInfo;
 use crate::run_header::RunHeader;
@@ -521,5 +521,141 @@ impl RawFileReader {
             ScanDataFormat::FlatV63 => self.read_scan_flat(source, scan_number),
             ScanDataFormat::FlatV66 => self.read_scan_srm_v66(source, scan_number),
         }
+    }
+
+    /// Return the scan-parameter record for a given 1-based scan number.
+    ///
+    /// Returns `None` if the file has no scan-parameter stream or if
+    /// `scan_number` is outside the valid scan range.
+    pub fn scan_parameters(&self, scan_number: u32) -> Option<&GenericRecord> {
+        let first = self.run_header.sample_info.first_scan_number;
+        let idx = scan_number.checked_sub(first)? as usize;
+        self.scan_parameters.get(idx)
+    }
+
+    /// Return a typed view of the scan-parameter record for a given scan.
+    ///
+    /// This wraps [`Self::scan_parameters`] in a [`ScanParams`] accessor that
+    /// provides named, type-safe fields and handles label-name variations
+    /// across instrument families.
+    pub fn scan_params(&self, scan_number: u32) -> Option<ScanParams<'_>> {
+        self.scan_parameters(scan_number).map(ScanParams)
+    }
+}
+
+// ─── High-level typed accessor for scan parameters ──────────────────────────
+
+/// Typed accessor for a scan's extra parameters (`ScanParams` stream).
+///
+/// The underlying [`GenericRecord`] stores named fields whose labels vary
+/// slightly across Thermo instrument families. This wrapper normalises the
+/// most common labels so callers do not need to hard-code instrument-specific
+/// strings.
+///
+/// # Example
+/// ```no_run
+/// use opentfraw::RawFileReader;
+/// let raw = RawFileReader::open_path("experiment.raw").unwrap();
+/// if let Some(p) = raw.scan_params(1) {
+///     println!("Injection time: {:?} ms", p.ion_injection_time_ms());
+///     println!("Charge state:   {:?}", p.charge_state());
+/// }
+/// ```
+pub struct ScanParams<'a>(pub &'a GenericRecord);
+
+impl<'a> ScanParams<'a> {
+    /// Return the raw `GenericRecord` for direct field access.
+    #[inline]
+    pub fn record(&self) -> &GenericRecord {
+        self.0
+    }
+
+    /// Ion injection / fill time in milliseconds.
+    ///
+    /// Label varies: `"Ion Injection Time (ms):"` (Orbitrap family) vs
+    /// `"Ion Inject Time (ms):"` (older LTQ variants).
+    pub fn ion_injection_time_ms(&self) -> Option<f64> {
+        // Try canonical label first; fall back to legacy label.
+        self.0.get_f64("Ion Injection Time (ms):")
+            .or_else(|| self.0.get_f64("Ion Inject Time (ms):"))
+    }
+
+    /// Precursor charge state (0 = unknown / MS1 scan).
+    pub fn charge_state(&self) -> Option<i32> {
+        self.0.get_i32("Charge State:")
+            // Some LCQ files use UInt8 for charge state.
+            .or_else(|| {
+                self.0.get("Charge State:").and_then(|v| match v {
+                    GenericValue::UInt8(n) => Some(*n as i32),
+                    _ => None,
+                })
+            })
+    }
+
+    /// Monoisotopic precursor m/z (0 = not determined).
+    pub fn monoisotopic_mz(&self) -> Option<f64> {
+        self.0.get_f64("Monoisotopic M/Z:")
+    }
+
+    /// Number of micro-scans averaged into this scan.
+    pub fn micro_scan_count(&self) -> Option<i32> {
+        self.0.get_i32("Micro Scan Count:")
+    }
+
+    /// Orbitrap / FT resolving power (e.g. 60000, 120000).
+    pub fn ft_resolution(&self) -> Option<i32> {
+        self.0.get_i32("Orbitrap Resolution:")
+            .or_else(|| self.0.get_i32("FT Resolution:"))
+    }
+
+    /// HCD collision energy string (e.g. `"27%"` or `"28.00"`).
+    ///
+    /// The label and unit differ between firmware generations; this returns
+    /// whatever string is present (eV or percent).
+    pub fn hcd_energy(&self) -> Option<&str> {
+        self.0.get_string("HCD Energy:")
+    }
+
+    /// Scan number of the master (MS1) scan that triggered this dependent scan.
+    /// Returns `None` or `Some(-1)` if this is not a dependent scan.
+    pub fn master_scan_number(&self) -> Option<i32> {
+        self.0.get_i32("Master Scan Number:")
+            .or_else(|| self.0.get_i32("Master Index:"))
+    }
+
+    /// Number of lock masses found / matched.
+    pub fn number_of_lm_found(&self) -> Option<i32> {
+        self.0.get_i32("Number of LM Found:")
+            .or_else(|| self.0.get_i32("Number of Lock Masses:"))
+    }
+
+    /// Lock-mass m/z correction applied (ppm).
+    pub fn lm_correction_ppm(&self) -> Option<f64> {
+        self.0.get_f64("LM Correction (ppm):")
+            .or_else(|| self.0.get_f64("LM m/z-Correction (ppm):"))
+    }
+
+    /// AGC target fill value (ion count).
+    pub fn agc_target(&self) -> Option<i32> {
+        self.0.get_i32("AGC Target:")
+    }
+
+    /// Whether automated gain control (AGC) was active.
+    pub fn agc_enabled(&self) -> Option<bool> {
+        match self.0.get("AGC:")? {
+            GenericValue::Bool(b) => Some(*b),
+            GenericValue::String(s) => Some(s.to_ascii_lowercase().contains("on")),
+            _ => None,
+        }
+    }
+
+    /// Elapsed scan time in seconds (Orbitrap instruments only).
+    pub fn elapsed_scan_time_s(&self) -> Option<f64> {
+        self.0.get_f64("Elapsed Scan Time (sec):")
+    }
+
+    /// Maximum allowed ion injection time in milliseconds.
+    pub fn max_ion_time_ms(&self) -> Option<f64> {
+        self.0.get_f64("Max. Ion Time (ms):")
     }
 }

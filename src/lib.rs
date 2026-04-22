@@ -18,6 +18,6 @@ pub mod seq_row;
 
 pub use device::{DetectedInstrument, DeviceFamily};
 pub use error::{Error, Result};
-pub use reader::RawFileReader;
+pub use reader::{RawFileReader, ScanParams};
 pub use scan_format::ScanDataFormat;
 pub use types::*;

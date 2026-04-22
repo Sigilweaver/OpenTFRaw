@@ -162,6 +162,25 @@ fn main() {
             }
             println!();
 
+            // Typed accessor summary for scan 1
+            let first = raw.run_header.sample_info.first_scan_number;
+            if let Some(p) = raw.scan_params(first) {
+                println!("--- Scan 1 Typed Summary ---");
+                println!("  injection_time_ms  : {:?}", p.ion_injection_time_ms());
+                println!("  charge_state       : {:?}", p.charge_state());
+                println!("  monoisotopic_mz    : {:?}", p.monoisotopic_mz());
+                println!("  micro_scan_count   : {:?}", p.micro_scan_count());
+                println!("  ft_resolution      : {:?}", p.ft_resolution());
+                println!("  hcd_energy         : {:?}", p.hcd_energy());
+                println!("  master_scan_number : {:?}", p.master_scan_number());
+                println!("  agc_enabled        : {:?}", p.agc_enabled());
+                println!("  agc_target         : {:?}", p.agc_target());
+                println!("  max_ion_time_ms    : {:?}", p.max_ion_time_ms());
+                println!("  elapsed_scan_time_s: {:?}", p.elapsed_scan_time_s());
+                println!("  lm_correction_ppm  : {:?}", p.lm_correction_ppm());
+            }
+            println!();
+
             // Error log
             if !raw.error_log.is_empty() {
                 println!("--- Error Log ({} entries) ---", raw.error_log.len());
