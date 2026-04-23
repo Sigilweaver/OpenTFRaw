@@ -1,7 +1,7 @@
-use std::io::{Read, Seek};
+use crate::error::Result;
 use crate::reader::BinaryReader;
 use crate::sample_info::SampleInfo;
-use crate::error::Result;
+use std::io::{Read, Seek};
 
 /// Run header — the secondary index structure with pointers to all data streams.
 #[derive(Debug)]

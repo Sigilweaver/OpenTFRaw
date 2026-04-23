@@ -1,7 +1,7 @@
 use crate::error::Result;
 use crate::reader::BinaryReader;
 use crate::types::GenericType;
-use std::io::{Read, Seek};
+use std::io::{Cursor, Read, Seek};
 
 /// A field descriptor within a GenericDataHeader.
 #[derive(Debug, Clone)]
@@ -142,17 +142,19 @@ impl GenericDataHeader {
         let cap = max_scan.min(4 * 1024 * 1024) as usize;
         r.seek_to(start)?;
         let buf = r.read_bytes(cap)?;
-        r.seek_to(start)?;
-        let buf = buf.as_slice();
         // Two passes: first require the schema's fixed record size to match
         // the tail; second accept any meaningful schema.
+        //
+        // Parse candidates entirely from the in-memory buffer using a Cursor so
+        // that we never seek the underlying file reader for each false positive.
+        // This avoids O(n) file seeks when the error-log gap is large (>1 MB).
         for pass in 0..2 {
             let mut offset = 0usize;
             while offset + 4 <= buf.len() {
                 let n = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap());
                 if (2..=500).contains(&n) {
-                    r.seek_to(start + offset as u64)?;
-                    if let Some(hdr) = Self::try_read(r)? {
+                    let mut cursor = BinaryReader::new(Cursor::new(&buf[offset..]));
+                    if let Some(hdr) = Self::try_read(&mut cursor)? {
                         let size_ok = match (pass, expected_record_size) {
                             (0, Some(want)) => hdr.fixed_record_size() == want,
                             _ => true,

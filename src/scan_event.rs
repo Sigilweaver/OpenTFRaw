@@ -35,7 +35,7 @@ pub struct ScanEvent {
 }
 
 impl ScanEventPreamble {
-    fn size_for_version(version: u32) -> usize {
+    pub(crate) fn size_for_version(version: u32) -> usize {
         match version {
             0..=8 => 41,
             57 | 60 => 80,
@@ -101,7 +101,11 @@ impl ScanEventPreamble {
 }
 
 impl ScanEvent {
-    pub(crate) fn read<R: Read + Seek>(r: &mut BinaryReader<R>, version: u32) -> Result<Self> {
+    pub(crate) fn read<R: Read + Seek>(
+        r: &mut BinaryReader<R>,
+        version: u32,
+        body_size: usize,
+    ) -> Result<Self> {
         let preamble_size = ScanEventPreamble::size_for_version(version);
         let preamble_bytes = r.read_bytes(preamble_size)?;
         let preamble = ScanEventPreamble {
@@ -109,67 +113,71 @@ impl ScanEvent {
         };
 
         if version >= 66 {
-            Self::read_v66(r, preamble)
+            Self::read_v66(r, preamble, body_size)
         } else {
             Self::read_pre_v66(r, preamble)
         }
     }
 
-    /// V66 scan events are fixed-size: 136-byte preamble + 96-byte body.
-    /// Body layout depends on n_reactions at body+0:
-    ///   MS1 (n_reactions=0): FC at body+0x08
-    ///   MS2 (n_reactions>0): Reaction at body+0x04 (32 bytes each), FC at body+0x40
+    /// V66 scan events have a fixed-size body (size determined by the caller
+    /// from the stream's address-space: body_size = event_size - preamble_size).
+    ///
+    /// Empirically verified layout (for Q Exactive HF-X with 144-byte body):
+    ///   body[0..4]:   u32 unknown_long[0] (always 1)
+    ///   body[4..8]:   u32 flags (0 for MS1, 0xA0000000 for MS2)
+    ///   body[8..64]:  opaque fields (precursor-related for MS2, range aux for MS1)
+    ///   body[fc_off..fc_off+16]: FractionCollector (scan window) at body_size-64
+    ///   body[np_off..np_off+4]:  u32 nparam at body_size-60
+    ///   body[np_off+4..]:        f64[nparam] coefficients
+    ///
+    /// The FC and nparam are at fixed offsets from the END of the body,
+    /// which is what allows this to generalize across different body sizes.
     fn read_v66<R: Read + Seek>(
         r: &mut BinaryReader<R>,
         preamble: ScanEventPreamble,
+        body_size: usize,
     ) -> Result<Self> {
-        const BODY_SIZE: usize = 96;
-        let body = r.read_bytes(BODY_SIZE)?;
+        let body = r.read_bytes(body_size)?;
 
-        let n_reactions = u32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+        // FractionCollector (scan window) sits at a fixed offset from the end.
+        // Verified: for 144-byte body, FC is at [64..80] = body_size - 80.
+        // nparam is at body_size - 64, coefficients follow.
+        let fc_off = body_size.saturating_sub(80);
+        let np_off = body_size.saturating_sub(64);
 
-        let mut reactions = Vec::new();
-        let mut fraction_collectors = Vec::new();
-
-        if n_reactions > 0 {
-            // Dependent scan (MS2+): Reaction at body+4, FC at body+0x40
-            for i in 0..n_reactions as usize {
-                let off = 4 + i * 32;
-                if off + 32 <= BODY_SIZE {
-                    let precursor_mz = f64::from_le_bytes(body[off..off + 8].try_into().unwrap());
-                    let unknown_double =
-                        f64::from_le_bytes(body[off + 8..off + 16].try_into().unwrap());
-                    let energy = f64::from_le_bytes(body[off + 16..off + 24].try_into().unwrap());
-                    let unknown_long1 =
-                        u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
-                    let unknown_long2 =
-                        u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap());
-                    reactions.push(Reaction {
-                        precursor_mz,
-                        unknown_double,
-                        energy,
-                        unknown_long1,
-                        unknown_long2,
-                    });
-                }
-            }
-            if BODY_SIZE >= 0x50 {
-                let low_mz = f64::from_le_bytes(body[0x40..0x48].try_into().unwrap());
-                let high_mz = f64::from_le_bytes(body[0x48..0x50].try_into().unwrap());
-                fraction_collectors.push(FractionCollector { low_mz, high_mz });
-            }
+        let fraction_collectors = if fc_off + 16 <= body_size {
+            let low_mz =
+                f64::from_le_bytes(body[fc_off..fc_off + 8].try_into().unwrap());
+            let high_mz =
+                f64::from_le_bytes(body[fc_off + 8..fc_off + 16].try_into().unwrap());
+            vec![FractionCollector { low_mz, high_mz }]
         } else {
-            // Primary scan (MS1): FC at body+0x08
-            let low_mz = f64::from_le_bytes(body[0x08..0x10].try_into().unwrap());
-            let high_mz = f64::from_le_bytes(body[0x10..0x18].try_into().unwrap());
-            fraction_collectors.push(FractionCollector { low_mz, high_mz });
+            Vec::new()
+        };
+
+        let mut coefficients = Vec::new();
+        if np_off + 4 <= body_size {
+            let nparam_raw =
+                u32::from_le_bytes(body[np_off..np_off + 4].try_into().unwrap()) as usize;
+            // Cap nparam at the number of f64s that actually fit in the remaining body.
+            // Without this cap, a garbage nparam (e.g. 0xFFFFFFFF from uninitialised
+            // bytes) causes billions of loop iterations just to evaluate the guard.
+            let max_nparam = (body_size.saturating_sub(np_off + 4)) / 8;
+            let nparam = nparam_raw.min(max_nparam);
+            for i in 0..nparam {
+                let off = np_off + 4 + i * 8;
+                coefficients
+                    .push(f64::from_le_bytes(body[off..off + 8].try_into().unwrap()));
+            }
         }
 
+        // Precursor reactions are not decoded from the body in v66;
+        // callers should use scan parameters for precursor m/z.
         Ok(Self {
             preamble,
-            reactions,
+            reactions: Vec::new(),
             fraction_collectors,
-            coefficients: Vec::new(),
+            coefficients,
         })
     }
 

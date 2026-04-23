@@ -7,6 +7,7 @@ pub mod device;
 pub mod error_log;
 pub mod generic_data;
 pub mod header;
+pub mod mzml;
 pub mod raw_file_info;
 pub mod run_header;
 pub mod sample_info;
@@ -18,6 +19,7 @@ pub mod seq_row;
 
 pub use device::{DetectedInstrument, DeviceFamily};
 pub use error::{Error, Result};
+pub use mzml::write_mzml;
 pub use reader::{RawFileReader, ScanParams};
 pub use scan_format::ScanDataFormat;
 pub use types::*;

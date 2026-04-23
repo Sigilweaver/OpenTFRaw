@@ -96,6 +96,40 @@ impl ScanDataPacket {
             peaks,
         })
     }
+
+    /// Read only the centroided peak list, skipping the (potentially large)
+    /// profile data. This is 2–10× faster than [`Self::read`] for high-
+    /// resolution Orbitrap scans where profile_size can be tens of thousands
+    /// of 4-byte words.
+    pub(crate) fn read_peaks_only<R: Read + Seek>(r: &mut BinaryReader<R>) -> Result<Vec<Peak>> {
+        let header = PacketHeader::read(r)?;
+
+        // Skip profile data instead of decoding it.
+        if header.profile_size > 0 {
+            r.skip((header.profile_size as usize) * 4)?;
+        }
+
+        // Centroid peak list — same as full read path.
+        let wide_mz = header.layout & 0x10000 != 0;
+        let peaks = if header.peak_list_size > 0 {
+            let count = r.read_u32()?;
+            let mut peaks = Vec::with_capacity(count as usize);
+            for _ in 0..count {
+                let mz = if wide_mz {
+                    r.read_f64()?
+                } else {
+                    r.read_f32()? as f64
+                };
+                let abundance = r.read_f32()?;
+                peaks.push(Peak { mz, abundance });
+            }
+            peaks
+        } else {
+            Vec::new()
+        };
+
+        Ok(peaks)
+    }
 }
 
 impl PacketHeader {

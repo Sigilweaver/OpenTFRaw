@@ -7,7 +7,7 @@ use crate::header::FileHeader;
 use crate::raw_file_info::RawFileInfo;
 use crate::run_header::RunHeader;
 use crate::scan_data::{read_flat_peaks, read_scan_srm_v66, Peak, ScanDataPacket};
-use crate::scan_event::ScanEvent;
+use crate::scan_event::{ScanEvent, ScanEventPreamble};
 use crate::scan_index::ScanIndexEntry;
 use crate::seq_row::SeqRow;
 
@@ -296,14 +296,25 @@ impl RawFileReader {
         } else {
             r.read_u32()?
         };
+        // For v66, compute the per-event body size from the stream's address range.
+        // The scan event stream spans [scan_trailer_addr+4 .. scan_params_addr).
+        // Each event = preamble (136 bytes) + body; body_size = event_size - 136.
+        let v66_body_size: usize = if version >= 66 && n_events > 0 {
+            let stream_bytes = run_header
+                .scan_params_addr
+                .saturating_sub(run_header.scan_trailer_addr)
+                .saturating_sub(4); // subtract the stream-preamble u32
+            let event_size = (stream_bytes / n_events as u64) as usize;
+            event_size.saturating_sub(ScanEventPreamble::size_for_version(version))
+        } else {
+            0
+        };
         let mut scan_events = Vec::with_capacity(n_events as usize);
         for _ in 0..n_events {
-            scan_events.push(ScanEvent::read(&mut r, version)?);
+            scan_events.push(ScanEvent::read(&mut r, version, v66_body_size)?);
         }
 
-        // 9. Error log — in v64+ the error log is followed by the
-        //    GenericDataHeader for scan parameters (after some opaque padding),
-        //    so we read it first.
+        // 9. Error log
         let n_errors = run_header.sample_info.error_log_length;
         let error_log = if n_errors > 0 {
             r.seek_to(run_header.error_log_addr)?;
@@ -316,36 +327,44 @@ impl RawFileReader {
             }
             log
         } else {
+            // Ensure reader is positioned at error_log_addr even when empty.
+            r.seek_to(run_header.error_log_addr)?;
             Vec::new()
         };
+        // The GDH for scan parameters immediately follows the error-log entries.
+        // Do NOT seek back to error_log_addr — doing so would cause find_forward
+        // to scan over the scan_index (which may sit between error_log and
+        // scan_trailer in some file layouts), creating a CPU-spinning O(n) search
+        // through megabytes of binary scan data.
+        let after_error_log = r.position();
 
         // 10. Scan parameters (trailer extra) — GenericData format in v64+.
-        //     The schema (GDH) is written between the error-log region and
-        //     the scan-trailer stream; the records are written at
-        //     `scan_params_addr` (tail of file) with NO stream preamble —
-        //     records begin directly at scan_params_addr. Any bytes after
-        //     the last record are trailing padding and can be ignored.
-        //     We scan forward from the error-log address to locate the
-        //     schema — the intervening padding varies by instrument.
+        //     The schema (GDH) is written just after the error-log entries;
+        //     the records are written at `scan_params_addr` (tail of file)
+        //     with NO stream preamble — records begin directly at
+        //     scan_params_addr. Any bytes after the last record are trailing
+        //     padding and can be ignored.
         let (scan_parameters_header, scan_parameters) = if version >= 64 {
-            r.seek_to(run_header.error_log_addr)?;
-            let scan_distance =
-                run_header.scan_trailer_addr.saturating_sub(run_header.error_log_addr);
+            // Search from after the error log entries up to scan_trailer.
+            // This skips any scan_index data that may sit in between.
+            let scan_distance = run_header
+                .scan_trailer_addr
+                .saturating_sub(after_error_log);
             // Estimate per-record size from the tail of the file using integer
             // division. Any remainder bytes are trailing data, not a preamble.
             let file_size = r.length()?;
             let tail = file_size.saturating_sub(run_header.scan_params_addr);
             let expected_record_size = if num_scans > 0 && tail > 0 {
                 let per_scan = tail / num_scans as u64;
-                if per_scan >= 4 { Some(per_scan as usize) } else { None }
+                if per_scan >= 4 {
+                    Some(per_scan as usize)
+                } else {
+                    None
+                }
             } else {
                 None
             };
-            match GenericDataHeader::find_forward(
-                &mut r,
-                scan_distance,
-                expected_record_size,
-            )? {
+            match GenericDataHeader::find_forward(&mut r, scan_distance, expected_record_size)? {
                 Some(hdr) => {
                     // Records start directly at scan_params_addr — no stream preamble.
                     r.seek_to(run_header.scan_params_addr)?;
@@ -523,6 +542,37 @@ impl RawFileReader {
         }
     }
 
+    /// Read centroided peaks only, skipping profile data.
+    ///
+    /// For PacketHeader files (Orbitrap / ion-trap), this skips the large
+    /// profile-data section, making it 2–10× faster than
+    /// [`Self::read_scan_peaks`] when only centroided m/z and intensity values
+    /// are needed (e.g. mzML export, peak area queries).
+    ///
+    /// For TSQ/SRM files this is identical to [`Self::read_scan_peaks`].
+    pub fn read_peaks_only<R: Read + Seek>(
+        &self,
+        source: &mut R,
+        scan_number: u32,
+    ) -> Result<Vec<Peak>> {
+        use crate::scan_format::ScanDataFormat;
+        match self.scan_format {
+            ScanDataFormat::PacketHeader => {
+                let idx = (scan_number - self.run_header.sample_info.first_scan_number) as usize;
+                if idx >= self.scan_index.len() {
+                    return Err(Error::AddressOutOfRange(scan_number as u64));
+                }
+                let entry = &self.scan_index[idx];
+                let abs_offset = self.data_addr + entry.offset;
+                source.seek(SeekFrom::Start(abs_offset))?;
+                let mut r = BinaryReader::new(source);
+                ScanDataPacket::read_peaks_only(&mut r)
+            }
+            ScanDataFormat::FlatV63 => self.read_scan_flat(source, scan_number),
+            ScanDataFormat::FlatV66 => self.read_scan_srm_v66(source, scan_number),
+        }
+    }
+
     /// Return the scan-parameter record for a given 1-based scan number.
     ///
     /// Returns `None` if the file has no scan-parameter stream or if
@@ -576,13 +626,15 @@ impl<'a> ScanParams<'a> {
     /// `"Ion Inject Time (ms):"` (older LTQ variants).
     pub fn ion_injection_time_ms(&self) -> Option<f64> {
         // Try canonical label first; fall back to legacy label.
-        self.0.get_f64("Ion Injection Time (ms):")
+        self.0
+            .get_f64("Ion Injection Time (ms):")
             .or_else(|| self.0.get_f64("Ion Inject Time (ms):"))
     }
 
     /// Precursor charge state (0 = unknown / MS1 scan).
     pub fn charge_state(&self) -> Option<i32> {
-        self.0.get_i32("Charge State:")
+        self.0
+            .get_i32("Charge State:")
             // Some LCQ files use UInt8 for charge state.
             .or_else(|| {
                 self.0.get("Charge State:").and_then(|v| match v {
@@ -604,7 +656,8 @@ impl<'a> ScanParams<'a> {
 
     /// Orbitrap / FT resolving power (e.g. 60000, 120000).
     pub fn ft_resolution(&self) -> Option<i32> {
-        self.0.get_i32("Orbitrap Resolution:")
+        self.0
+            .get_i32("Orbitrap Resolution:")
             .or_else(|| self.0.get_i32("FT Resolution:"))
     }
 
@@ -619,19 +672,22 @@ impl<'a> ScanParams<'a> {
     /// Scan number of the master (MS1) scan that triggered this dependent scan.
     /// Returns `None` or `Some(-1)` if this is not a dependent scan.
     pub fn master_scan_number(&self) -> Option<i32> {
-        self.0.get_i32("Master Scan Number:")
+        self.0
+            .get_i32("Master Scan Number:")
             .or_else(|| self.0.get_i32("Master Index:"))
     }
 
     /// Number of lock masses found / matched.
     pub fn number_of_lm_found(&self) -> Option<i32> {
-        self.0.get_i32("Number of LM Found:")
+        self.0
+            .get_i32("Number of LM Found:")
             .or_else(|| self.0.get_i32("Number of Lock Masses:"))
     }
 
     /// Lock-mass m/z correction applied (ppm).
     pub fn lm_correction_ppm(&self) -> Option<f64> {
-        self.0.get_f64("LM Correction (ppm):")
+        self.0
+            .get_f64("LM Correction (ppm):")
             .or_else(|| self.0.get_f64("LM m/z-Correction (ppm):"))
     }
 

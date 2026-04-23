@@ -14,3 +14,7 @@ thiserror = "2"
 [[example]]
 name = "dump"
 path = "examples/dump.rs"
+
+[[example]]
+name = "to_mzml"
+path = "examples/to_mzml.rs"
