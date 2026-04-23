@@ -32,7 +32,7 @@
 /// ```
 use crate::scan_event::ScanEvent;
 use crate::scan_index::ScanIndexEntry;
-use crate::types::{Activation, MsPower, ScanType};
+use crate::types::{MsPower, ScanType};
 
 /// Build the canonical Thermo scan filter string for a single scan event.
 ///

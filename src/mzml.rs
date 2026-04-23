@@ -249,8 +249,10 @@ where
     for idx in 0..raw.num_scans {
         let scan_number = first_scan + idx;
         let entry = &raw.scan_index[idx as usize];
-        let event_idx = (entry.scan_event as u32).saturating_sub(1) as usize;
-        let event = raw.scan_events.get(event_idx);
+        // `scan_events` is one-entry-per-scan, parallel to `scan_index`.
+        // The `entry.scan_event` field is a scan-event-class identifier, not
+        // an index into this array.
+        let event = raw.scan_events.get(idx as usize);
         let params = raw.scan_params(scan_number);
 
         // Read peaks — skip profile data for speed, skip scan on error.
@@ -446,88 +448,118 @@ fn write_spectrum<W: Write>(
     writeln!(out, r#"        </scanList>"#)?;
 
     // Precursor info for MS2+
+    //
+    // In v66 RAW files, scan-event reactions are empty and the precursor
+    // info lives entirely in the per-scan parameter table. Older formats
+    // populate `event.reactions[0]`. We emit a <precursor> block whenever
+    // we have enough data from either source.
     if !is_ms1 {
-        if let Some(ev) = event {
-            if !ev.reactions.is_empty() {
-                writeln!(out, r#"        <precursorList count="1">"#)?;
-                let rx = &ev.reactions[0];
+        // Resolve precursor m/z, width, charge, and energy from whichever
+        // source has it. Priority: params > event.reactions.
+        let reaction = event.and_then(|e| e.reactions.first());
+        let target_mz = params
+            .as_ref()
+            .and_then(|p| p.isolation_target_mz())
+            .or_else(|| params.as_ref().and_then(|p| p.monoisotopic_mz()))
+            .filter(|&mz| mz > 0.0)
+            .or_else(|| reaction.map(|r| r.precursor_mz).filter(|&mz| mz > 0.0));
+        let sel_mz = params
+            .as_ref()
+            .and_then(|p| p.monoisotopic_mz())
+            .filter(|&mz| mz > 0.0)
+            .or(target_mz);
+        let iso_width = params.as_ref().and_then(|p| p.isolation_width_mz());
+        let charge = params.as_ref().and_then(|p| p.charge_state()).filter(|&z| z > 0);
+        let act_energy = params
+            .as_ref()
+            .and_then(|p| p.activation_energy())
+            .or_else(|| reaction.map(|r| r.energy).filter(|&e| e > 0.0));
 
-                // Resolve the precursor scan number from ScanParams if available
-                let master_ref = params
-                    .as_ref()
-                    .and_then(|p| p.master_scan_number())
-                    .filter(|&n| n > 0)
-                    .map(|n| format!("scan={n}"));
-                if let Some(ref mref) = master_ref {
-                    writeln!(out, r#"          <precursor spectrumRef="{mref}">"#)?;
-                } else {
-                    writeln!(out, r#"          <precursor>"#)?;
-                }
+        if target_mz.is_some() || sel_mz.is_some() {
+            writeln!(out, r#"        <precursorList count="1">"#)?;
 
-                // Isolation window
-                writeln!(out, r#"            <isolationWindow>"#)?;
+            // Link to the precursor (MS1) scan when known.
+            let master_ref = params
+                .as_ref()
+                .and_then(|p| p.master_scan_number())
+                .filter(|&n| n > 0)
+                .map(|n| format!("scan={n}"));
+            if let Some(ref mref) = master_ref {
+                writeln!(out, r#"          <precursor spectrumRef="{mref}">"#)?;
+            } else {
+                writeln!(out, r#"          <precursor>"#)?;
+            }
+
+            // Isolation window (center + lower/upper offsets).
+            writeln!(out, r#"            <isolationWindow>"#)?;
+            if let Some(mz) = target_mz {
                 writeln!(
                     out,
                     r#"              <cvParam cvRef="MS" accession="MS:1000827" name="isolation window target m/z" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
-                    rx.precursor_mz
+                    mz
                 )?;
-                writeln!(out, r#"            </isolationWindow>"#)?;
+            }
+            if let Some(w) = iso_width {
+                // Thermo reports a total isolation width; mzML splits it into
+                // symmetric lower/upper offsets around the target.
+                let half = w / 2.0;
+                writeln!(
+                    out,
+                    r#"              <cvParam cvRef="MS" accession="MS:1000828" name="isolation window lower offset" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
+                    half
+                )?;
+                writeln!(
+                    out,
+                    r#"              <cvParam cvRef="MS" accession="MS:1000829" name="isolation window upper offset" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
+                    half
+                )?;
+            }
+            writeln!(out, r#"            </isolationWindow>"#)?;
 
-                // Selected ion
+            // Selected ion.
+            if let Some(mz) = sel_mz {
                 writeln!(out, r#"            <selectedIonList count="1">"#)?;
                 writeln!(out, r#"              <selectedIon>"#)?;
-
-                // Prefer monoisotopic m/z from params if non-zero
-                let sel_mz = params
-                    .as_ref()
-                    .and_then(|p| p.monoisotopic_mz())
-                    .filter(|&mz| mz > 0.0)
-                    .unwrap_or(rx.precursor_mz);
                 writeln!(
                     out,
                     r#"                <cvParam cvRef="MS" accession="MS:1000744" name="selected ion m/z" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
-                    sel_mz
+                    mz
                 )?;
-
-                // Charge state
-                if let Some(ref p) = params {
-                    if let Some(z) = p.charge_state().filter(|&z| z > 0) {
-                        writeln!(
-                            out,
-                            r#"                <cvParam cvRef="MS" accession="MS:1000041" name="charge state" value="{z}"/>"#
-                        )?;
-                    }
+                if let Some(z) = charge {
+                    writeln!(
+                        out,
+                        r#"                <cvParam cvRef="MS" accession="MS:1000041" name="charge state" value="{z}"/>"#
+                    )?;
                 }
                 writeln!(out, r#"              </selectedIon>"#)?;
                 writeln!(out, r#"            </selectedIonList>"#)?;
-
-                // Activation
-                writeln!(out, r#"            <activation>"#)?;
-                if let Some(act) = ev.preamble.activation() {
-                    let (acc, name) = activation_cv(act);
-                    writeln!(
-                        out,
-                        r#"              <cvParam cvRef="MS" accession="{acc}" name="{name}" value=""/>"#
-                    )?;
-                } else {
-                    // Unknown activation — use generic CID as fallback
-                    writeln!(
-                        out,
-                        r#"              <cvParam cvRef="MS" accession="MS:1000133" name="collision-induced dissociation" value=""/>"#
-                    )?;
-                }
-                if rx.energy > 0.0 {
-                    writeln!(
-                        out,
-                        r#"              <cvParam cvRef="MS" accession="MS:1000045" name="collision energy" value="{:.2}" unitCvRef="UO" unitAccession="UO:0000266" unitName="electronvolt"/>"#,
-                        rx.energy
-                    )?;
-                }
-                writeln!(out, r#"            </activation>"#)?;
-
-                writeln!(out, r#"          </precursor>"#)?;
-                writeln!(out, r#"        </precursorList>"#)?;
             }
+
+            // Activation.
+            writeln!(out, r#"            <activation>"#)?;
+            if let Some(act) = event.and_then(|e| e.preamble.activation()) {
+                let (acc, name) = activation_cv(act);
+                writeln!(
+                    out,
+                    r#"              <cvParam cvRef="MS" accession="{acc}" name="{name}" value=""/>"#
+                )?;
+            } else {
+                writeln!(
+                    out,
+                    r#"              <cvParam cvRef="MS" accession="MS:1000133" name="collision-induced dissociation" value=""/>"#
+                )?;
+            }
+            if let Some(e) = act_energy {
+                writeln!(
+                    out,
+                    r#"              <cvParam cvRef="MS" accession="MS:1000045" name="collision energy" value="{:.2}" unitCvRef="UO" unitAccession="UO:0000266" unitName="electronvolt"/>"#,
+                    e
+                )?;
+            }
+            writeln!(out, r#"            </activation>"#)?;
+
+            writeln!(out, r#"          </precursor>"#)?;
+            writeln!(out, r#"        </precursorList>"#)?;
         }
     }
 
