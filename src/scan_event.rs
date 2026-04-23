@@ -139,22 +139,50 @@ impl ScanEvent {
     ) -> Result<Self> {
         let body = r.read_bytes(body_size)?;
 
-        // FractionCollector (scan window) sits at a fixed offset from the end.
-        // Verified: for 144-byte body, FC is at [64..80] = body_size - 80.
-        // nparam is at body_size - 64, coefficients follow.
-        let fc_off = body_size.saturating_sub(80);
+        // FractionCollector (scan window) location varies by instrument family:
+        //   - Q Exactive / Exploris / Astral (body_size ≥ 136): offset 64
+        //   - Orbitrap Elite / Fusion / Fusion Lumos / Velos Pro (body_size=96):
+        //     MS1 → offset 8, MS2 → offset 64
+        //   - Orbitrap Ascend (body_size=152) MS2 → offset 128
+        //   - LTQ ion-trap only files (body_size < 96): offset 8
+        // Empirically verified across a 24-file multi-instrument corpus.
+        //
+        // Strategy: try a small list of candidate offsets in priority order
+        // and accept the first that yields a plausible m/z window. This is
+        // robust across the observed zoo of body layouts.
+        let candidates: &[usize] = &[64, 8, 128, body_size.saturating_sub(80)];
+        let fraction_collectors = candidates
+            .iter()
+            .copied()
+            .find_map(|off| {
+                if off + 16 > body_size {
+                    return None;
+                }
+                let low_mz =
+                    f64::from_le_bytes(body[off..off + 8].try_into().unwrap());
+                let high_mz =
+                    f64::from_le_bytes(body[off + 8..off + 16].try_into().unwrap());
+                // A valid scan window must be finite, monotonic, and within
+                // physically realistic m/z bounds (instruments top out well
+                // below 1e5 m/z). Accept lo == hi as well because some
+                // SIM / tSIM scans use a single-point window.
+                if low_mz.is_finite()
+                    && high_mz.is_finite()
+                    && low_mz >= 0.1
+                    && low_mz <= high_mz
+                    && high_mz <= 50_000.0
+                {
+                    Some(vec![FractionCollector { low_mz, high_mz }])
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        // nparam + coefficients live at a fixed offset from the end of the body
+        // (body_size - 64). This is independent of the FC location and is
+        // consistent across all v66 instruments in the corpus.
         let np_off = body_size.saturating_sub(64);
-
-        let fraction_collectors = if fc_off + 16 <= body_size {
-            let low_mz =
-                f64::from_le_bytes(body[fc_off..fc_off + 8].try_into().unwrap());
-            let high_mz =
-                f64::from_le_bytes(body[fc_off + 8..fc_off + 16].try_into().unwrap());
-            vec![FractionCollector { low_mz, high_mz }]
-        } else {
-            Vec::new()
-        };
-
         let mut coefficients = Vec::new();
         if np_off + 4 <= body_size {
             let nparam_raw =
