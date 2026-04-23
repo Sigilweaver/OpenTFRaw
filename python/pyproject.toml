@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "opentfraw"
+version = "0.1.0"
+description = "Pure-Rust parser for Thermo Fisher RAW mass spectrometry files"
+readme = "README.md"
+license = { text = "MIT OR Apache-2.0" }
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+]
+dependencies = ["numpy>=1.20"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "opentfraw"
+manifest-path = "Cargo.toml"

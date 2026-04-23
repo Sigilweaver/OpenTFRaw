@@ -18,3 +18,7 @@ path = "examples/dump.rs"
 [[example]]
 name = "to_mzml"
 path = "examples/to_mzml.rs"
+
+# Keep the Python bindings crate out of the parent's cargo invocations.
+[workspace]
+exclude = ["python"]

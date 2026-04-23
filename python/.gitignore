@@ -1,0 +1,15 @@
+# Rust build artifacts
+target/
+*.rs.bk
+Cargo.lock
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.so
+*.dylib
+*.pyd
+dist/
+*.egg-info/
+build/
