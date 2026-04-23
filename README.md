@@ -28,6 +28,7 @@ and fetched locally via [`scripts/fetch_corpus.py`](scripts/fetch_corpus.py)
 | Scan peak data (packet + flat)     | ✅     |
 | Error log                          | ✅     |
 | Scan parameters / instrument log   | ✅     |
+| Scan filter strings (Thermo syntax) | ✅     |
 | Generic data section               | ✅     |
 | Device / instrument classification | 🚧 best-effort |
 | Full tune-method block             | ⏳     |
@@ -54,6 +55,35 @@ The `dump` example prints a full human-readable summary:
 
 ```sh
 cargo run --release --example dump -- path/to/file.raw [--max-scans N]
+```
+
+Export to mzML:
+
+```sh
+cargo run --release --example to_mzml -- path/to/file.raw output.mzML
+```
+
+### Python
+
+The `python/` sub-crate exposes a NumPy-friendly API via PyO3:
+
+```python
+import opentfraw
+
+raw = opentfraw.RawFile("run.raw")
+print(raw.num_scans, raw.instrument_model)
+
+mz, intensity = raw.peaks(3)           # float64 / float32 numpy arrays
+s = raw.scan(3)                        # dict: ms_level, RT, charge, ...
+print(s["filter_string"])              # 'ITMS + c NSI d Full ms2 384.8@cid30.00 [110-1166]'
+
+raw.to_mzml("run.mzML")
+```
+
+Build with [maturin](https://www.maturin.rs/):
+
+```sh
+cd python && maturin develop --release
 ```
 
 ## Architecture
@@ -96,8 +126,11 @@ OpenTFRaw/
 │   ├── types.rs            # shared type aliases + Analyzer/Detector/etc.
 │   └── error.rs            # Error / Result
 ├── examples/dump.rs        # CLI pretty-printer + validator
+├── examples/to_mzml.rs     # mzML export example
+├── python/                 # PyO3 Python bindings (opentfraw wheel)
 ├── scripts/fetch_corpus.py # pulls PRIDE corpus (see CORPUS.md)
 ├── SPEC.md                 # evolving binary format specification
+├── ROADMAP.md              # planned work
 └── CORPUS.md               # validation corpus methodology + provenance
 ```
 
@@ -128,9 +161,15 @@ vendor runtime dependency.
 ## Related
 
 - [SPEC.md](SPEC.md) — binary format specification
+- [ROADMAP.md](ROADMAP.md) — planned work
 - [CORPUS.md](CORPUS.md) — validation corpus methodology
 - [`Sigilweaver/TFRaw-Sources`](https://github.com/Sigilweaver/TFRaw-Sources) — source catalogue
 
 ## License
 
-Not yet licensed.
+Licensed under either of
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
+
+at your option.
