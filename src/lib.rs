@@ -13,6 +13,7 @@ pub mod run_header;
 pub mod sample_info;
 pub mod scan_data;
 pub mod scan_event;
+pub mod scan_filter;
 pub mod scan_format;
 pub mod scan_index;
 pub mod seq_row;

@@ -22,6 +22,8 @@ fn main() {
             );
             // Print first 3 scan events
             for (i, ev) in raw.scan_events.iter().take(3).enumerate() {
+                let scan_no = raw.run_header.sample_info.first_scan_number + i as u32;
+                let filter = raw.scan_filter(scan_no).unwrap_or_default();
                 println!(
                     "  Event {}: ms_power={:?} dependent={} range=[{:.1}-{:.1}]",
                     i,
@@ -36,6 +38,7 @@ fn main() {
                         .map(|fc| fc.high_mz)
                         .unwrap_or(0.0),
                 );
+                println!("    filter: {filter}");
             }
         }
         Err(e) => {

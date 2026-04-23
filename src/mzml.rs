@@ -264,6 +264,8 @@ where
             .map(ms_level)
             .unwrap_or(1);
         let polarity = event.and_then(|e| e.preamble.polarity());
+        let scan_mode = event.and_then(|e| e.preamble.scan_mode());
+        let filter = raw.scan_filter(scan_number);
         let is_ms1 = level == 1;
 
         let mz_vals: Vec<f64> = peaks.iter().map(|p| p.mz as f64).collect();
@@ -276,6 +278,8 @@ where
             scan_number,
             level,
             polarity,
+            scan_mode,
+            filter.as_deref(),
             is_ms1,
             entry,
             event,
@@ -299,6 +303,8 @@ fn write_spectrum<W: Write>(
     scan_number: u32,
     level: u32,
     polarity: Option<Polarity>,
+    scan_mode: Option<crate::ScanMode>,
+    filter: Option<&str>,
     is_ms1: bool,
     entry: &ScanIndexEntry,
     event: Option<&ScanEvent>,
@@ -329,6 +335,21 @@ fn write_spectrum<W: Write>(
         r#"        <cvParam cvRef="MS" accession="{}" name="{}" value=""/>"#,
         spectrum_type_acc.0, spectrum_type_acc.1
     )?;
+
+    // Centroid vs profile. Many downstream tools (e.g. MSFragger) refuse to
+    // process spectra missing this tag, so we emit it unconditionally, falling
+    // back to "profile" (the MS1 default on Orbitrap) when the preamble byte
+    // is missing.
+    match scan_mode {
+        Some(crate::ScanMode::Centroid) => writeln!(
+            out,
+            r#"        <cvParam cvRef="MS" accession="MS:1000127" name="centroid spectrum" value=""/>"#
+        )?,
+        _ => writeln!(
+            out,
+            r#"        <cvParam cvRef="MS" accession="MS:1000128" name="profile spectrum" value=""/>"#
+        )?,
+    }
 
     // Polarity
     match polarity {
@@ -377,6 +398,19 @@ fn write_spectrum<W: Write>(
         r#"          <cvParam cvRef="MS" accession="MS:1000795" name="no combination" value=""/>"#
     )?;
     writeln!(out, r#"          <scan>"#)?;
+
+    // Thermo scan filter string — crucial for downstream tools that key off
+    // the filter (MSFragger, MaxQuant, pyteomics, Skyline, ...).
+    if let Some(f) = filter {
+        if !f.is_empty() {
+            writeln!(
+                out,
+                r#"            <cvParam cvRef="MS" accession="MS:1000512" name="filter string" value="{}"/>"#,
+                escape(f)
+            )?;
+        }
+    }
+
     writeln!(
         out,
         r#"            <cvParam cvRef="MS" accession="MS:1000016" name="scan start time" value="{:.6}" unitCvRef="UO" unitAccession="UO:0000031" unitName="minute"/>"#,

@@ -591,6 +591,30 @@ impl RawFileReader {
     pub fn scan_params(&self, scan_number: u32) -> Option<ScanParams<'_>> {
         self.scan_parameters(scan_number).map(ScanParams)
     }
+
+    /// Return the canonical Thermo scan filter string for a given scan
+    /// (1-based scan number), or `None` if the scan is out of range.
+    ///
+    /// Example output: `"FTMS + p NSI Full ms [350.0000-1500.0000]"`.
+    ///
+    /// See [`crate::scan_filter`] for grammar details.
+    pub fn scan_filter(&self, scan_number: u32) -> Option<String> {
+        let first = self.run_header.sample_info.first_scan_number;
+        let idx = scan_number.checked_sub(first)? as usize;
+        let event = self.scan_events.get(idx)?;
+        let entry = self.scan_index.get(idx)?;
+        // Precursor m/z and activation energy come from the per-scan params
+        // table (not the event body) for v66+. Fall back silently if missing.
+        let params = self.scan_params(scan_number);
+        let precursor = params.as_ref().and_then(|p| p.monoisotopic_mz());
+        let energy = params
+            .as_ref()
+            .and_then(|p| p.hcd_energy())
+            .and_then(|s| s.trim_end_matches('%').parse::<f64>().ok());
+        Some(crate::scan_filter::build_filter(
+            event, entry, precursor, energy,
+        ))
+    }
 }
 
 // ─── High-level typed accessor for scan parameters ──────────────────────────
@@ -713,5 +737,42 @@ impl<'a> ScanParams<'a> {
     /// Maximum allowed ion injection time in milliseconds.
     pub fn max_ion_time_ms(&self) -> Option<f64> {
         self.0.get_f64("Max. Ion Time (ms):")
+    }
+
+    /// MSn isolation window width in m/z.
+    ///
+    /// Label varies: `"MS2 Isolation Width:"` (most common), `"MSn Isolation Width:"`,
+    /// or `"Isolation Width (M/Z):"` on some firmware.
+    pub fn isolation_width_mz(&self) -> Option<f64> {
+        self.0
+            .get_f64("MS2 Isolation Width:")
+            .or_else(|| self.0.get_f64("MSn Isolation Width:"))
+            .or_else(|| self.0.get_f64("Isolation Width (M/Z):"))
+            .or_else(|| self.0.get_f64("MS2 Isolation Width (M/Z):"))
+    }
+
+    /// MSn isolation window target m/z (the center of the isolation window).
+    ///
+    /// Some instruments write this separately from the precursor m/z; when
+    /// absent, callers should fall back to [`Self::monoisotopic_mz`] or to
+    /// the event's first reaction `precursor_mz`.
+    pub fn isolation_target_mz(&self) -> Option<f64> {
+        self.0
+            .get_f64("MS2 Isolation Offset:")
+            .or_else(|| self.0.get_f64("Target M/Z:"))
+    }
+
+    /// Activation energy (eV or %) for the selected activation type.
+    ///
+    /// Orbitrap writes the HCD energy as a string; this helper parses it into
+    /// a number when possible, stripping a trailing `%` suffix.
+    pub fn activation_energy(&self) -> Option<f64> {
+        if let Some(v) = self.0.get_f64("HCD Energy (eV):") {
+            return Some(v);
+        }
+        if let Some(s) = self.hcd_energy() {
+            return s.trim().trim_end_matches('%').parse::<f64>().ok();
+        }
+        self.0.get_f64("Normalized Collision Energy:")
     }
 }
