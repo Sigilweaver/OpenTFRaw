@@ -1,6 +1,9 @@
 # Cargo build output
 /target
 
+# Roadmap (internal)
+/ROADMAP.md
+
 # Corpus sample files — pulled on demand via scripts/fetch_corpus.py,
 # not redistributed through this repo (multi-GB PRIDE datasets)
 /samples/

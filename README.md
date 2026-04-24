@@ -1,71 +1,65 @@
 # OpenTFRaw
 
-An open, pure-Rust parser for **Thermo Fisher RAW** mass-spectrometry
-files — reverse-engineered from scratch, without the vendor SDK.
+Pure-Rust parser for Thermo Fisher RAW mass-spectrometry files, reverse-engineered without the vendor SDK.
+
+Reads format versions 8, 47, 57, 60, 62, 63, 64, and 66 -- covering every Thermo instrument
+line from the LCQ Classic (mid-1990s) through the Orbitrap Astral (2023) and the latest TSQ
+triple quadrupoles.
 
 ## Status
 
-**Experimental.** Reads file-format versions **8, 47, 57, 60, 62, 63, 64,
-and 66** — covering every Thermo instrument line from the LCQ Classic
-(mid-1990s) through to the Orbitrap Astral (2023) and the latest TSQ
-triple quadrupoles.
+Experimental. A 27-file validation corpus spanning every major instrument family is maintained
+separately in [Sigilweaver/TFRaw-Sources](https://github.com/Sigilweaver/TFRaw-Sources) and
+fetched on demand via `scripts/fetch_corpus.py`. See [CORPUS.md](CORPUS.md).
 
-A 27-file validation corpus spanning every major instrument family is
-built by [`Sigilweaver/TFRaw-Sources`](https://github.com/Sigilweaver/TFRaw-Sources)
-and fetched locally via [`scripts/fetch_corpus.py`](scripts/fetch_corpus.py)
-— see [CORPUS.md](CORPUS.md).
+## What is parsed
 
-## What's Parsed
-
-| Component              | Status |
-| ---------------------- | ------ |
-| File header + audit tags           | ✅     |
-| Sample information + sequence row  | ✅     |
-| RAW file info + instrument method  | ✅     |
-| Run header (multi-controller)      | ✅     |
-| Scan event hierarchy + filters     | ✅     |
-| Scan index / trailer               | ✅     |
-| Scan peak data (packet + flat)     | ✅     |
-| Error log                          | ✅     |
-| Scan parameters / instrument log   | ✅     |
-| Scan filter strings (Thermo syntax) | ✅     |
-| Generic data section               | ✅     |
-| Device / instrument classification | 🚧 best-effort |
-| Full tune-method block             | ⏳     |
-| Status log fine-grained schema     | ⏳     |
-
-Format versions covered: **8, 47, 57, 60, 62, 63, 64, 66**.
+| Component                           | Status       |
+| ----------------------------------- | ------------ |
+| File header + audit tags            | yes          |
+| Sample information + sequence row   | yes          |
+| RAW file info + instrument method   | yes          |
+| Run header (multi-controller)       | yes          |
+| Scan event hierarchy + filters      | yes          |
+| Scan index / trailer                | yes          |
+| Scan peak data (packet + flat)      | yes          |
+| Error log                           | yes          |
+| Scan parameters / instrument log    | yes          |
+| Scan filter strings (Thermo syntax) | yes          |
+| Generic data section                | yes          |
+| Device / instrument classification  | best-effort  |
+| Full tune-method block              | not yet      |
+| Status log fine-grained schema      | not yet      |
 
 ## Quick start
+
+### Rust
 
 ```rust
 use opentfraw::RawFileReader;
 
 let raw = RawFileReader::open_path("sample.raw")?;
-println!("{} — {} scans", raw.device_family.display_name(), raw.num_scans);
+println!("{} -- {} scans", raw.device_family.display_name(), raw.num_scans);
 
 let mut file = std::fs::File::open("sample.raw")?;
 for scan_num in 1..=raw.num_scans {
     let peaks = raw.read_scan_peaks(&mut file, scan_num)?;
-    // peaks: Vec<Peak { mz, intensity, ... }>
 }
 ```
 
-The `dump` example prints a full human-readable summary:
-
 ```sh
 cargo run --release --example dump -- path/to/file.raw [--max-scans N]
-```
-
-Export to mzML:
-
-```sh
 cargo run --release --example to_mzml -- path/to/file.raw output.mzML
 ```
 
 ### Python
 
-The `python/` sub-crate exposes a NumPy-friendly API via PyO3:
+The `python/` sub-crate wraps the Rust library via PyO3. Build with
+[maturin](https://www.maturin.rs/):
+
+```sh
+cd python && maturin develop --release
+```
 
 ```python
 import opentfraw
@@ -73,103 +67,89 @@ import opentfraw
 raw = opentfraw.RawFile("run.raw")
 print(raw.num_scans, raw.instrument_model)
 
-mz, intensity = raw.peaks(3)           # float64 / float32 numpy arrays
-s = raw.scan(3)                        # dict: ms_level, RT, charge, ...
-print(s["filter_string"])              # 'ITMS + c NSI d Full ms2 384.8@cid30.00 [110-1166]'
+mz, intensity = raw.peaks(3)        # float64 / float32 numpy arrays
+s = raw.scan(3)                     # dict with ms_level, RT, charge, etc.
+print(s["filter_string"])           # e.g. "ITMS + c NSI d Full ms2 384.8@cid30.00 [110-1166]"
 
 raw.to_mzml("run.mzML")
 ```
 
-Build with [maturin](https://www.maturin.rs/):
-
-```sh
-cd python && maturin develop --release
-```
-
 ## Architecture
 
-Three scan-data codecs are dispatched automatically by a format router:
+Scan data is dispatched to one of three decoders based on the file's scan-data format:
 
-| Router variant | When it applies                                  | Instruments                  |
-| -------------- | ------------------------------------------------ | ---------------------------- |
-| `PacketHeader` | Profile + centroid scans with a header packet    | All Orbitrap / ion trap      |
-| `FlatV63`      | Variable-size flat peaks, version ≤ 63           | Older TSQ / SRM              |
-| `FlatV66`      | Fixed 12-byte peak triplets, version ≥ 64        | TSQ Quantiva / Altis SRM     |
+| Variant        | When it applies                                | Instruments              |
+| -------------- | ---------------------------------------------- | ------------------------ |
+| `PacketHeader` | Profile + centroid scans with a header packet  | All Orbitrap / ion trap  |
+| `FlatV63`      | Variable-size flat peaks, version <= 63        | Older TSQ / SRM          |
+| `FlatV66`      | Fixed 12-byte peak triplets, version >= 64     | TSQ Quantiva / Altis SRM |
 
 Entry point is `RawFileReader::read_scan_peaks`, which dispatches on
-`scan_format: ScanDataFormat` populated during `open()`.
+`scan_format: ScanDataFormat` set during `open()`.
 
-`DeviceFamily` (see [`src/device.rs`](src/device.rs)) classifies the
-instrument into one of 10 families using a heuristic over the audit
-tag + instrument method path + first-scan analyzer.
+`DeviceFamily` (`src/device.rs`) classifies the instrument into one of 10 families using a
+heuristic over the audit tag, instrument method path, and first-scan analyzer.
 
 ## Repository layout
 
 ```
-OpenTFRaw/
-├── src/                    # Rust crate
-│   ├── lib.rs              # public API (RawFileReader, DeviceFamily, …)
-│   ├── reader.rs           # main open() + dispatch logic
-│   ├── header.rs           # file header
-│   ├── audit_tag.rs        # audit tag blocks
-│   ├── sample_info.rs      # sample info section
-│   ├── seq_row.rs          # sequence row
-│   ├── raw_file_info.rs    # RAW-file preamble + inst_method
-│   ├── run_header.rs       # run header (single or multi-controller)
-│   ├── scan_event.rs       # scan event hierarchy (filter / polarity / etc.)
-│   ├── scan_index.rs       # scan index + trailer
-│   ├── scan_data.rs        # packet-header and flat-peak decoders
-│   ├── scan_format.rs      # format-dispatch enum
-│   ├── device.rs           # DeviceFamily taxonomy + detection
-│   ├── error_log.rs        # error log section
-│   ├── generic_data.rs     # generic data section
-│   ├── types.rs            # shared type aliases + Analyzer/Detector/etc.
-│   └── error.rs            # Error / Result
-├── examples/dump.rs        # CLI pretty-printer + validator
-├── examples/to_mzml.rs     # mzML export example
-├── python/                 # PyO3 Python bindings (opentfraw wheel)
-├── scripts/fetch_corpus.py # pulls PRIDE corpus (see CORPUS.md)
-├── SPEC.md                 # evolving binary format specification
-├── ROADMAP.md              # planned work
-└── CORPUS.md               # validation corpus methodology + provenance
+src/
+  lib.rs              public API (RawFileReader, DeviceFamily, ...)
+  reader.rs           open() and dispatch logic
+  header.rs           file header
+  audit_tag.rs        audit tag blocks
+  sample_info.rs      sample info section
+  seq_row.rs          sequence row
+  raw_file_info.rs    RAW-file preamble + inst_method
+  run_header.rs       run header (single or multi-controller)
+  scan_event.rs       scan event hierarchy (filter / polarity / etc.)
+  scan_index.rs       scan index + trailer
+  scan_data.rs        packet-header and flat-peak decoders
+  scan_format.rs      format-dispatch enum
+  device.rs           DeviceFamily taxonomy + detection
+  error_log.rs        error log section
+  generic_data.rs     generic data section
+  types.rs            shared enums (Analyzer, Polarity, Activation, ...)
+  error.rs            Error / Result
+examples/
+  dump.rs             CLI pretty-printer + validator
+  to_mzml.rs          mzML export
+python/               PyO3 Python bindings (opentfraw wheel)
+scripts/
+  fetch_corpus.py     pulls PRIDE corpus (see CORPUS.md)
+SPEC.md               binary format specification
+CORPUS.md             validation corpus methodology + provenance
+CREDITS.md            prior art and third-party acknowledgements
 ```
 
 ## Corpus
 
-The validation corpus is not redistributed in this repo — it's pulled
-from the [PRIDE Archive](https://www.ebi.ac.uk/pride/) on demand.
-
-Project discovery and metadata is provided by the sibling repository
-[`Sigilweaver/TFRaw-Sources`](https://github.com/Sigilweaver/TFRaw-Sources),
-which catalogues 3,400+ Thermo-instrument PRIDE projects with 169,000+
-.raw files. See [CORPUS.md](CORPUS.md) for the methodology.
+The validation corpus is pulled from the [PRIDE Archive](https://www.ebi.ac.uk/pride/) on demand
+and is not redistributed in this repo. Project discovery is provided by
+[Sigilweaver/TFRaw-Sources](https://github.com/Sigilweaver/TFRaw-Sources), which catalogues
+3,400+ Thermo-instrument PRIDE projects covering 169,000+ .raw files.
 
 ```sh
-python3 scripts/fetch_corpus.py             # default 400 MB cap
-python3 scripts/fetch_corpus.py --max-mb 800 # raise cap for Astral etc.
+python3 scripts/fetch_corpus.py             # 400 MB default cap
+python3 scripts/fetch_corpus.py --max-mb 800
 ```
 
 ## Why
 
-Thermo RAW is the dominant proprietary format in bottom-up and top-down
-proteomics. Existing readers depend on Thermo's Windows-only .NET SDK
-wrapped via Mono or PythonNet — painful to deploy, awkward on
-ARM/macOS, and opaque when things go wrong. A pure-Rust reader unlocks
-cross-platform tooling (conversion, indexing, search) without the
-vendor runtime dependency.
+Existing open-source RAW readers depend on Thermo's Windows-only .NET SDK (wrapped via Mono or
+PythonNet), which limits deployment to Windows or requires a non-trivial runtime. OpenTFRaw parses
+the binary format directly with no vendor dependency, enabling cross-platform use on Linux, macOS,
+and Windows without the .NET runtime.
 
 ## Related
 
-- [SPEC.md](SPEC.md) — binary format specification
-- [ROADMAP.md](ROADMAP.md) — planned work
-- [CORPUS.md](CORPUS.md) — validation corpus methodology
-- [`Sigilweaver/TFRaw-Sources`](https://github.com/Sigilweaver/TFRaw-Sources) — source catalogue
+- [SPEC.md](SPEC.md) -- binary format specification
+- [CORPUS.md](CORPUS.md) -- validation corpus methodology
+- [CREDITS.md](CREDITS.md) -- prior art and acknowledgements
+- [Sigilweaver/TFRaw-Sources](https://github.com/Sigilweaver/TFRaw-Sources) -- source catalogue
 
 ## License
 
-Licensed under either of
+Copyright 2026 Sigilweaver Holdings LLC
 
-- [Apache License, Version 2.0](LICENSE-APACHE)
-- [MIT License](LICENSE-MIT)
-
-at your option.
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
