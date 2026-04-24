@@ -2,9 +2,6 @@
 
 ## Prior art
 
-OpenTFRaw was reverse-engineered independently. The following prior-art projects informed
-the approach and provided field-name references during format analysis:
-
 ### unfinnigan
 
 Gene Selkov, 2010-2012. Perl and Python reverse-engineering of the Thermo RAW binary format.
@@ -13,28 +10,6 @@ and 66. Field names and layout notes from unfinnigan were cross-referenced when 
 field offsets.
 
 Source: https://github.com/prvst/unfinnigan
-
-### ThermoRawFileParser
-
-CompOmics group, Ghent University. C#/.NET converter that wraps Thermo's proprietary
-RawFileReader SDK. Useful as a reference for expected output values (retention times, m/z,
-intensities) when validating the parser against corpus files.
-
-Source: https://github.com/compomics/ThermoRawFileParser
-
-### ProteoWizard / msConvert
-
-A widely-used C++ mass-spectrometry file conversion framework that also wraps the Thermo SDK.
-Used as a secondary ground-truth reference for mzML output validation.
-
-Source: https://proteowizard.sourceforge.io/
-
-### ms_deisotope
-
-mobiusklein. Python wrapper around Thermo's .NET SDK via pythonnet. Served as a reference for
-expected scan-parameter field names and values on Orbitrap instruments.
-
-Source: https://github.com/mobiusklein/ms_deisotope
 
 ## Standards
 

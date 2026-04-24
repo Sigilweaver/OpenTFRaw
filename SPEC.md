@@ -1320,16 +1320,6 @@ layout for all scan types (see §21).
    project. The most comprehensive prior binary format analysis. Supports
    versions 57, 62, 63, 64, 66. Source: https://github.com/prvst/unfinnigan
 
-2. **ThermoRawFileParser** (CompOmics, Ghent University): C#/.NET converter
-   using Thermo's proprietary RawFileReader SDK. Does not parse the binary
-   format directly. Source: https://github.com/compomics/ThermoRawFileParser
-
-3. **ms_deisotope** (mobiusklein): Python wrapper around Thermo's .NET SDK via
-   pythonnet. Source: https://github.com/mobiusklein/ms_deisotope
-
-4. **ProteoWizard/msConvert**: C++ converter using Thermo's SDK.
-   Source: https://proteowizard.sourceforge.io/
-
 ### 35.2 Key Observations
 
 - All existing open-source readers (except unfinnigan) depend on Thermo's
