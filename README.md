@@ -8,9 +8,8 @@ triple quadrupoles.
 
 ## Status
 
-Experimental. A 27-file validation corpus spanning every major instrument family is maintained
-separately in [Sigilweaver/TFRaw-Sources](https://github.com/Sigilweaver/TFRaw-Sources) and
-fetched on demand via `scripts/fetch_corpus.py`. See [CORPUS.md](CORPUS.md).
+Experimental. A 27-file validation corpus spanning every major instrument family is fetched
+on demand via `scripts/fetch_corpus.py`. See [CORPUS.md](CORPUS.md).
 
 ## What is parsed
 
@@ -125,13 +124,12 @@ CREDITS.md            prior art and third-party acknowledgements
 ## Corpus
 
 The validation corpus is pulled from the [PRIDE Archive](https://www.ebi.ac.uk/pride/) on demand
-and is not redistributed in this repo. Project discovery is provided by
-[Sigilweaver/TFRaw-Sources](https://github.com/Sigilweaver/TFRaw-Sources), which catalogues
-3,400+ Thermo-instrument PRIDE projects covering 169,000+ .raw files.
+and is not redistributed in this repo. The file `scripts/sources.json` records the exact PRIDE
+accession and filename for each instrument; the fetcher downloads any entry not already on disk.
 
 ```sh
-python3 scripts/fetch_corpus.py             # 400 MB default cap
-python3 scripts/fetch_corpus.py --max-mb 800
+python3 scripts/fetch_corpus.py
+python3 scripts/fetch_corpus.py --dry-run
 ```
 
 ## Why
@@ -146,7 +144,6 @@ and Windows without the .NET runtime.
 - [SPEC.md](SPEC.md) -- binary format specification
 - [CORPUS.md](CORPUS.md) -- validation corpus methodology
 - [CREDITS.md](CREDITS.md) -- prior art and acknowledgements
-- [Sigilweaver/TFRaw-Sources](https://github.com/Sigilweaver/TFRaw-Sources) -- source catalogue
 
 ## License
 
