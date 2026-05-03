@@ -38,7 +38,7 @@ download for each instrument:
     ]
 
 To add or replace an entry, edit `sources.json` directly and re-run the
-fetcher.  The manifest (`samples/corpus/manifest.json`) records what is
+fetcher.  The manifest (`corpus/manifest.json`) records what is
 currently on disk; the fetcher skips any instrument already present there.
 
 ## Running the Fetcher
@@ -49,11 +49,11 @@ currently on disk; the fetcher skips any instrument already present there.
 The script resolves each download URL through the PRIDE REST API
 (https://www.ebi.ac.uk/pride/ws/archive/v2/files/byProject\) and saves
 files as `{accession}_{instrument_label}_{original_filename}` under
-`samples/corpus/`.
+`corpus/`.
 
 ## Provenance Record
 
-`samples/corpus/manifest.json` records which PRIDE project each local
+`corpus/manifest.json` records which PRIDE project each local
 file came from:
 
     {

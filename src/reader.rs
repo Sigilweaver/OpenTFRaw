@@ -347,9 +347,7 @@ impl RawFileReader {
         let (scan_parameters_header, scan_parameters) = if version >= 64 {
             // Search from after the error log entries up to scan_trailer.
             // This skips any scan_index data that may sit in between.
-            let scan_distance = run_header
-                .scan_trailer_addr
-                .saturating_sub(after_error_log);
+            let scan_distance = run_header.scan_trailer_addr.saturating_sub(after_error_log);
             // Estimate per-record size from the tail of the file using integer
             // division. Any remainder bytes are trailing data, not a preamble.
             let file_size = r.length()?;

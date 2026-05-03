@@ -18,7 +18,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-CORPUS_DIR = Path(__file__).parent.parent / "samples" / "corpus"
+CORPUS_DIR = Path(__file__).parent.parent / "corpus"
 MANIFEST = CORPUS_DIR / "manifest.json"
 SOURCES = Path(__file__).parent / "sources.json"
 USER_AGENT = "OpenTFRaw-CorpusFetcher/1.0"
