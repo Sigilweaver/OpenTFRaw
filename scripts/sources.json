@@ -136,9 +136,9 @@
     },
     {
         "instrument": "TSQ Altis",
-        "mode": "PRM",
+        "mode": "SRM-2",
         "accession": "PXD069101",
-        "pride_filename": "milla0255_70.raw"
+        "pride_filename": "milla0255_01.raw"
     },
     {
         "instrument": "Orbitrap Eclipse",
