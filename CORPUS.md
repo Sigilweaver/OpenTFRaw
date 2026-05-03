@@ -34,12 +34,23 @@ download for each instrument:
         "accession": "PXD044152",
         "pride_filename": "Ex250122_K50ng_60m2.raw"
       },
+      {
+        "instrument": "Orbitrap Fusion Lumos",
+        "mode": "DIA",
+        "accession": "PXD031322",
+        "pride_filename": "OFL001513-YLL-GPF-15K-1.raw"
+      },
       ...
     ]
 
+The optional `mode` field distinguishes additional files for the same
+instrument that cover a different acquisition mode (DIA, EThcD, PRM, MS3,
+etc.).  When present, the manifest key is `"Instrument (mode)"` instead
+of just `"Instrument"`, so both files are tracked independently.
+
 To add or replace an entry, edit `sources.json` directly and re-run the
 fetcher.  The manifest (`corpus/manifest.json`) records what is
-currently on disk; the fetcher skips any instrument already present there.
+currently on disk; the fetcher skips any key already present there.
 
 ## Running the Fetcher
 
@@ -49,7 +60,9 @@ currently on disk; the fetcher skips any instrument already present there.
 The script resolves each download URL through the PRIDE REST API
 (https://www.ebi.ac.uk/pride/ws/archive/v2/files/byProject\) and saves
 files as `{accession}_{instrument_label}_{original_filename}` under
-`corpus/`.
+`corpus/`.  If the API returns an empty response (an intermittent server
+behaviour observed in 2026), the script falls back to constructing the
+FTP URL directly from the project publication date.
 
 ## Provenance Record
 
@@ -69,7 +82,12 @@ To trace any file back to its source, use the PXD accession:
 
     https://www.ebi.ac.uk/pride/archive/projects/\<PXD_ACCESSION\>
 
-## Target Instruments
+## Target Instruments and Acquisition Modes
+
+The corpus is organised in two tiers:
+
+**Tier 1 - one file per instrument line** (covers every format version
+and scan-data encoding path):
 
 | Family                    | Instruments                                                   |
 | ------------------------- | ------------------------------------------------------------- |
@@ -77,8 +95,19 @@ To trace any file back to its source, use the PXD accession:
 | LTQ Orbitrap hybrids      | LTQ Orbitrap, XL, XL ETD, Velos, Velos Pro, Elite             |
 | Q-Orbitrap                | Q Exactive, Plus, HF, HF-X, UHMR                              |
 | Tribrid Orbitrap          | Fusion, Fusion Lumos, Eclipse, Ascend                         |
-| Single-stage Orbitrap     | Exploris 120, 240, 480, Astral                                |
+| Single-stage Orbitrap     | Exploris 120, 240, 480, Astral (DIA)                          |
 | Triple quadrupole         | TSQ Vantage, Quantiva, Altis                                  |
+
+**Tier 2 - additional files per instrument covering distinct modes**:
+
+| Entry                            | Mode   | What it exercises                          |
+| -------------------------------- | ------ | ------------------------------------------ |
+| Orbitrap Fusion Lumos (DIA)      | DIA    | Multiple isolation windows per scan cycle  |
+| Orbitrap Fusion Lumos (MS3)      | MS3    | Three-stage fragmentation / XL-MS workflow |
+| Orbitrap Eclipse (EThcD)         | EThcD  | Electron-transfer + supplemental HCD       |
+| Q Exactive HF (DIA)              | DIA    | Fixed-window SWATH-like DIA on Q Exactive  |
+| Orbitrap Exploris 480 (DDA-2)    | DDA    | Second firmware vintage for regression     |
+| TSQ Altis (PRM)                  | PRM    | Parallel reaction monitoring on triple-Q   |
 
 ## Limitations
 

@@ -29,13 +29,41 @@ def _req(url: str) -> urllib.request.Request:
     return urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
 
 
+def _project_pub_date(accession: str) -> str | None:
+    """
+    Return the publicationDate (YYYY-MM-DD) for a PRIDE project, or None.
+    Used to construct FTP paths when the files/byProject API is unavailable.
+    """
+    try:
+        url = f"{PRIDE_API}/projects/{accession}"
+        with urllib.request.urlopen(_req(url), timeout=20) as r:
+            data = json.loads(r.read())
+        return data.get("publicationDate")  # e.g. "2022-07-11"
+    except Exception:
+        return None
+
+
+def _ftp_url(accession: str, pride_filename: str, pub_date: str) -> str:
+    """Construct the PRIDE FTP HTTPS URL for a file given the publication date."""
+    yyyy, mm = pub_date[:4], pub_date[5:7]
+    return (
+        f"https://ftp.pride.ebi.ac.uk/pride/data/archive/{yyyy}/{mm}"
+        f"/{accession}/{pride_filename}"
+    )
+
+
 def pride_download_url(accession: str, pride_filename: str) -> tuple[str, int] | None:
     """
     Return (https_url, size_bytes) for a specific file in a PRIDE project,
     or None if not found.
+
+    Tries the PRIDE REST API first; falls back to constructing the FTP URL
+    directly from the project publication date when the API returns nothing
+    (the v2 files/byProject endpoint has been observed to return empty bodies).
     """
     page = 0
     page_size = 100
+    api_returned_data = False
     while True:
         api_url = (
             f"{PRIDE_API}/files/byProject"
@@ -43,11 +71,15 @@ def pride_download_url(accession: str, pride_filename: str) -> tuple[str, int] |
         )
         try:
             with urllib.request.urlopen(_req(api_url), timeout=30) as r:
-                data = json.loads(r.read())
+                raw = r.read()
+            if not raw:
+                break  # API returned empty body -- fall through to FTP fallback
+            data = json.loads(raw)
         except Exception as e:
             print(f"  [ERROR] PRIDE API request failed: {e}", flush=True)
-            return None
+            break
 
+        api_returned_data = True
         for entry in data.get("content", []):
             if entry.get("fileName", "").lower() == pride_filename.lower():
                 size = entry.get("fileSizeBytes", 0)
@@ -71,7 +103,20 @@ def pride_download_url(accession: str, pride_filename: str) -> tuple[str, int] |
         page += 1
         time.sleep(0.2)
 
-    return None
+    if api_returned_data:
+        return None  # API worked but file not found in project
+
+    # FTP fallback: resolve the publication date and construct the URL directly.
+    print("  [INFO] files/byProject API returned nothing; using FTP fallback",
+          flush=True)
+    pub_date = _project_pub_date(accession)
+    if not pub_date:
+        print(f"  [ERROR] could not determine publication date for {accession}",
+              flush=True)
+        return None
+    url = _ftp_url(accession, pride_filename, pub_date)
+    # We do not know the byte size in advance; use 0 and let the download fill it.
+    return url, 0
 
 
 def load_manifest() -> dict:
@@ -109,6 +154,11 @@ def label(inst: str) -> str:
     return inst.replace(" ", "_")
 
 
+def manifest_key(instrument: str, mode: str | None) -> str:
+    """Return the key used to store this entry in the corpus manifest."""
+    return f"{instrument} ({mode})" if mode else instrument
+
+
 def run(dry_run: bool) -> None:
     CORPUS_DIR.mkdir(parents=True, exist_ok=True)
     manifest = load_manifest()
@@ -120,13 +170,15 @@ def run(dry_run: bool) -> None:
         instrument: str = entry["instrument"]
         accession: str = entry["accession"]
         pride_filename: str = entry["pride_filename"]
+        mode: str | None = entry.get("mode")
+        key = manifest_key(instrument, mode)
 
         print(f"\n{'='*60}", flush=True)
         print(f"  {instrument}  ({accession})", flush=True)
 
-        if instrument in manifest:
+        if key in manifest:
             print(
-                f"  Already have: {manifest[instrument]['filename']}  -- skipping",
+                f"  Already have: {manifest[key]['filename']}  -- skipping",
                 flush=True,
             )
             continue
@@ -140,7 +192,8 @@ def run(dry_run: bool) -> None:
         url, size = result
         lbl = label(instrument)
         dest = CORPUS_DIR / f"{accession}_{lbl}_{pride_filename}"
-        print(f"  {pride_filename}  ({size / 1e6:.1f} MB)", flush=True)
+        size_str = f"{size / 1e6:.1f} MB" if size else "size unknown"
+        print(f"  {pride_filename}  ({size_str})", flush=True)
 
         if dry_run:
             print(f"  [DRY-RUN] -> {dest.name}", flush=True)
@@ -150,7 +203,7 @@ def run(dry_run: bool) -> None:
         if ok:
             actual = dest.stat().st_size
             print(f"  Done: {actual / 1e6:.1f} MB", flush=True)
-            manifest[instrument] = {
+            manifest[key] = {
                 "accession": accession,
                 "filename": dest.name,
                 "size_bytes": actual,
