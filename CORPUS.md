@@ -107,7 +107,7 @@ and scan-data encoding path):
 | Orbitrap Eclipse (EThcD)         | EThcD  | Electron-transfer + supplemental HCD       |
 | Q Exactive HF (DIA)              | DIA    | Fixed-window SWATH-like DIA on Q Exactive  |
 | Orbitrap Exploris 480 (DDA-2)    | DDA    | Second firmware vintage for regression     |
-| TSQ Altis (PRM)                  | PRM    | Parallel reaction monitoring on triple-Q   |
+| TSQ Altis (SRM-2)                | SRM-2  | Second SRM file from a different dataset   |
 
 ## Limitations
 
