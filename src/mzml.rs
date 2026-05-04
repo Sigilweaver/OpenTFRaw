@@ -142,11 +142,18 @@ fn ms_level(power: MsPower) -> u32 {
 
 // ─── Activation method → CV accession ────────────────────────────────────────
 
-fn activation_cv(act: Activation) -> (&'static str, &'static str) {
+fn activation_cv(act: Activation, analyzer: Option<crate::Analyzer>) -> (&'static str, &'static str) {
     match act {
         Activation::HCD => ("MS:1000422", "beam-type collision-induced dissociation"),
         Activation::ETD => ("MS:1000598", "electron transfer dissociation"),
-        Activation::CID => ("MS:1000133", "collision-induced dissociation"),
+        // On FTMS instruments (Orbitrap, FT-ICR) byte=4 is beam-type CID (HCD),
+        // not ion-trap CID. Mirror the same logic as the scan-filter builder.
+        Activation::CID => match analyzer {
+            Some(crate::Analyzer::FTMS) => {
+                ("MS:1000422", "beam-type collision-induced dissociation")
+            }
+            _ => ("MS:1000133", "collision-induced dissociation"),
+        },
     }
 }
 
@@ -476,22 +483,26 @@ fn write_spectrum<W: Write>(
             .and_then(|p| p.activation_energy())
             .or_else(|| reaction.map(|r| r.energy).filter(|&e| e > 0.0));
 
-        if target_mz.is_some() || sel_mz.is_some() {
-            writeln!(out, r#"        <precursorList count="1">"#)?;
+        // Always emit a <precursorList> for MSn spectra; mzML requires it.
+        // For DIA scans the precursor m/z is 0/unknown, but the activation
+        // method and (when available) isolation window are still recorded.
+        writeln!(out, r#"        <precursorList count="1">"#)?;
 
-            // Link to the precursor (MS1) scan when known.
-            let master_ref = params
-                .as_ref()
-                .and_then(|p| p.master_scan_number())
-                .filter(|&n| n > 0)
-                .map(|n| format!("scan={n}"));
-            if let Some(ref mref) = master_ref {
-                writeln!(out, r#"          <precursor spectrumRef="{mref}">"#)?;
-            } else {
-                writeln!(out, r#"          <precursor>"#)?;
-            }
+        // Link to the precursor (MS1) scan when known.
+        let master_ref = params
+            .as_ref()
+            .and_then(|p| p.master_scan_number())
+            .filter(|&n| n > 0)
+            .map(|n| format!("scan={n}"));
+        if let Some(ref mref) = master_ref {
+            writeln!(out, r#"          <precursor spectrumRef="{mref}">"#)?;
+        } else {
+            writeln!(out, r#"          <precursor>"#)?;
+        }
 
-            // Isolation window (center + lower/upper offsets).
+        // Isolation window (center + lower/upper offsets). Omit entirely
+        // when no window information is available (e.g. all-ions DIA).
+        if target_mz.is_some() || iso_width.is_some() {
             writeln!(out, r#"            <isolationWindow>"#)?;
             if let Some(mz) = target_mz {
                 writeln!(
@@ -516,52 +527,53 @@ fn write_spectrum<W: Write>(
                 )?;
             }
             writeln!(out, r#"            </isolationWindow>"#)?;
-
-            // Selected ion.
-            if let Some(mz) = sel_mz {
-                writeln!(out, r#"            <selectedIonList count="1">"#)?;
-                writeln!(out, r#"              <selectedIon>"#)?;
-                writeln!(
-                    out,
-                    r#"                <cvParam cvRef="MS" accession="MS:1000744" name="selected ion m/z" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
-                    mz
-                )?;
-                if let Some(z) = charge {
-                    writeln!(
-                        out,
-                        r#"                <cvParam cvRef="MS" accession="MS:1000041" name="charge state" value="{z}"/>"#
-                    )?;
-                }
-                writeln!(out, r#"              </selectedIon>"#)?;
-                writeln!(out, r#"            </selectedIonList>"#)?;
-            }
-
-            // Activation.
-            writeln!(out, r#"            <activation>"#)?;
-            if let Some(act) = event.and_then(|e| e.preamble.activation()) {
-                let (acc, name) = activation_cv(act);
-                writeln!(
-                    out,
-                    r#"              <cvParam cvRef="MS" accession="{acc}" name="{name}" value=""/>"#
-                )?;
-            } else {
-                writeln!(
-                    out,
-                    r#"              <cvParam cvRef="MS" accession="MS:1000133" name="collision-induced dissociation" value=""/>"#
-                )?;
-            }
-            if let Some(e) = act_energy {
-                writeln!(
-                    out,
-                    r#"              <cvParam cvRef="MS" accession="MS:1000045" name="collision energy" value="{:.2}" unitCvRef="UO" unitAccession="UO:0000266" unitName="electronvolt"/>"#,
-                    e
-                )?;
-            }
-            writeln!(out, r#"            </activation>"#)?;
-
-            writeln!(out, r#"          </precursor>"#)?;
-            writeln!(out, r#"        </precursorList>"#)?;
         }
+
+        // Selected ion.
+        if let Some(mz) = sel_mz {
+            writeln!(out, r#"            <selectedIonList count="1">"#)?;
+            writeln!(out, r#"              <selectedIon>"#)?;
+            writeln!(
+                out,
+                r#"                <cvParam cvRef="MS" accession="MS:1000744" name="selected ion m/z" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
+                mz
+            )?;
+            if let Some(z) = charge {
+                writeln!(
+                    out,
+                    r#"                <cvParam cvRef="MS" accession="MS:1000041" name="charge state" value="{z}"/>"#
+                )?;
+            }
+            writeln!(out, r#"              </selectedIon>"#)?;
+            writeln!(out, r#"            </selectedIonList>"#)?;
+        }
+
+        // Activation.
+        writeln!(out, r#"            <activation>"#)?;
+        if let Some(act) = event.and_then(|e| e.preamble.activation()) {
+            let analyzer = event.and_then(|e| e.preamble.analyzer());
+            let (acc, name) = activation_cv(act, analyzer);
+            writeln!(
+                out,
+                r#"              <cvParam cvRef="MS" accession="{acc}" name="{name}" value=""/>"#
+            )?;
+        } else {
+            writeln!(
+                out,
+                r#"              <cvParam cvRef="MS" accession="MS:1000133" name="collision-induced dissociation" value=""/>"#
+            )?;
+        }
+        if let Some(e) = act_energy {
+            writeln!(
+                out,
+                r#"              <cvParam cvRef="MS" accession="MS:1000045" name="collision energy" value="{:.2}" unitCvRef="UO" unitAccession="UO:0000266" unitName="electronvolt"/>"#,
+                e
+            )?;
+        }
+        writeln!(out, r#"            </activation>"#)?;
+
+        writeln!(out, r#"          </precursor>"#)?;
+        writeln!(out, r#"        </precursorList>"#)?;
     }
 
     // Binary arrays

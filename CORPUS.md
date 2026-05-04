@@ -111,6 +111,22 @@ and scan-data encoding path):
 | Q Exactive HF-X (PRM)            | PRM    | Parallel reaction monitoring: 42 targets,  |
 |                                  |        | 7-minute gradient, SARS-CoV-2 peptides     |
 
+### Multi-controller coverage
+
+Several Tier 1 files carry `controller_count > 1` in their
+`RawFileInfoPreamble`, meaning the RAW file contains a UV/analog chromatogram
+channel alongside the MS data stream.  The parser exercises the
+multi-controller selection path (reader.rs `select_ms_run_header`) for these:
+
+| File (Tier 1 instrument)  | `controller_count` | Confirmed year |
+| ------------------------- | :----------------: | -------------- |
+| Orbitrap Fusion           | 2                  | 2016-12        |
+| Orbitrap Fusion Lumos     | 2                  | 2016-03        |
+| LTQ Orbitrap (PXD069348)  | 3                  | 2014-02        |
+
+The selection heuristic — `ntrailer > 0` (v64+) or `nsegs > 0 && first_scan
+<= last_scan` (v63) — correctly identifies the MS controller in every case.
+
 ## Limitations
 
 - PRIDE's metadata lists declared instrument names; a few submitters
