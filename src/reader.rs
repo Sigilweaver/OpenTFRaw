@@ -296,22 +296,80 @@ impl RawFileReader {
         } else {
             r.read_u32()?
         };
-        // For v66, compute the per-event body size from the stream's address range.
+        // For v66, compute per-event body sizes from the stream's address range.
         // The scan event stream spans [scan_trailer_addr+4 .. scan_params_addr).
-        // Each event = preamble (136 bytes) + body; body_size = event_size - 136.
-        let v66_body_size: usize = if version >= 66 && n_events > 0 {
-            let stream_bytes = run_header
-                .scan_params_addr
-                .saturating_sub(run_header.scan_trailer_addr)
-                .saturating_sub(4); // subtract the stream-preamble u32
-            let event_size = (stream_bytes / n_events as u64) as usize;
-            event_size.saturating_sub(ScanEventPreamble::size_for_version(version))
-        } else {
-            0
-        };
+        // Each event = preamble (136 bytes) + body.
+        //
+        // Simple instruments (Q Exactive, Exploris): all events are identical in
+        // size so stream_bytes divides evenly by n_events.
+        //
+        // Tribrid instruments (Eclipse, Fusion Lumos): primary (MS1) scans and
+        // dependent (MS2+) scans have different body layouts:
+        //   Primary event:   232 bytes total (preamble 136 + body 96)
+        //   Dependent event: 344 bytes total (preamble 136 + body 208)
+        // Confirmed empirically across Orbitrap Eclipse (EThcD) and Fusion Lumos
+        // (DIA, MS3) files.
+        let preamble_size = ScanEventPreamble::size_for_version(version);
+        let (v66_body_primary, v66_body_dependent): (usize, usize) =
+            if version >= 66 && n_events > 0 {
+                let stream_bytes = run_header
+                    .scan_params_addr
+                    .saturating_sub(run_header.scan_trailer_addr)
+                    .saturating_sub(4);
+                let remainder = stream_bytes % n_events as u64;
+                if remainder == 0 {
+                    // Uniform event size (Q Exactive, Exploris, etc.)
+                    let body = (stream_bytes / n_events as u64) as usize;
+                    let body = body.saturating_sub(preamble_size);
+                    (body, body)
+                } else {
+                    // Variable-length events: tribrid Orbitrap instruments.
+                    // Known sizes: primary=232, dependent=344 (body 96 and 208).
+                    const PRIMARY_EVENT: u64 = 232;
+                    const DEPENDENT_EVENT: u64 = 344;
+                    let gap = DEPENDENT_EVENT - PRIMARY_EVENT;
+                    let n = n_events as u64;
+                    // n_primary * PRIMARY_EVENT + n_dependent * DEPENDENT_EVENT = stream_bytes
+                    // n_primary + n_dependent = n
+                    // => n_primary = (n * DEPENDENT_EVENT - stream_bytes) / gap
+                    let n_primary_numerator = n
+                        .saturating_mul(DEPENDENT_EVENT)
+                        .saturating_sub(stream_bytes);
+                    if n_primary_numerator % gap == 0 {
+                        let n_primary = n_primary_numerator / gap;
+                        let n_dependent = n.saturating_sub(n_primary);
+                        let total_check = n_primary * PRIMARY_EVENT
+                            + n_dependent * DEPENDENT_EVENT;
+                        if total_check == stream_bytes {
+                            // Verified: use the tribrid sizes.
+                            (
+                                (PRIMARY_EVENT as usize).saturating_sub(preamble_size),
+                                (DEPENDENT_EVENT as usize).saturating_sub(preamble_size),
+                            )
+                        } else {
+                            // Fallback: use floor-average uniform body
+                            let body = ((stream_bytes / n) as usize)
+                                .saturating_sub(preamble_size);
+                            (body, body)
+                        }
+                    } else {
+                        // Fallback: use floor-average uniform body
+                        let body = ((stream_bytes / n) as usize)
+                            .saturating_sub(preamble_size);
+                        (body, body)
+                    }
+                }
+            } else {
+                (0, 0)
+            };
         let mut scan_events = Vec::with_capacity(n_events as usize);
         for _ in 0..n_events {
-            scan_events.push(ScanEvent::read(&mut r, version, v66_body_size)?);
+            scan_events.push(ScanEvent::read(
+                &mut r,
+                version,
+                v66_body_primary,
+                v66_body_dependent,
+            )?);
         }
 
         // 9. Error log

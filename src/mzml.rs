@@ -145,6 +145,7 @@ fn ms_level(power: MsPower) -> u32 {
 fn activation_cv(act: Activation) -> (&'static str, &'static str) {
     match act {
         Activation::HCD => ("MS:1000422", "beam-type collision-induced dissociation"),
+        Activation::ETD => ("MS:1000598", "electron transfer dissociation"),
         Activation::CID => ("MS:1000133", "collision-induced dissociation"),
     }
 }

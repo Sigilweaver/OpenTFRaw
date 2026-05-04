@@ -78,6 +78,7 @@ pub enum Ionization {
 #[repr(u8)]
 pub enum Activation {
     HCD = 1,
+    ETD = 3,
     CID = 4,
 }
 
@@ -230,6 +231,7 @@ impl Activation {
     pub fn from_byte(b: u8) -> Option<Self> {
         match b {
             1 => Some(Self::HCD),
+            3 => Some(Self::ETD),
             4 => Some(Self::CID),
             _ => None,
         }
@@ -238,6 +240,7 @@ impl Activation {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::HCD => "hcd",
+            Self::ETD => "etd",
             Self::CID => "cid",
         }
     }

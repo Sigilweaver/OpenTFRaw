@@ -101,10 +101,17 @@ impl ScanEventPreamble {
 }
 
 impl ScanEvent {
+    /// Read one scan event.
+    ///
+    /// For v66 files, `body_primary` is the body size for primary (MS1) scans
+    /// and `body_dependent` is the body size for dependent (MS2+) scans.
+    /// For uniform-event files these two values are identical.
+    /// Pass `(0, 0)` for pre-v66 files (body size is self-describing).
     pub(crate) fn read<R: Read + Seek>(
         r: &mut BinaryReader<R>,
         version: u32,
-        body_size: usize,
+        body_primary: usize,
+        body_dependent: usize,
     ) -> Result<Self> {
         let preamble_size = ScanEventPreamble::size_for_version(version);
         let preamble_bytes = r.read_bytes(preamble_size)?;
@@ -113,6 +120,11 @@ impl ScanEvent {
         };
 
         if version >= 66 {
+            // Select body size: primary (MS1) vs dependent (MS2+).
+            // Primary = ms_power <= Ms1 AND not dependent.
+            let is_primary = preamble.bytes.get(6).copied().unwrap_or(0) <= 1
+                && preamble.bytes.get(10).copied() != Some(1);
+            let body_size = if is_primary { body_primary } else { body_dependent };
             Self::read_v66(r, preamble, body_size)
         } else {
             Self::read_pre_v66(r, preamble)

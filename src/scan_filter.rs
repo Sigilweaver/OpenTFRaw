@@ -32,7 +32,7 @@
 /// ```
 use crate::scan_event::ScanEvent;
 use crate::scan_index::ScanIndexEntry;
-use crate::types::{MsPower, ScanType};
+use crate::types::{Activation, Analyzer, MsPower, ScanType};
 
 /// Build the canonical Thermo scan filter string for a single scan event.
 ///
@@ -120,7 +120,13 @@ pub fn build_filter(
             out.push_str(&format!("{mz:.4}"));
             if let Some(act) = p.activation() {
                 out.push('@');
-                out.push_str(act.as_str());
+                // On FTMS instruments, activation code 4 is beam-type CID
+                // (HCD), not trap CID. Use "hcd" in the filter string.
+                let act_str = match (p.analyzer(), act) {
+                    (Some(Analyzer::FTMS), Activation::CID) => "hcd",
+                    _ => act.as_str(),
+                };
+                out.push_str(act_str);
                 if let Some(e) = activation_energy {
                     out.push_str(&format!("{e:.2}"));
                 }
