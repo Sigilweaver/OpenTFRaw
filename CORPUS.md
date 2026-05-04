@@ -108,6 +108,8 @@ and scan-data encoding path):
 | Q Exactive HF (DIA)              | DIA    | Fixed-window SWATH-like DIA on Q Exactive  |
 | Orbitrap Exploris 480 (DDA-2)    | DDA    | Second firmware vintage for regression     |
 | TSQ Altis (SRM-2)                | SRM-2  | Second SRM file from a different dataset   |
+| Q Exactive HF-X (PRM)            | PRM    | Parallel reaction monitoring: 42 targets,  |
+|                                  |        | 7-minute gradient, SARS-CoV-2 peptides     |
 
 ## Limitations
 

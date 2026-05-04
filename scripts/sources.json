@@ -169,5 +169,11 @@
         "mode": "DDA-2",
         "accession": "PXD075759",
         "pride_filename": "E2_4597_11.raw"
+    },
+    {
+        "instrument": "Q Exactive HF-X",
+        "mode": "PRM",
+        "accession": "PXD021080",
+        "pride_filename": "Aug1_A057_0-2fmol_CSP-NP_12fmolHeavy_Mucus_iRT_PRM_7min_r1.raw"
     }
 ]
