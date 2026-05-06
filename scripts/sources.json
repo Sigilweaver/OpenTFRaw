@@ -35,9 +35,10 @@
         "pride_filename": "20170427_CO_0673AnGS_DM_Mix1_R12R13R14_2.raw"
     },
     {
-        "instrument": "LTQ Orbitrap XL ETD",
-        "accession": "PXD064463",
-        "pride_filename": "20180626_2218_Matheus_LB2_Gel1.RAW"
+        "instrument": "LTQ Orbitrap",
+        "mode": "ETD",
+        "accession": "PXD006767",
+        "pride_filename": "EFM7_lysargiNase_ETD_22032016.raw"
     },
     {
         "instrument": "LTQ Orbitrap Velos",
@@ -175,5 +176,53 @@
         "mode": "PRM",
         "accession": "PXD021080",
         "pride_filename": "Aug1_A057_0-2fmol_CSP-NP_12fmolHeavy_Mucus_iRT_PRM_7min_r1.raw"
+    },
+    {
+        "instrument": "LTQ Orbitrap Velos",
+        "mode": "DDA-2",
+        "accession": "PXD001386",
+        "pride_filename": "20131006-IL-B07.raw"
+    },
+    {
+        "instrument": "LTQ Orbitrap Velos",
+        "mode": "DDA-3",
+        "accession": "PXD044191",
+        "pride_filename": "79504_A7R_136_GluC.raw"
+    },
+    {
+        "instrument": "Orbitrap Fusion",
+        "mode": "DDA-3",
+        "accession": "PXD017288",
+        "pride_filename": "7_Memb_st_prot.raw"
+    },
+    {
+        "instrument": "Orbitrap Fusion Lumos",
+        "mode": "top-down",
+        "accession": "PXD025230",
+        "pride_filename": "esf_2547.raw"
+    },
+    {
+        "instrument": "Orbitrap Fusion Lumos",
+        "mode": "DDA-2",
+        "accession": "PXD044802",
+        "pride_filename": "2023LZ018_NAKN_001_01_45pto.raw"
+    },
+    {
+        "instrument": "Orbitrap Exploris 480",
+        "mode": "FAIMS",
+        "accession": "PXD040898",
+        "pride_filename": "01_TK_FAIMS_-30_mouse_liver_ADPr_HCD-OT_700-1000_60min_20221014191505.raw"
+    },
+    {
+        "instrument": "Orbitrap Astral",
+        "mode": "DDA-2",
+        "accession": "PXD066600",
+        "pride_filename": "1_2.raw"
+    },
+    {
+        "instrument": "Orbitrap Fusion Lumos",
+        "mode": "TMT-frac",
+        "accession": "PXD023217",
+        "pride_filename": "F01_Fraction1.raw"
     }
 ]
