@@ -110,16 +110,19 @@ and scan-data encoding path):
 
 **Tier 2 - additional files per instrument covering distinct modes**:
 
-| Entry                            | Mode   | What it exercises                          |
-| -------------------------------- | ------ | ------------------------------------------ |
-| Orbitrap Fusion Lumos (DIA)      | DIA    | Multiple isolation windows per scan cycle  |
-| Orbitrap Fusion Lumos (MS3)      | MS3    | Three-stage fragmentation / XL-MS workflow |
-| Orbitrap Eclipse (EThcD)         | EThcD  | Electron-transfer + supplemental HCD       |
-| Q Exactive HF (DIA)              | DIA    | Fixed-window SWATH-like DIA on Q Exactive  |
-| Orbitrap Exploris 480 (DDA-2)    | DDA    | Second firmware vintage for regression     |
-| TSQ Altis (SRM-2)                | SRM-2  | Second SRM file from a different dataset   |
-| Q Exactive HF-X (PRM)            | PRM    | Parallel reaction monitoring: 42 targets,  |
-|                                  |        | 7-minute gradient, SARS-CoV-2 peptides     |
+| Entry                            | Mode   | What it exercises                                      |
+| -------------------------------- | ------ | ------------------------------------------------------ |
+| Orbitrap Fusion Lumos (DIA)      | DIA    | Multiple isolation windows per scan cycle              |
+| Orbitrap Fusion Lumos (MS3)      | MS3    | Three-stage fragmentation / XL-MS workflow             |
+| Orbitrap Fusion Lumos (EThcD)    | EThcD  | Supplemental activation on tribrid variable-body scans |
+| Orbitrap Eclipse (EThcD)         | EThcD  | Electron-transfer + supplemental HCD, two-clause filter|
+| Orbitrap Eclipse (DIA)           | DIA    | DIA on tribrid: checks if reaction np>0 in body        |
+| Orbitrap Fusion Lumos (UVPD)     | UVPD   | Ultraviolet photodissociation, tests Activation::Uvpd  |
+| Q Exactive HF (DIA)              | DIA    | Fixed-window SWATH-like DIA on Q Exactive              |
+| Orbitrap Exploris 480 (DDA-2)    | DDA    | Second firmware vintage for regression                 |
+| TSQ Altis (SRM-2)                | SRM-2  | Second SRM file from a different dataset               |
+| Q Exactive HF-X (PRM)            | PRM    | Parallel reaction monitoring: 42 targets,              |
+|                                  |        | 7-minute gradient, SARS-CoV-2 peptides                 |
 
 ### Multi-controller coverage
 
@@ -144,3 +147,41 @@ The selection heuristic — `ntrailer > 0` (v64+) or `nsegs > 0 && first_scan
 - Some instrument lines (Astral, top-down ETD workflows) have few publicly
   available files on PRIDE.  The `count` values in `sources.json` are
   capped at the number of files actually present in the FTP directory.
+
+## Open Issues
+
+### DIA isolation window m/z (Orbitrap Exploris 480 and similar)
+
+For the Exploris 480 DIA files in corpus (PXD035500), the isolation window
+center m/z is currently absent from filter strings.  Investigation findings:
+
+- **Scan event body format**: DIA MS2 scan events use a uniform 136-byte body
+  (event size = 272 bytes total).  The body[8..12] f32 field holds a value in
+  the range ~3.8-5.0, which is in instrument frequency space, not m/z.  There
+  is no reaction structure (np = 0 at body[4..8]) and no m/z at any body offset.
+
+- **Scan params**: The file has 1004 bytes/scan of scan params data starting at
+  `scan_params_addr`, but the GenericDataHeader (GDH) that describes the record
+  schema was not found anywhere in the 8 MB window between the error log and
+  scan_trailer that `find_forward` searches.  As a result `scan_parameters` is
+  empty for all scans in this file and `ScanParams` accessors return `None`.
+
+- **What is needed**: Locate the GDH for Exploris 480 scan params (it may be
+  outside the current search window, or use a different header format).  Once
+  the schema is found, the calibration coefficients (conversion parameters A, B,
+  C) inside the scan params record can be used to convert frequency to m/z and
+  recover the isolation window center.
+
+- **Workaround**: For instruments where the GDH is found correctly (Q Exactive,
+  Fusion Lumos, Eclipse), `ScanParams::isolation_width_mz()` and the
+  `monoisotopic_mz()` family already work.  Eclipse DIA files (PXD038440, once
+  downloaded) will clarify whether tribrid instruments store the isolation m/z
+  in the reaction structure (np > 0) as DDA scans do, bypassing the calibration
+  problem entirely.
+
+### Acquisition modes not yet in corpus
+
+| Mode | Notes |
+| ---- | ----- |
+| SPS-MS3 (TMT) | Synchronous precursor selection MS3 for isobaric quantification; differs from standard MS3 in the number of simultaneous precursor m/z in the scan event body. |
+| ECD / IRMPD | Both enum variants implemented; no corpus files yet. |

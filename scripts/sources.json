@@ -195,6 +195,19 @@
     },
     {
         "instrument": "Orbitrap Fusion Lumos",
+        "mode": "EThcD",
+        "accession": "PXD064117",
+        "files": ["FOXK2_HCD_EThcD.raw"],
+        "count": 2
+    },
+    {
+        "instrument": "Orbitrap Fusion Lumos",
+        "mode": "UVPD",
+        "accession": "PXD067311",
+        "count": 3
+    },
+    {
+        "instrument": "Orbitrap Fusion Lumos",
         "mode": "DDA-2",
         "accession": "PXD044802",
         "files": ["2023LZ018_NAKN_001_01_45pto.raw"],
@@ -249,6 +262,12 @@
         "mode": "EThcD",
         "accession": "PXD077396",
         "files": ["EC-OT30-25-190-EThcD-09.raw"],
+        "count": 3
+    },
+    {
+        "instrument": "Orbitrap Eclipse",
+        "mode": "DIA",
+        "accession": "PXD038440",
         "count": 3
     },
     {
