@@ -74,12 +74,40 @@ pub enum Ionization {
 }
 
 /// Activation method from ScanEventPreamble byte 24.
+///
+/// Observed corpus values:
+///   0 = no activation (MS1 scans; treated as None by `from_byte`)
+///   1 = HCD (Q Exactive family; renders as "hcd")
+///   4 = CID/HCD (Fusion/Exploris/Eclipse; renders as "cid" on ITMS, "hcd" on FTMS)
+///
+/// Values 2, 3, 5-10, 12 are defined from Xcalibur firmware documentation
+/// but not yet confirmed across the current corpus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
 pub enum Activation {
-    HCD = 1,
-    ETD = 3,
-    CID = 4,
+    /// Multi-photon induced dissociation (code 2).
+    MPID,
+    /// Electron transfer dissociation (code 3).
+    ETD,
+    /// Higher-energy collisional dissociation — Q Exactive style (code 1).
+    HCD,
+    /// Collision-induced dissociation / beam-type HCD — Fusion/Exploris style (code 4).
+    /// Renders as "cid" on ITMS analyzers, "hcd" on FTMS analyzers.
+    CID,
+    /// Electron-capture dissociation (code 5).
+    ECD,
+    /// Infrared multiphoton dissociation (code 6).
+    IRMPD,
+    /// Proton transfer decay / activated-ion ETD (code 7).
+    PD,
+    /// Pulsed q dissociation (code 8).
+    PQD,
+    /// Ultraviolet photodissociation (code 9).
+    UVPD,
+    /// Surface-induced dissociation (code 10).
+    SID,
+    /// ETD with supplemental HCD (code 12).
+    /// Filter string: `@etd<e>@hcd<se>` — two activation clauses.
+    EThcD,
 }
 
 /// Generic data field type codes.
@@ -231,17 +259,38 @@ impl Activation {
     pub fn from_byte(b: u8) -> Option<Self> {
         match b {
             1 => Some(Self::HCD),
+            2 => Some(Self::MPID),
             3 => Some(Self::ETD),
             4 => Some(Self::CID),
+            5 => Some(Self::ECD),
+            6 => Some(Self::IRMPD),
+            7 => Some(Self::PD),
+            8 => Some(Self::PQD),
+            9 => Some(Self::UVPD),
+            10 => Some(Self::SID),
+            12 => Some(Self::EThcD),
             _ => None,
         }
     }
 
+    /// Short identifier used in Thermo scan filter strings (e.g. "hcd", "etd").
+    ///
+    /// For [`Activation::CID`] on FTMS instruments the filter string conventionally
+    /// uses "hcd" instead; callers should substitute via
+    /// [`crate::scan_filter::activation_str`].
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::HCD => "hcd",
+            Self::MPID => "mpid",
             Self::ETD => "etd",
             Self::CID => "cid",
+            Self::ECD => "ecd",
+            Self::IRMPD => "irmpd",
+            Self::PD => "pd",
+            Self::PQD => "pqd",
+            Self::UVPD => "uvpd",
+            Self::SID => "sid",
+            Self::EThcD => "ethcd",
         }
     }
 }

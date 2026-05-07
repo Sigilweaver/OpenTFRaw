@@ -145,7 +145,7 @@ fn ms_level(power: MsPower) -> u32 {
 fn activation_cv(act: Activation, analyzer: Option<crate::Analyzer>) -> (&'static str, &'static str) {
     match act {
         Activation::HCD => ("MS:1000422", "beam-type collision-induced dissociation"),
-        Activation::ETD => ("MS:1000598", "electron transfer dissociation"),
+        Activation::ETD | Activation::EThcD => ("MS:1000598", "electron transfer dissociation"),
         // On FTMS instruments (Orbitrap, FT-ICR) byte=4 is beam-type CID (HCD),
         // not ion-trap CID. Mirror the same logic as the scan-filter builder.
         Activation::CID => match analyzer {
@@ -154,6 +154,13 @@ fn activation_cv(act: Activation, analyzer: Option<crate::Analyzer>) -> (&'stati
             }
             _ => ("MS:1000133", "collision-induced dissociation"),
         },
+        Activation::MPID => ("MS:1002481", "supplemental beam-type collision-induced dissociation"),
+        Activation::ECD => ("MS:1000250", "electron capture dissociation"),
+        Activation::IRMPD => ("MS:1000262", "infrared multiphoton dissociation"),
+        Activation::PD => ("MS:1001880", "in-source collision-induced dissociation"),
+        Activation::PQD => ("MS:1000599", "pulsed q dissociation"),
+        Activation::UVPD => ("MS:1003246", "ultraviolet photodissociation"),
+        Activation::SID => ("MS:1000422", "beam-type collision-induced dissociation"),
     }
 }
 

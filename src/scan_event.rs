@@ -78,6 +78,15 @@ impl ScanEventPreamble {
         self.bytes.get(10).copied() == Some(1)
     }
 
+    /// True if this scan is a Data-Independent Acquisition (DIA) MS2+ scan:
+    /// ms_power >= 2 and the dependent flag is NOT set.  In DIA mode the
+    /// instrument selects a wide isolation window and fragments all ions in
+    /// that window together, without targeting a specific precursor.
+    pub fn is_dia(&self) -> bool {
+        let ms_power = self.bytes.get(6).copied().unwrap_or(0);
+        ms_power >= 2 && !self.is_dependent()
+    }
+
     /// Ionization mode: byte 11.
     pub fn ionization(&self) -> Option<crate::Ionization> {
         self.bytes
@@ -92,11 +101,22 @@ impl ScanEventPreamble {
             .and_then(|&b| crate::Activation::from_byte(b))
     }
 
+    /// Wideband (broadband isolation) flag: byte 32.
+    pub fn is_wideband(&self) -> bool {
+        self.bytes.get(32).copied() == Some(1)
+    }
+
     /// Analyzer type: byte 40.
     pub fn analyzer(&self) -> Option<crate::Analyzer> {
         self.bytes
             .get(40)
             .and_then(|&b| crate::Analyzer::from_byte(b))
+    }
+
+    /// Raw value of the activation byte (byte 24). Useful for diagnostics when
+    /// `activation()` returns `None` (unrecognised code).
+    pub fn activation_byte(&self) -> u8 {
+        self.bytes.get(24).copied().unwrap_or(0)
     }
 }
 
@@ -211,11 +231,54 @@ impl ScanEvent {
             }
         }
 
-        // Precursor reactions are not decoded from the body in v66;
-        // callers should use scan parameters for precursor m/z.
+        // Parse precursor reactions from the v66 body for dependent scans and for
+        // non-dependent MS2+ scans (DIA mode). In DIA, MS2 scans are not flagged as
+        // dependent but still carry one or more isolation window reactions in the body.
+        //
+        // Condition: parse reactions when ms_power >= 2 OR the scan is flagged dependent.
+        // (MS1 primary scans with ms_power <= 1 and dependent=false are skipped.)
+        let is_ms2_plus = preamble.bytes.get(6).copied().unwrap_or(0) >= 2;
+        let reactions = if (!is_ms2_plus && !preamble.is_dependent()) || body_size < 8 {
+            Vec::new()
+        } else {
+            let np = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+            // Sanity check: np must fit within the body minus minimum fixed overhead.
+            // Each reaction is 32 bytes; require at least 32 bytes of post-reaction
+            // data (FC=16, nparam=4, minimum tail) for the body to be plausible.
+            let max_np = body_size.saturating_sub(8 + 32) / 32;
+            if np == 0 || np > max_np.max(1) {
+                Vec::new()
+            } else {
+                let mut rxs = Vec::with_capacity(np);
+                for i in 0..np {
+                    let off = 8 + i * 32;
+                    if off + 32 > body_size {
+                        break;
+                    }
+                    let mz = f64::from_le_bytes(body[off..off + 8].try_into().unwrap());
+                    let unk = f64::from_le_bytes(body[off + 8..off + 16].try_into().unwrap());
+                    let energy = f64::from_le_bytes(body[off + 16..off + 24].try_into().unwrap());
+                    let ul1 = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
+                    let ul2 = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap());
+                    // Accept only reactions with plausible m/z values (0 is valid for
+                    // MS1 triggers; accept non-negative finite values).
+                    if mz.is_finite() && mz >= 0.0 {
+                        rxs.push(Reaction {
+                            precursor_mz: mz,
+                            unknown_double: unk,
+                            energy,
+                            unknown_long1: ul1,
+                            unknown_long2: ul2,
+                        });
+                    }
+                }
+                rxs
+            }
+        };
+
         Ok(Self {
             preamble,
-            reactions: Vec::new(),
+            reactions,
             fraction_collectors,
             coefficients,
         })

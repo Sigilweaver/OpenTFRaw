@@ -209,10 +209,59 @@ pub struct RawFileReader {
     pub instrument_model: Option<&'static str>,
 }
 
+// ─── Multi-controller metadata ───────────────────────────────────────────────
+
+/// Controller type codes as used in Thermo RAW files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControllerType {
+    Ms,
+    Analog,
+    Adc,
+    Pda,
+    Uv,
+    Other,
+}
+
+impl ControllerType {
+    fn from_nsegs_ntrailer(ntrailer: u32, nsegs: u32) -> Self {
+        // Heuristic: MS controller always has ntrailer > 0 (v64+) or nsegs > 0.
+        // Non-MS controllers (UV, analog, PDA) have ntrailer == 0 and nsegs == 1.
+        // We can't reliably distinguish between non-MS types without parsing
+        // the InstID/method block, so we fall back to Other for those.
+        if ntrailer > 0 || nsegs > 1 {
+            Self::Ms
+        } else {
+            Self::Other
+        }
+    }
+}
+
+/// Minimal metadata about one controller in a multi-controller RAW file.
+#[derive(Debug, Clone)]
+pub struct ControllerInfo {
+    /// Zero-based controller index (position in `run_header_addrs`).
+    pub index: usize,
+    /// File offset to this controller's RunHeader.
+    pub run_header_addr: u64,
+    /// Whether this controller is the primary MS controller.
+    pub is_ms_controller: bool,
+    /// Inferred controller type.
+    pub controller_type: ControllerType,
+    /// First scan number.
+    pub first_scan: u32,
+    /// Last scan number.
+    pub last_scan: u32,
+    /// Acquisition start time (minutes).
+    pub start_time: f64,
+    /// Acquisition end time (minutes).
+    pub end_time: f64,
+}
+
 impl RawFileReader {
     /// Open and parse a RAW file from a reader.
     pub fn open<R: Read + Seek>(source: R) -> Result<Self> {
         let mut r = BinaryReader::new(source);
+
 
         // 1. FileHeader
         let header = FileHeader::read(&mut r)?;
@@ -519,6 +568,50 @@ impl RawFileReader {
         Self::open(reader)
     }
 
+    /// Enumerate all controllers in this RAW file.
+    ///
+    /// Multi-detector acquisition systems write one [`RunHeader`] per
+    /// controller (MS, UV, PDA, Analog). This method parses all controller
+    /// headers and returns a `Vec<ControllerInfo>` with basic metadata for
+    /// each. The primary MS controller can be identified via
+    /// [`ControllerInfo::is_ms_controller`].
+    ///
+    /// For single-controller files (the common case), this returns a
+    /// one-element vec with the MS controller.
+    pub fn controllers<R: Read + Seek>(&self, source: &mut R) -> Result<Vec<ControllerInfo>> {
+        let mut r = BinaryReader::new(source);
+        let addrs = &self.raw_file_info.preamble.run_header_addrs;
+        let mut infos = Vec::with_capacity(addrs.len());
+        for (i, &addr) in addrs.iter().enumerate() {
+            if addr == 0 {
+                continue;
+            }
+            r.seek_to(addr)?;
+            let rh = RunHeader::read(&mut r, self.version)?;
+            let is_ms = if self.version >= 64 {
+                rh.ntrailer > 0 || rh.data_addr == self.data_addr
+            } else {
+                rh.nsegs > 0
+            };
+            let ct = if is_ms {
+                ControllerType::Ms
+            } else {
+                ControllerType::from_nsegs_ntrailer(rh.ntrailer, rh.nsegs)
+            };
+            infos.push(ControllerInfo {
+                index: i,
+                run_header_addr: addr,
+                is_ms_controller: is_ms,
+                controller_type: ct,
+                first_scan: rh.sample_info.first_scan_number,
+                last_scan: rh.sample_info.last_scan_number,
+                start_time: rh.sample_info.start_time,
+                end_time: rh.sample_info.end_time,
+            });
+        }
+        Ok(infos)
+    }
+
     /// Read a single scan data packet (PacketHeader format).
     pub fn read_scan<R: Read + Seek>(
         &self,
@@ -648,6 +741,25 @@ impl RawFileReader {
         self.scan_parameters(scan_number).map(ScanParams)
     }
 
+    /// Return the raw instrument-log record for a given scan number, or
+    /// `None` if the scan is out of range or no instrument log was found.
+    ///
+    /// The instrument log contains per-scan instrument-state values:
+    /// temperatures, voltages, pressures, ion counts, etc.
+    pub fn inst_log_record(&self, scan_number: u32) -> Option<&GenericRecord> {
+        let first = self.run_header.sample_info.first_scan_number;
+        let idx = scan_number.checked_sub(first)? as usize;
+        self.inst_log.get(idx)
+    }
+
+    /// Return a typed [`StatusLogEntry`] view for the given scan number.
+    ///
+    /// This wraps [`Self::inst_log_record`] and provides named, type-safe
+    /// accessors for common instrument-status fields.
+    pub fn status_log_entry(&self, scan_number: u32) -> Option<StatusLogEntry<'_>> {
+        self.inst_log_record(scan_number).map(StatusLogEntry)
+    }
+
     /// Return the canonical Thermo scan filter string for a given scan
     /// (1-based scan number), or `None` if the scan is out of range.
     ///
@@ -663,14 +775,131 @@ impl RawFileReader {
         // table (not the event body) for v66+. Fall back silently if missing.
         let params = self.scan_params(scan_number);
         let precursor = params.as_ref().and_then(|p| p.monoisotopic_mz());
-        let energy = params
-            .as_ref()
-            .and_then(|p| p.hcd_energy())
-            .and_then(|s| s.trim_end_matches('%').parse::<f64>().ok());
+        let energy = params.as_ref().and_then(|p| p.activation_energy());
+        let supplemental = params.as_ref().and_then(|p| p.supplemental_activation_energy());
         Some(crate::scan_filter::build_filter(
-            event, entry, precursor, energy,
+            event, entry, precursor, energy, supplemental,
         ))
     }
+
+    /// Return all scan retention times (minutes) in scan order (1-based scan numbers).
+    ///
+    /// This is equivalent to collecting `scan_index[i].start_time` for every scan.
+    /// The returned `Vec` is indexed by `scan_number - first_scan_number`.
+    pub fn retention_times(&self) -> Vec<f64> {
+        self.scan_index.iter().map(|e| e.start_time).collect()
+    }
+
+    /// Return a per-scan chromatogram as `(retention_time_min, tic)` pairs.
+    pub fn tic_chromatogram(&self) -> Vec<(f64, f64)> {
+        self.scan_index
+            .iter()
+            .map(|e| (e.start_time, e.total_current))
+            .collect()
+    }
+
+    /// Return a per-scan base-peak chromatogram as `(retention_time_min, bpi, base_mz)` triples.
+    pub fn bpc_chromatogram(&self) -> Vec<(f64, f64, f64)> {
+        self.scan_index
+            .iter()
+            .map(|e| (e.start_time, e.base_intensity, e.base_mz))
+            .collect()
+    }
+
+    /// Return the instrument method file path or name as stored in the
+    /// sequence row. This is the name of the method used during acquisition
+    /// (e.g. `"Standard_HCD.meth"`), not the embedded method text.
+    ///
+    /// See also [`Self::instrument_method_text`] for extracting the embedded
+    /// XML/text method body from the file.
+    pub fn instrument_method_name(&self) -> &str {
+        &self.seq_row.inst_method
+    }
+
+    /// Attempt to extract the embedded instrument method text from the RAW file.
+    ///
+    /// Thermo RAW files embed the acquisition method as a UTF-16LE text or
+    /// XML blob in the metadata region. This method scans the bytes between
+    /// the start of the file and the scan data for the longest contiguous
+    /// block of valid UTF-16LE text (at least 256 characters long) and returns
+    /// it as a `String`.
+    ///
+    /// Returns `None` if no suitable text block is found or if the method was
+    /// not embedded (`method_file_present == false`).
+    ///
+    /// Note: This is a best-effort extraction. The result is the raw text
+    /// content; callers may wish to trim or parse it further.
+    pub fn instrument_method_text<R: Read + Seek>(&self, source: &mut R) -> Option<String> {
+        if !self.raw_file_info.preamble.method_file_present {
+            return None;
+        }
+        // Read metadata region: from byte 0 up to (but not including) scan data.
+        // Cap at 512 KB to avoid reading very large files entirely.
+        const MAX_WINDOW: u64 = 512 * 1024;
+        let window_len = MAX_WINDOW.min(self.data_addr) as usize;
+        if window_len < 4 {
+            return None;
+        }
+        source.seek(std::io::SeekFrom::Start(0)).ok()?;
+        let mut buf = vec![0u8; window_len];
+        source.read_exact(&mut buf).ok()?;
+
+        // Scan for the longest valid UTF-16LE text block (min 256 chars = 512 bytes).
+        // Strategy: find aligned 2-byte sequences where every pair decodes to a
+        // printable/whitespace Unicode scalar (U+0020..U+FFFD).
+        extract_utf16le_text(&buf, 256)
+    }
+}
+
+/// Scan `buf` for the longest contiguous UTF-16LE text block of at least
+/// `min_chars` characters and return it as a String. Returns `None` if no
+/// such block exists.
+fn extract_utf16le_text(buf: &[u8], min_chars: usize) -> Option<String> {
+    if buf.len() < 2 {
+        return None;
+    }
+    let mut best: Option<String> = None;
+    let mut best_len = 0usize;
+
+    // Try each even alignment (0 or 1 byte offset from start).
+    for alignment in 0..2usize {
+        let start = alignment;
+        let usable = buf.len().saturating_sub(start);
+        let n_units = usable / 2;
+        if n_units < min_chars {
+            continue;
+        }
+
+        let mut run_start = 0usize;
+        let mut run_chars: Vec<u16> = Vec::with_capacity(min_chars);
+
+        let flush = |run_chars: &Vec<u16>, run_start: usize, best: &mut Option<String>, best_len: &mut usize| {
+            if run_chars.len() >= min_chars {
+                if let Ok(s) = String::from_utf16(run_chars) {
+                    let _ = run_start; // suppress unused warning
+                    if run_chars.len() > *best_len {
+                        *best_len = run_chars.len();
+                        *best = Some(s);
+                    }
+                }
+            }
+        };
+
+        for i in 0..n_units {
+            let off = start + i * 2;
+            let u = u16::from_le_bytes([buf[off], buf[off + 1]]);
+            let is_ok = matches!(u, 0x0009 | 0x000A | 0x000D | 0x0020..=0xFFFD);
+            if is_ok {
+                run_chars.push(u);
+            } else {
+                flush(&run_chars, run_start, &mut best, &mut best_len);
+                run_start = i + 1;
+                run_chars.clear();
+            }
+        }
+        flush(&run_chars, run_start, &mut best, &mut best_len);
+    }
+    best
 }
 
 // ─── High-level typed accessor for scan parameters ──────────────────────────
@@ -725,8 +954,17 @@ impl<'a> ScanParams<'a> {
     }
 
     /// Monoisotopic precursor m/z (0 = not determined).
+    ///
+    /// Tries multiple label variants for compatibility across instrument families:
+    /// - `"Monoisotopic M/Z:"` — most common (Q Exactive, Orbitrap Fusion)
+    /// - `"MS2 Isolation M/Z:"` — some older LTQ firmware
+    /// Returns `None` when the value is absent or zero (not determined).
     pub fn monoisotopic_mz(&self) -> Option<f64> {
-        self.0.get_f64("Monoisotopic M/Z:")
+        let v = self.0.get_f64("Monoisotopic M/Z:")
+            .or_else(|| self.0.get_f64("MS2 Isolation M/Z:"))
+            .or_else(|| self.0.get_f64("Isolation Center M/Z:"))
+            .or_else(|| self.0.get_f64("Precursor M/Z:"))?;
+        if v > 0.0 { Some(v) } else { None }
     }
 
     /// Number of micro-scans averaged into this scan.
@@ -734,41 +972,27 @@ impl<'a> ScanParams<'a> {
         self.0.get_i32("Micro Scan Count:")
     }
 
-    /// Orbitrap / FT resolving power (e.g. 60000, 120000).
-    pub fn ft_resolution(&self) -> Option<i32> {
-        self.0
-            .get_i32("Orbitrap Resolution:")
-            .or_else(|| self.0.get_i32("FT Resolution:"))
-    }
-
-    /// HCD collision energy string (e.g. `"27%"` or `"28.00"`).
-    ///
-    /// The label and unit differ between firmware generations; this returns
-    /// whatever string is present (eV or percent).
-    pub fn hcd_energy(&self) -> Option<&str> {
-        self.0.get_string("HCD Energy:")
-    }
-
     /// Scan number of the master (MS1) scan that triggered this dependent scan.
-    /// Returns `None` or `Some(-1)` if this is not a dependent scan.
+    /// Returns `None` if this is not a dependent scan.
     pub fn master_scan_number(&self) -> Option<i32> {
         self.0
             .get_i32("Master Scan Number:")
             .or_else(|| self.0.get_i32("Master Index:"))
     }
 
+    /// Orbitrap / FT resolving power (e.g. 60000, 120000).
+    pub fn ft_resolution(&self) -> Option<i32> {
+        self.orbitrap_resolution()
+    }
+
     /// Number of lock masses found / matched.
     pub fn number_of_lm_found(&self) -> Option<i32> {
-        self.0
-            .get_i32("Number of LM Found:")
-            .or_else(|| self.0.get_i32("Number of Lock Masses:"))
+        self.number_of_lock_masses()
     }
 
     /// Lock-mass m/z correction applied (ppm).
     pub fn lm_correction_ppm(&self) -> Option<f64> {
-        self.0
-            .get_f64("LM Correction (ppm):")
-            .or_else(|| self.0.get_f64("LM m/z-Correction (ppm):"))
+        self.lock_mass_correction_ppm()
     }
 
     /// AGC target fill value (ion count).
@@ -818,17 +1042,304 @@ impl<'a> ScanParams<'a> {
             .or_else(|| self.0.get_f64("Target M/Z:"))
     }
 
-    /// Activation energy (eV or %) for the selected activation type.
+    /// Activation energy (eV or %) for the primary activation step.
     ///
-    /// Orbitrap writes the HCD energy as a string; this helper parses it into
-    /// a number when possible, stripping a trailing `%` suffix.
+    /// Tries several label variants present across instrument families:
+    /// - `"HCD Energy (eV):"` — explicit eV label (Q Exactive HF-X, Exploris)
+    /// - `"HCD Energy:"` — string form (e.g. "28.00" or "28%")
+    /// - `"HCD Energy V:"` — Exploris variant
+    /// - `"Normalized Collision Energy:"` — ion-trap CID variant
+    /// - `"Collision Energy (eV):"` — ITMS CID
+    /// - `"CE:"` — short form on some firmware
     pub fn activation_energy(&self) -> Option<f64> {
         if let Some(v) = self.0.get_f64("HCD Energy (eV):") {
             return Some(v);
         }
-        if let Some(s) = self.hcd_energy() {
+        if let Some(v) = self.0.get_f64("HCD Energy eV:") {
+            return Some(v);
+        }
+        for label in &["HCD Energy:", "HCD Energy V:", "CE:"] {
+            if let Some(s) = self.0.get_string(label) {
+                if let Ok(v) = s.trim().trim_end_matches('%').parse::<f64>() {
+                    return Some(v);
+                }
+            }
+        }
+        self.0
+            .get_f64("Normalized Collision Energy:")
+            .or_else(|| self.0.get_f64("Collision Energy (eV):"))
+    }
+
+    /// Supplemental activation energy for EThcD scans (the HCD component).
+    ///
+    /// Returns `None` for non-EThcD scans.
+    pub fn supplemental_activation_energy(&self) -> Option<f64> {
+        if let Some(v) = self.0.get_f64("Supplemental Activation CE:") {
+            return Some(v);
+        }
+        if let Some(s) = self.0.get_string("Supplemental Activation:") {
             return s.trim().trim_end_matches('%').parse::<f64>().ok();
         }
-        self.0.get_f64("Normalized Collision Energy:")
+        None
+    }
+
+    /// All possible charge states reported by the precursor selection algorithm.
+    ///
+    /// Returns `None` when the instrument did not report possible charges.
+    /// Some firmware stores them as a space-delimited string (e.g. `"2 3"`);
+    /// others use a typed integer for the single selected charge.
+    pub fn possible_charge_states(&self) -> Option<Vec<u32>> {
+        // String variant: "2 3 4"
+        if let Some(s) = self.0.get_string("Possible Charge States:") {
+            let v: Vec<u32> = s
+                .split_whitespace()
+                .filter_map(|t| t.parse::<u32>().ok())
+                .collect();
+            if !v.is_empty() {
+                return Some(v);
+            }
+        }
+        // Integer variant (single charge)
+        if let Some(c) = self.charge_state() {
+            if c > 0 {
+                return Some(vec![c as u32]);
+            }
+        }
+        None
+    }
+
+    /// FAIMS compensation voltage in V (Orbitrap Fusion/Lumos with FAIMS Pro).
+    pub fn faims_cv(&self) -> Option<f64> {
+        self.0
+            .get_f64("FAIMS CV:")
+            .or_else(|| self.0.get_f32("FAIMS CV:").map(f64::from))
+    }
+
+    /// Whether FAIMS voltage was active for this scan.
+    pub fn faims_voltage_on(&self) -> Option<bool> {
+        match self.0.get("FAIMS Voltage On:")? {
+            GenericValue::Bool(b) => Some(*b),
+            GenericValue::String(s) => Some(s.to_ascii_lowercase().contains("on")),
+            _ => None,
+        }
+    }
+
+    /// S-Lens RF level (V), typically reported on Q Exactive family.
+    pub fn s_lens_rf_level(&self) -> Option<f64> {
+        self.0.get_f64("S-Lens RF Level:")
+    }
+
+    /// AGC fill percentage (0.0–1.0), reported on Q Exactive HF family.
+    pub fn agc_fill(&self) -> Option<f64> {
+        self.0.get_f64("AGC Fill:")
+    }
+
+    /// Orbitrap analyzer temperature (°C), where available.
+    pub fn analyzer_temperature(&self) -> Option<f64> {
+        self.0.get_f64("Analyzer Temperature:")
+    }
+
+    /// PS injection time in milliseconds (pre-scan injection for Q Exactive).
+    pub fn ps_injection_time_ms(&self) -> Option<f64> {
+        self.0.get_f64("PS Inj. Time (ms):")
+    }
+
+    /// Reagent ion injection time in milliseconds (ETD reagent).
+    pub fn reagent_ion_injection_time_ms(&self) -> Option<f64> {
+        self.0
+            .get_f32("Reagent Ion Injection Time (ms):")
+            .map(f64::from)
+    }
+
+    /// Whether the reagent AGC was active.
+    pub fn reagent_ion_agc(&self) -> Option<bool> {
+        match self.0.get("Reagent Ion AGC:")? {
+            GenericValue::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// Source CID energy applied in the ion source (eV).
+    pub fn source_cid_energy_ev(&self) -> Option<f64> {
+        self.0
+            .get_f64("Source CID eV:")
+            .or_else(|| self.0.get_f32("API Source CID Energy:").map(f64::from))
+    }
+
+    /// Dynamic retention time shift in minutes (Q Exactive HF-X AutoQC).
+    pub fn dynamic_rt_shift_min(&self) -> Option<f64> {
+        self.0.get_f64("Dynamic RT Shift (min):")
+    }
+
+    /// Lock mass correction applied (ppm) — tries several label variants.
+    pub fn lock_mass_correction_ppm(&self) -> Option<f64> {
+        self.0
+            .get_f64("LM Correction (ppm):")
+            .or_else(|| self.0.get_f64("LM m/z-Correction (ppm):"))
+    }
+
+    /// Number of lock masses found.
+    pub fn number_of_lock_masses(&self) -> Option<i32> {
+        self.0
+            .get_i32("Number of LM Found:")
+            .or_else(|| self.0.get_i32("Number of Lock Masses:"))
+    }
+
+    /// Orbitrap resolution setting (not measured, but requested).
+    pub fn orbitrap_resolution(&self) -> Option<i32> {
+        self.0
+            .get_i32("Orbitrap Resolution:")
+            .or_else(|| self.0.get_i32("FT Resolution:"))
+    }
+
+    /// SPS (Synchronous Precursor Selection) mass for MS3 channel N (0-based index).
+    ///
+    /// SPS masses are stored as `"SPS Mass 1:"`, `"SPS Mass 2:"`, ... (1-based).
+    pub fn sps_mass(&self, channel: usize) -> Option<f32> {
+        let label = format!("SPS Mass {}:", channel + 1);
+        self.0.get_f32(&label)
+    }
+
+    /// Conversion parameter A (Orbitrap m/z conversion polynomial).
+    pub fn conversion_parameter_a(&self) -> Option<f64> {
+        self.0.get_f64("Conversion Parameter A:")
+    }
+
+    /// Conversion parameter B.
+    pub fn conversion_parameter_b(&self) -> Option<f64> {
+        self.0.get_f64("Conversion Parameter B:")
+    }
+
+    /// Conversion parameter C.
+    pub fn conversion_parameter_c(&self) -> Option<f64> {
+        self.0.get_f64("Conversion Parameter C:")
+    }
+
+    /// Raw over-fill time T (used for AGC computation).
+    pub fn raw_ovft(&self) -> Option<f64> {
+        self.0.get_f64("RawOvFtT:")
+    }
+
+    /// Error in the isotopic envelope fit (used for charge-state scoring).
+    pub fn isotopic_fit_error(&self) -> Option<f64> {
+        self.0.get_f64("Error in isotopic envelope fit:")
+    }
+
+    /// Scan description string (arbitrary text, set by method or real-time software).
+    pub fn scan_description(&self) -> Option<&str> {
+        self.0.get_string("Scan Description:")
+    }
+
+    /// Multi-inject info string (e.g. `"IT=45 "` for ion-trap fill time).
+    pub fn multi_inject_info(&self) -> Option<&str> {
+        self.0.get_string("Multi Inject Info:")
+    }
+
+    /// HCD energy string — raw value as stored (may be `"28.00"`, `"28%"`, or `"N/A"`).
+    pub fn hcd_energy(&self) -> Option<&str> {
+        self.0
+            .get_string("HCD Energy:")
+            .or_else(|| self.0.get_string("HCD Energy V:"))
     }
 }
+
+// ─── Status log (instrument log) typed accessor ─────────────────────────────
+
+/// Typed accessor for a per-scan instrument-status log entry.
+///
+/// The instrument log records instrument-state values (temperatures, voltages,
+/// pressures, etc.) at the time each scan was acquired. The schema varies
+/// across instrument models.
+pub struct StatusLogEntry<'a>(pub &'a GenericRecord);
+
+impl<'a> StatusLogEntry<'a> {
+    /// Return the raw record for direct field access.
+    #[inline]
+    pub fn record(&self) -> &GenericRecord {
+        self.0
+    }
+
+    /// Ion injection time in milliseconds (present on Orbitrap family).
+    pub fn ion_injection_time_ms(&self) -> Option<f64> {
+        self.0
+            .get_f64("Ion Injection Time (ms):")
+            .or_else(|| self.0.get_f64("Ion Inject Time (ms):"))
+    }
+
+    /// Orbitrap / FT resolving power setting.
+    pub fn ft_resolution(&self) -> Option<i32> {
+        self.0
+            .get_i32("Orbitrap Resolution:")
+            .or_else(|| self.0.get_i32("FT Resolution:"))
+    }
+
+    /// FAIMS compensation voltage (V).
+    pub fn faims_cv(&self) -> Option<f64> {
+        self.0
+            .get_f64("FAIMS CV:")
+            .or_else(|| self.0.get_f32("FAIMS CV:").map(f64::from))
+    }
+
+    /// S-Lens RF level (V).
+    pub fn s_lens_rf_level(&self) -> Option<f64> {
+        self.0.get_f64("S-Lens RF Level:")
+    }
+
+    /// Orbitrap / analyzer temperature (°C).
+    pub fn analyzer_temperature(&self) -> Option<f64> {
+        self.0
+            .get_f64("Analyzer Temperature:")
+            .or_else(|| self.0.get_f32("Analyzer Temperature:").map(f64::from))
+    }
+
+    /// API (spray) source voltage (V).
+    pub fn spray_voltage(&self) -> Option<f64> {
+        self.0
+            .get_f64("Spray Voltage (V):")
+            .or_else(|| self.0.get_f64("Spray Voltage:"))
+            .or_else(|| self.0.get_f32("Spray Voltage:").map(f64::from))
+    }
+
+    /// Lock mass reference correction (ppm).
+    pub fn lock_mass_correction_ppm(&self) -> Option<f64> {
+        self.0
+            .get_f64("LM Correction (ppm):")
+            .or_else(|| self.0.get_f64("LM m/z-Correction (ppm):"))
+    }
+
+    /// Capillary temperature (°C).
+    pub fn capillary_temperature(&self) -> Option<f64> {
+        self.0
+            .get_f64("Capillary Temp (°C):")
+            .or_else(|| self.0.get_f64("Capillary Temp:"))
+            .or_else(|| self.0.get_f32("Capillary Temp:").map(f64::from))
+    }
+
+    /// Number of lock masses found.
+    pub fn number_of_lock_masses(&self) -> Option<i32> {
+        self.0
+            .get_i32("Number of LM Found:")
+            .or_else(|| self.0.get_i32("Number of Lock Masses:"))
+    }
+
+    /// Get any field by name (pass-through to the underlying record).
+    pub fn get(&self, label: &str) -> Option<&GenericValue> {
+        self.0.get(label)
+    }
+
+    /// Get a float64 field by name.
+    pub fn get_f64(&self, label: &str) -> Option<f64> {
+        self.0.get_f64(label)
+    }
+
+    /// Get an int32 field by name.
+    pub fn get_i32(&self, label: &str) -> Option<i32> {
+        self.0.get_i32(label)
+    }
+
+    /// Get a string field by name.
+    pub fn get_string(&self, label: &str) -> Option<&str> {
+        self.0.get_string(label)
+    }
+}
+

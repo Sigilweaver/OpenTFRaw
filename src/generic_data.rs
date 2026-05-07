@@ -248,6 +248,15 @@ impl GenericRecord {
         }
     }
 
+    /// Get a float32 field by label.
+    pub fn get_f32(&self, label: &str) -> Option<f32> {
+        match self.get(label)? {
+            GenericValue::Float32(v) => Some(*v),
+            GenericValue::Float64(v) => Some(*v as f32),
+            _ => None,
+        }
+    }
+
     /// Get an i32 field by label.
     pub fn get_i32(&self, label: &str) -> Option<i32> {
         match self.get(label)? {
