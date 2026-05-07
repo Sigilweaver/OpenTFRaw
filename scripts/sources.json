@@ -265,8 +265,8 @@
         "count": 3
     },
     {
-        "instrument": "Orbitrap Eclipse",
-        "mode": "DIA",
+        "instrument": "Q Exactive Plus",
+        "mode": "DDA-2",
         "accession": "PXD038440",
         "count": 3
     },

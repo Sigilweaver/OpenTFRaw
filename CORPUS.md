@@ -116,7 +116,7 @@ and scan-data encoding path):
 | Orbitrap Fusion Lumos (MS3)      | MS3    | Three-stage fragmentation / XL-MS workflow             |
 | Orbitrap Fusion Lumos (EThcD)    | EThcD  | Supplemental activation on tribrid variable-body scans |
 | Orbitrap Eclipse (EThcD)         | EThcD  | Electron-transfer + supplemental HCD, two-clause filter|
-| Orbitrap Eclipse (DIA)           | DIA    | DIA on tribrid: checks if reaction np>0 in body        |
+| Q Exactive Plus (DDA-2)          | DDA    | Second Q Exactive Plus vintage for regression          |
 | Orbitrap Fusion Lumos (UVPD)     | UVPD   | Ultraviolet photodissociation, tests Activation::Uvpd  |
 | Q Exactive HF (DIA)              | DIA    | Fixed-window SWATH-like DIA on Q Exactive              |
 | Orbitrap Exploris 480 (DDA-2)    | DDA    | Second firmware vintage for regression                 |
@@ -183,5 +183,6 @@ center m/z is currently absent from filter strings.  Investigation findings:
 
 | Mode | Notes |
 | ---- | ----- |
+| Eclipse DIA | DIA on tribrid Orbitrap: needed to confirm whether tribrid instruments store isolation m/z in reaction structure (np>0) as DDA scans do. No confirmed Eclipse DIA PRIDE accession with accessible RAW files identified yet. The existing Fusion Lumos DIA files (PXD031322) show the same filter gap as Exploris 480, suggesting the isolation m/z is absent in the tribrid scan event body for DIA as well. |
 | SPS-MS3 (TMT) | Synchronous precursor selection MS3 for isobaric quantification; differs from standard MS3 in the number of simultaneous precursor m/z in the scan event body. |
 | ECD / IRMPD | Both enum variants implemented; no corpus files yet. |
