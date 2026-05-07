@@ -8,8 +8,9 @@ needs to handle:
 - Each major instrument family (ion trap, Orbitrap hybrid, Q-Orbitrap,
   Tribrid, single-stage Orbitrap, Astral, triple quadrupole)
 
-One representative file per instrument line is enough to exercise every
-format path while keeping total corpus size to roughly 6-10 GB.
+Current size: ~124 GB across 283 files, covering all instrument families
+and acquisition modes.  Multiple files per instrument are included to
+exercise parameter variation across real-world datasets.
 
 ## Source: PRIDE Archive
 
@@ -25,28 +26,31 @@ PRIDE datasets are published under CC-BY or equivalent open licences.
 
 ## Source List
 
-The file `scripts/sources.json` records exactly which PRIDE file to
-download for each instrument:
+The file `scripts/sources.json` records which PRIDE projects and files to
+download:
 
     [
       {
         "instrument": "LCQ Classic",
         "accession": "PXD044152",
-        "pride_filename": "Ex250122_K50ng_60m2.raw"
+        "files": ["Ex250122_K50ng_60m2.raw"],
+        "count": 6
       },
       {
         "instrument": "Orbitrap Fusion Lumos",
         "mode": "DIA",
         "accession": "PXD031322",
-        "pride_filename": "OFL001513-YLL-GPF-15K-1.raw"
+        "files": ["OFL001513-YLL-GPF-15K-1.raw"],
+        "count": 5
       },
       ...
     ]
 
-The optional `mode` field distinguishes additional files for the same
-instrument that cover a different acquisition mode (DIA, EThcD, PRM, MS3,
-etc.).  When present, the manifest key is `"Instrument (mode)"` instead
-of just `"Instrument"`, so both files are tracked independently.
+- `files` - specific filenames always downloaded first
+- `count` - total target file count from this project; the fetcher
+  auto-fills from the FTP directory listing until the count is reached
+- `mode` - distinguishes multiple entries for the same instrument
+  covering different acquisition modes (DIA, EThcD, PRM, MS3, etc.)
 
 To add or replace an entry, edit `sources.json` directly and re-run the
 fetcher.  The manifest (`corpus/manifest.json`) records what is
@@ -54,25 +58,31 @@ currently on disk; the fetcher skips any key already present there.
 
 ## Running the Fetcher
 
-    python scripts/fetch_corpus.py          # download missing files
-    python scripts/fetch_corpus.py --dry-run # report without downloading
+    python scripts/fetch_corpus.py             # download missing files
+    python scripts/fetch_corpus.py --dry-run   # report without downloading
+    python scripts/fetch_corpus.py --list-files PXD032800  # discover files
 
 The script resolves each download URL through the PRIDE REST API
-(https://www.ebi.ac.uk/pride/ws/archive/v2/files/byProject\) and saves
+(https://www.ebi.ac.uk/pride/ws/archive/v2/files/byProject) and saves
 files as `{accession}_{instrument_label}_{original_filename}` under
 `corpus/`.  If the API returns an empty response (an intermittent server
 behaviour observed in 2026), the script falls back to constructing the
 FTP URL directly from the project publication date.
 
+To discover all available files in a PRIDE project before adding it to
+`sources.json`:
+
+    python scripts/fetch_corpus.py --list-files PXD032800
+
 ## Provenance Record
 
 `corpus/manifest.json` records which PRIDE project each local
-file came from:
+file came from.  Keys are `{accession}/{original_filename}`:
 
     {
-      "LTQ Orbitrap XL": {
-        "accession": "PXD055201",
-        "filename": "PXD055201_LTQ_Orbitrap_XL_20170427_..._2.raw",
+      "PXD055201/20170427_CO_0673AnGS_DM_Mix1_R12R13R14_2.raw": {
+        "instrument": "LTQ Orbitrap XL",
+        "dest_filename": "PXD055201_LTQ_Orbitrap_XL_20170427_..._2.raw",
         "size_bytes": 396954554
       },
       ...
@@ -80,7 +90,7 @@ file came from:
 
 To trace any file back to its source, use the PXD accession:
 
-    https://www.ebi.ac.uk/pride/archive/projects/\<PXD_ACCESSION\>
+    https://www.ebi.ac.uk/pride/archive/projects/<PXD_ACCESSION>
 
 ## Target Instruments and Acquisition Modes
 
@@ -131,6 +141,6 @@ The selection heuristic — `ntrailer > 0` (v64+) or `nsegs > 0 && first_scan
 
 - PRIDE's metadata lists declared instrument names; a few submitters
   mislabel files.  Device detection in the parser is therefore best-effort.
-- Some instrument lines (Astral, top-down ETD workflows) have few small
-  files on PRIDE.  The entries in sources.json were chosen to be the
-  smallest available representative files at the time the corpus was built.
+- Some instrument lines (Astral, top-down ETD workflows) have few publicly
+  available files on PRIDE.  The `count` values in `sources.json` are
+  capped at the number of files actually present in the FTP directory.
