@@ -129,7 +129,39 @@ pub fn build_filter(
         let act = p.activation();
         let reactions = &event.reactions;
 
-        if !reactions.is_empty() {
+        // Detect EThcD from tribrid instruments (Eclipse, Fusion Lumos).
+        // These encode EThcD as CID/HCD activation (byte 24 = 4 or 1) with
+        // n_reactions = 2 in the body, where only the first reaction has a
+        // valid non-zero precursor m/z.  The preamble activation byte is
+        // never EThcD (12) for these instruments.
+        let n_valid_precursors = reactions
+            .iter()
+            .filter(|r| r.precursor_mz > 0.0)
+            .count();
+        let is_tribrid_ethcd = n == 2
+            && reactions.len() >= 2
+            && n_valid_precursors == 1
+            && matches!(analyzer, Some(Analyzer::FTMS))
+            && matches!(
+                act,
+                Some(Activation::CID) | Some(Activation::HCD)
+            );
+
+        if is_tribrid_ethcd {
+            // Eclipse / Fusion Lumos EThcD: one valid precursor, two-clause filter.
+            // activation_energy from scan_params "HCD Energy:" = supplemental HCD NCE%.
+            if let Some(rx) = reactions.iter().find(|r| r.precursor_mz > 0.0) {
+                out.push(' ');
+                out.push_str(&format!("{:.4}", rx.precursor_mz));
+                out.push('@');
+                out.push_str("etd");
+                out.push('@');
+                out.push_str("hcd");
+                if let Some(e) = activation_energy {
+                    out.push_str(&format!("{e:.2}"));
+                }
+            }
+        } else if !reactions.is_empty() {
             // Full precursor chain from parsed reactions.
             // For MS3: reactions[0] = parent MS2 precursor, reactions[1] = MS3 precursor.
             // Each intermediate reaction uses its stored energy; the final reaction uses
@@ -163,10 +195,18 @@ pub fn build_filter(
                         out.push_str(astr);
                         let energy = if is_last {
                             activation_energy.or_else(|| {
-                                if rx.energy > 0.0 { Some(rx.energy) } else { None }
+                                if rx.energy > 0.0 {
+                                    Some(rx.energy)
+                                } else {
+                                    None
+                                }
                             })
                         } else {
-                            if rx.energy > 0.0 { Some(rx.energy) } else { activation_energy }
+                            if rx.energy > 0.0 {
+                                Some(rx.energy)
+                            } else {
+                                activation_energy
+                            }
                         };
                         if let Some(e) = energy {
                             out.push_str(&format!("{e:.2}"));
@@ -227,7 +267,12 @@ mod tests {
     use crate::scan_event::{FractionCollector, Reaction, ScanEvent, ScanEventPreamble};
     use crate::scan_index::ScanIndexEntry;
 
-    fn make_preamble(polarity: u8, scan_mode: u8, ms_power: u8, scan_type: u8) -> ScanEventPreamble {
+    fn make_preamble(
+        polarity: u8,
+        scan_mode: u8,
+        ms_power: u8,
+        scan_type: u8,
+    ) -> ScanEventPreamble {
         let mut bytes = vec![0u8; 136];
         bytes[4] = polarity;
         bytes[5] = scan_mode;
@@ -259,7 +304,10 @@ mod tests {
         let ev = ScanEvent {
             preamble: make_preamble(1, 1, 1, 0),
             reactions: vec![],
-            fraction_collectors: vec![FractionCollector { low_mz: 350.0, high_mz: 1500.0 }],
+            fraction_collectors: vec![FractionCollector {
+                low_mz: 350.0,
+                high_mz: 1500.0,
+            }],
             coefficients: vec![],
         };
         let idx = make_index(350.0, 1500.0);
@@ -275,7 +323,10 @@ mod tests {
         let ev = ScanEvent {
             preamble: pre,
             reactions: vec![],
-            fraction_collectors: vec![FractionCollector { low_mz: 150.0, high_mz: 2000.0 }],
+            fraction_collectors: vec![FractionCollector {
+                low_mz: 150.0,
+                high_mz: 2000.0,
+            }],
             coefficients: vec![],
         };
         let idx = make_index(150.0, 2000.0);
@@ -302,13 +353,19 @@ mod tests {
         let ev = ScanEvent {
             preamble: pre,
             reactions: vec![rxn],
-            fraction_collectors: vec![FractionCollector { low_mz: 116.0, high_mz: 892.0 }],
+            fraction_collectors: vec![FractionCollector {
+                low_mz: 116.0,
+                high_mz: 892.0,
+            }],
             coefficients: vec![],
         };
         let idx = make_index(116.0, 892.0);
         let s = build_filter(&ev, &idx, Some(440.254), Some(35.0), None);
         // ITMS + CID code 4 → "cid"
-        assert_eq!(s, "ITMS + c NSI d Full ms2 440.2540@cid35.00 [116.0000-892.0000]");
+        assert_eq!(
+            s,
+            "ITMS + c NSI d Full ms2 440.2540@cid35.00 [116.0000-892.0000]"
+        );
     }
 
     #[test]
@@ -320,15 +377,33 @@ mod tests {
         let ev = ScanEvent {
             preamble: pre,
             reactions: vec![
-                Reaction { precursor_mz: 810.50, unknown_double: 1.0, energy: 35.0, unknown_long1: 0, unknown_long2: 0 },
-                Reaction { precursor_mz: 265.27, unknown_double: 1.0, energy: 35.0, unknown_long1: 0, unknown_long2: 0 },
+                Reaction {
+                    precursor_mz: 810.50,
+                    unknown_double: 1.0,
+                    energy: 35.0,
+                    unknown_long1: 0,
+                    unknown_long2: 0,
+                },
+                Reaction {
+                    precursor_mz: 265.27,
+                    unknown_double: 1.0,
+                    energy: 35.0,
+                    unknown_long1: 0,
+                    unknown_long2: 0,
+                },
             ],
-            fraction_collectors: vec![FractionCollector { low_mz: 100.0, high_mz: 1000.0 }],
+            fraction_collectors: vec![FractionCollector {
+                low_mz: 100.0,
+                high_mz: 1000.0,
+            }],
             coefficients: vec![],
         };
         let idx = make_index(100.0, 1000.0);
         let s = build_filter(&ev, &idx, Some(265.27), Some(35.0), None);
-        assert_eq!(s, "ITMS + c NSI d Full ms3 810.5000@cid35.00 265.2700@cid35.00 [100.0000-1000.0000]");
+        assert_eq!(
+            s,
+            "ITMS + c NSI d Full ms3 810.5000@cid35.00 265.2700@cid35.00 [100.0000-1000.0000]"
+        );
     }
 
     #[test]
@@ -340,12 +415,17 @@ mod tests {
         let ev = ScanEvent {
             preamble: pre,
             reactions: vec![],
-            fraction_collectors: vec![FractionCollector { low_mz: 150.0, high_mz: 2000.0 }],
+            fraction_collectors: vec![FractionCollector {
+                low_mz: 150.0,
+                high_mz: 2000.0,
+            }],
             coefficients: vec![],
         };
         let idx = make_index(150.0, 2000.0);
         let s = build_filter(&ev, &idx, Some(649.12), Some(35.0), Some(28.0));
-        assert_eq!(s, "FTMS + c NSI d Full ms2 649.1200@etd35.00@hcd28.00 [150.0000-2000.0000]");
+        assert_eq!(
+            s,
+            "FTMS + c NSI d Full ms2 649.1200@etd35.00@hcd28.00 [150.0000-2000.0000]"
+        );
     }
 }
-

@@ -144,8 +144,16 @@ impl ScanEvent {
             // Primary = ms_power <= Ms1 AND not dependent.
             let is_primary = preamble.bytes.get(6).copied().unwrap_or(0) <= 1
                 && preamble.bytes.get(10).copied() != Some(1);
-            let body_size = if is_primary { body_primary } else { body_dependent };
-            Self::read_v66(r, preamble, body_size)
+            let body_size = if is_primary {
+                body_primary
+            } else {
+                body_dependent
+            };
+            // Tribrid instruments (Eclipse, Fusion Lumos) use variable-length events
+            // detected when body_primary != body_dependent.  Dependent events on
+            // these instruments use a different body layout than QExactive/Exploris.
+            let is_tribrid_dep = body_primary != body_dependent && !is_primary;
+            Self::read_v66(r, preamble, body_size, is_tribrid_dep)
         } else {
             Self::read_pre_v66(r, preamble)
         }
@@ -154,20 +162,25 @@ impl ScanEvent {
     /// V66 scan events have a fixed-size body (size determined by the caller
     /// from the stream's address-space: body_size = event_size - preamble_size).
     ///
-    /// Empirically verified layout (for Q Exactive HF-X with 144-byte body):
+    /// Two body layouts are in use across instrument families:
+    ///
+    /// **QExactive / Exploris / uniform-event files** (body_primary == body_dependent):
     ///   body[0..4]:   u32 unknown_long[0] (always 1)
     ///   body[4..8]:   u32 flags (0 for MS1, 0xA0000000 for MS2)
     ///   body[8..64]:  opaque fields (precursor-related for MS2, range aux for MS1)
     ///   body[fc_off..fc_off+16]: FractionCollector (scan window) at body_size-64
-    ///   body[np_off..np_off+4]:  u32 nparam at body_size-60
-    ///   body[np_off+4..]:        f64[nparam] coefficients
     ///
-    /// The FC and nparam are at fixed offsets from the END of the body,
-    /// which is what allows this to generalize across different body sizes.
+    /// **Tribrid dependent events** (Eclipse, Fusion Lumos; is_tribrid_dep=true):
+    ///   body[0..4]:   u32 n_reactions  (0 for MS1, 1 for HCD, 2 for EThcD)
+    ///   body[4..]:    n_reactions * 32-byte Reaction records
+    ///   body[body_size-88..body_size-72]: FractionCollector (scan window)
+    ///
+    /// In both cases nparam + coefficients live at body[body_size-64..].
     fn read_v66<R: Read + Seek>(
         r: &mut BinaryReader<R>,
         preamble: ScanEventPreamble,
         body_size: usize,
+        is_tribrid_dep: bool,
     ) -> Result<Self> {
         let body = r.read_bytes(body_size)?;
 
@@ -182,7 +195,19 @@ impl ScanEvent {
         // Strategy: try a small list of candidate offsets in priority order
         // and accept the first that yields a plausible m/z window. This is
         // robust across the observed zoo of body layouts.
-        let candidates: &[usize] = &[64, 8, 128, body_size.saturating_sub(80)];
+        // Tribrid dependent events (Eclipse, Fusion Lumos) store the FractionCollector
+        // at body[body_size-88] = body[120] for a 208-byte body.  All other v66
+        // instruments use one of the legacy candidate offsets.
+        let tribrid_fc = body_size.saturating_sub(88);
+        let tribrid_candidates;
+        let legacy_candidates;
+        let candidates: &[usize] = if is_tribrid_dep {
+            tribrid_candidates = [tribrid_fc, 8usize, 64, 128];
+            &tribrid_candidates
+        } else {
+            legacy_candidates = [64usize, 8, 128, body_size.saturating_sub(80)];
+            &legacy_candidates
+        };
         let fraction_collectors = candidates
             .iter()
             .copied()
@@ -190,10 +215,8 @@ impl ScanEvent {
                 if off + 16 > body_size {
                     return None;
                 }
-                let low_mz =
-                    f64::from_le_bytes(body[off..off + 8].try_into().unwrap());
-                let high_mz =
-                    f64::from_le_bytes(body[off + 8..off + 16].try_into().unwrap());
+                let low_mz = f64::from_le_bytes(body[off..off + 8].try_into().unwrap());
+                let high_mz = f64::from_le_bytes(body[off + 8..off + 16].try_into().unwrap());
                 // A valid scan window must be finite, monotonic, and within
                 // physically realistic m/z bounds (instruments top out well
                 // below 1e5 m/z). Accept lo == hi as well because some
@@ -226,8 +249,7 @@ impl ScanEvent {
             let nparam = nparam_raw.min(max_nparam);
             for i in 0..nparam {
                 let off = np_off + 4 + i * 8;
-                coefficients
-                    .push(f64::from_le_bytes(body[off..off + 8].try_into().unwrap()));
+                coefficients.push(f64::from_le_bytes(body[off..off + 8].try_into().unwrap()));
             }
         }
 
@@ -240,6 +262,43 @@ impl ScanEvent {
         let is_ms2_plus = preamble.bytes.get(6).copied().unwrap_or(0) >= 2;
         let reactions = if (!is_ms2_plus && !preamble.is_dependent()) || body_size < 8 {
             Vec::new()
+        } else if is_tribrid_dep {
+            // Tribrid dependent events (Eclipse, Fusion Lumos): n_reactions is stored at
+            // body[0..4] and each 32-byte Reaction record begins at body[4].
+            // The second reaction (if any) is typically a zero-mz supplemental step.
+            let np = if body_size >= 4 {
+                u32::from_le_bytes(body[0..4].try_into().unwrap()) as usize
+            } else {
+                0
+            };
+            let rxn_start = 4usize;
+            let max_np = body_size.saturating_sub(rxn_start + 32) / 32;
+            if np == 0 || np > max_np.max(1) {
+                Vec::new()
+            } else {
+                let mut rxs = Vec::with_capacity(np);
+                for i in 0..np {
+                    let off = rxn_start + i * 32;
+                    if off + 32 > body_size {
+                        break;
+                    }
+                    let mz = f64::from_le_bytes(body[off..off + 8].try_into().unwrap());
+                    let unk = f64::from_le_bytes(body[off + 8..off + 16].try_into().unwrap());
+                    let energy = f64::from_le_bytes(body[off + 16..off + 24].try_into().unwrap());
+                    let ul1 = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
+                    let ul2 = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap());
+                    if mz.is_finite() && mz >= 0.0 {
+                        rxs.push(Reaction {
+                            precursor_mz: mz,
+                            unknown_double: unk,
+                            energy,
+                            unknown_long1: ul1,
+                            unknown_long2: ul2,
+                        });
+                    }
+                }
+                rxs
+            }
         } else {
             let np = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
             // Sanity check: np must fit within the body minus minimum fixed overhead.

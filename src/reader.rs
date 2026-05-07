@@ -262,7 +262,6 @@ impl RawFileReader {
     pub fn open<R: Read + Seek>(source: R) -> Result<Self> {
         let mut r = BinaryReader::new(source);
 
-
         // 1. FileHeader
         let header = FileHeader::read(&mut r)?;
         let version = header.version;
@@ -387,8 +386,7 @@ impl RawFileReader {
                     if n_primary_numerator % gap == 0 {
                         let n_primary = n_primary_numerator / gap;
                         let n_dependent = n.saturating_sub(n_primary);
-                        let total_check = n_primary * PRIMARY_EVENT
-                            + n_dependent * DEPENDENT_EVENT;
+                        let total_check = n_primary * PRIMARY_EVENT + n_dependent * DEPENDENT_EVENT;
                         if total_check == stream_bytes {
                             // Verified: use the tribrid sizes.
                             (
@@ -397,14 +395,12 @@ impl RawFileReader {
                             )
                         } else {
                             // Fallback: use floor-average uniform body
-                            let body = ((stream_bytes / n) as usize)
-                                .saturating_sub(preamble_size);
+                            let body = ((stream_bytes / n) as usize).saturating_sub(preamble_size);
                             (body, body)
                         }
                     } else {
                         // Fallback: use floor-average uniform body
-                        let body = ((stream_bytes / n) as usize)
-                            .saturating_sub(preamble_size);
+                        let body = ((stream_bytes / n) as usize).saturating_sub(preamble_size);
                         (body, body)
                     }
                 }
@@ -776,9 +772,15 @@ impl RawFileReader {
         let params = self.scan_params(scan_number);
         let precursor = params.as_ref().and_then(|p| p.monoisotopic_mz());
         let energy = params.as_ref().and_then(|p| p.activation_energy());
-        let supplemental = params.as_ref().and_then(|p| p.supplemental_activation_energy());
+        let supplemental = params
+            .as_ref()
+            .and_then(|p| p.supplemental_activation_energy());
         Some(crate::scan_filter::build_filter(
-            event, entry, precursor, energy, supplemental,
+            event,
+            entry,
+            precursor,
+            energy,
+            supplemental,
         ))
     }
 
@@ -873,7 +875,10 @@ fn extract_utf16le_text(buf: &[u8], min_chars: usize) -> Option<String> {
         let mut run_start = 0usize;
         let mut run_chars: Vec<u16> = Vec::with_capacity(min_chars);
 
-        let flush = |run_chars: &Vec<u16>, run_start: usize, best: &mut Option<String>, best_len: &mut usize| {
+        let flush = |run_chars: &Vec<u16>,
+                     run_start: usize,
+                     best: &mut Option<String>,
+                     best_len: &mut usize| {
             if run_chars.len() >= min_chars {
                 if let Ok(s) = String::from_utf16(run_chars) {
                     let _ = run_start; // suppress unused warning
@@ -960,11 +965,17 @@ impl<'a> ScanParams<'a> {
     /// - `"MS2 Isolation M/Z:"` — some older LTQ firmware
     /// Returns `None` when the value is absent or zero (not determined).
     pub fn monoisotopic_mz(&self) -> Option<f64> {
-        let v = self.0.get_f64("Monoisotopic M/Z:")
+        let v = self
+            .0
+            .get_f64("Monoisotopic M/Z:")
             .or_else(|| self.0.get_f64("MS2 Isolation M/Z:"))
             .or_else(|| self.0.get_f64("Isolation Center M/Z:"))
             .or_else(|| self.0.get_f64("Precursor M/Z:"))?;
-        if v > 0.0 { Some(v) } else { None }
+        if v > 0.0 {
+            Some(v)
+        } else {
+            None
+        }
     }
 
     /// Number of micro-scans averaged into this scan.
@@ -1342,4 +1353,3 @@ impl<'a> StatusLogEntry<'a> {
         self.0.get_string(label)
     }
 }
-

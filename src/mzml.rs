@@ -84,36 +84,52 @@ fn instrument_cv(raw: &RawFileReader) -> (&'static str, &'static str) {
         // Map known Thermo model names to PSI-MS CV terms where possible.
         // Accessions from psi-ms.obo (instrument model branch MS:1000031).
         let known: &[(&str, &str, &str)] = &[
-            ("Orbitrap Astral",          "MS:1003355", "Orbitrap Astral"),
-            ("Orbitrap Ascend",          "MS:1003028", "Orbitrap Ascend"),
-            ("Orbitrap Eclipse",         "MS:1003029", "Orbitrap Eclipse"),
-            ("Orbitrap Fusion Lumos",    "MS:1002732", "Orbitrap Fusion Lumos"),
-            ("Orbitrap Fusion",          "MS:1002416", "Orbitrap Fusion"),
-            ("Orbitrap Exploris 480",    "MS:1003028", "Orbitrap Exploris 480"),
-            ("Orbitrap Exploris 240",    "MS:1003098", "Orbitrap Exploris 240"),
-            ("Orbitrap Exploris 120",    "MS:1003199", "Orbitrap Exploris 120"),
-            ("Q Exactive HF-X",          "MS:1002877", "Q Exactive HF-X"),
-            ("Q Exactive HF",            "MS:1002523", "Q Exactive HF"),
-            ("Q Exactive Plus",          "MS:1002634", "Q Exactive Plus"),
-            ("Q Exactive UHMR",          "MS:1003245", "Q Exactive UHMR"),
-            ("Q Exactive",               "MS:1001911", "Q Exactive"),
-            ("LTQ Orbitrap Velos Pro",   "MS:1001742", "LTQ Orbitrap Velos"),
-            ("LTQ Orbitrap Velos",       "MS:1001742", "LTQ Orbitrap Velos"),
-            ("LTQ Orbitrap Elite",       "MS:1001910", "LTQ Orbitrap Elite"),
-            ("LTQ Orbitrap XL",          "MS:1000556", "LTQ Orbitrap XL"),
-            ("LTQ Orbitrap",             "MS:1000449", "LTQ Orbitrap"),
-            ("LTQ Velos Pro",            "MS:1001096", "LTQ Velos Pro"),
-            ("LTQ Velos",                "MS:1000855", "LTQ Velos"),
-            ("LTQ XL",                   "MS:1000854", "LTQ XL"),
-            ("LTQ FT",                   "MS:1000448", "LTQ FT"),
-            ("LTQ",                      "MS:1000447", "LTQ"),
-            ("TSQ Altis",                "MS:1003108", "TSQ Altis"),
-            ("TSQ Quantiva",             "MS:1002498", "TSQ Quantiva"),
-            ("TSQ Endura",               "MS:1002497", "TSQ Endura"),
-            ("TSQ Vantage",              "MS:1001510", "TSQ Vantage"),
-            ("LCQ Classic",              "MS:1000443", "LCQ Classic"),
-            ("LCQ Deca",                 "MS:1000446", "LCQ Deca"),
-            ("LCQ Advantage",            "MS:1000590", "LCQ Advantage"),
+            ("Orbitrap Astral", "MS:1003355", "Orbitrap Astral"),
+            ("Orbitrap Ascend", "MS:1003028", "Orbitrap Ascend"),
+            ("Orbitrap Eclipse", "MS:1003029", "Orbitrap Eclipse"),
+            (
+                "Orbitrap Fusion Lumos",
+                "MS:1002732",
+                "Orbitrap Fusion Lumos",
+            ),
+            ("Orbitrap Fusion", "MS:1002416", "Orbitrap Fusion"),
+            (
+                "Orbitrap Exploris 480",
+                "MS:1003028",
+                "Orbitrap Exploris 480",
+            ),
+            (
+                "Orbitrap Exploris 240",
+                "MS:1003098",
+                "Orbitrap Exploris 240",
+            ),
+            (
+                "Orbitrap Exploris 120",
+                "MS:1003199",
+                "Orbitrap Exploris 120",
+            ),
+            ("Q Exactive HF-X", "MS:1002877", "Q Exactive HF-X"),
+            ("Q Exactive HF", "MS:1002523", "Q Exactive HF"),
+            ("Q Exactive Plus", "MS:1002634", "Q Exactive Plus"),
+            ("Q Exactive UHMR", "MS:1003245", "Q Exactive UHMR"),
+            ("Q Exactive", "MS:1001911", "Q Exactive"),
+            ("LTQ Orbitrap Velos Pro", "MS:1001742", "LTQ Orbitrap Velos"),
+            ("LTQ Orbitrap Velos", "MS:1001742", "LTQ Orbitrap Velos"),
+            ("LTQ Orbitrap Elite", "MS:1001910", "LTQ Orbitrap Elite"),
+            ("LTQ Orbitrap XL", "MS:1000556", "LTQ Orbitrap XL"),
+            ("LTQ Orbitrap", "MS:1000449", "LTQ Orbitrap"),
+            ("LTQ Velos Pro", "MS:1001096", "LTQ Velos Pro"),
+            ("LTQ Velos", "MS:1000855", "LTQ Velos"),
+            ("LTQ XL", "MS:1000854", "LTQ XL"),
+            ("LTQ FT", "MS:1000448", "LTQ FT"),
+            ("LTQ", "MS:1000447", "LTQ"),
+            ("TSQ Altis", "MS:1003108", "TSQ Altis"),
+            ("TSQ Quantiva", "MS:1002498", "TSQ Quantiva"),
+            ("TSQ Endura", "MS:1002497", "TSQ Endura"),
+            ("TSQ Vantage", "MS:1001510", "TSQ Vantage"),
+            ("LCQ Classic", "MS:1000443", "LCQ Classic"),
+            ("LCQ Deca", "MS:1000446", "LCQ Deca"),
+            ("LCQ Advantage", "MS:1000590", "LCQ Advantage"),
         ];
         for (prefix, acc, name) in known {
             if model.starts_with(prefix) {
@@ -142,7 +158,10 @@ fn ms_level(power: MsPower) -> u32 {
 
 // ─── Activation method → CV accession ────────────────────────────────────────
 
-fn activation_cv(act: Activation, analyzer: Option<crate::Analyzer>) -> (&'static str, &'static str) {
+fn activation_cv(
+    act: Activation,
+    analyzer: Option<crate::Analyzer>,
+) -> (&'static str, &'static str) {
     match act {
         Activation::HCD => ("MS:1000422", "beam-type collision-induced dissociation"),
         Activation::ETD | Activation::EThcD => ("MS:1000598", "electron transfer dissociation"),
@@ -154,7 +173,10 @@ fn activation_cv(act: Activation, analyzer: Option<crate::Analyzer>) -> (&'stati
             }
             _ => ("MS:1000133", "collision-induced dissociation"),
         },
-        Activation::MPID => ("MS:1002481", "supplemental beam-type collision-induced dissociation"),
+        Activation::MPID => (
+            "MS:1002481",
+            "supplemental beam-type collision-induced dissociation",
+        ),
         Activation::ECD => ("MS:1000250", "electron capture dissociation"),
         Activation::IRMPD => ("MS:1000262", "infrared multiphoton dissociation"),
         Activation::PD => ("MS:1001880", "in-source collision-induced dissociation"),
@@ -193,21 +215,39 @@ where
     // ── XML declaration + root ─────────────────────────────────────────────
     writeln!(out, r#"<?xml version="1.0" encoding="utf-8"?>"#)?;
     writeln!(out, r#"<mzML xmlns="http://psi.hupo.org/ms/mzml""#)?;
-    writeln!(out, r#"      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance""#)?;
-    writeln!(out, r#"      xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.2_idx.xsd""#)?;
+    writeln!(
+        out,
+        r#"      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance""#
+    )?;
+    writeln!(
+        out,
+        r#"      xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.2_idx.xsd""#
+    )?;
     writeln!(out, r#"      version="1.1.0">"#)?;
 
     // ── cvList ─────────────────────────────────────────────────────────────
     writeln!(out, r#"  <cvList count="2">"#)?;
-    writeln!(out, r#"    <cv id="MS" fullName="Proteomics Standards Initiative Mass Spectrometry Ontology" version="4.1.100" URI="https://raw.githubusercontent.com/HUPO-PSI/psi-ms-CV/master/psi-ms.obo"/>"#)?;
-    writeln!(out, r#"    <cv id="UO" fullName="Unit Ontology" version="09:04:2014" URI="https://raw.githubusercontent.com/bio-ontology-research-group/unit-ontology/master/unit.obo"/>"#)?;
+    writeln!(
+        out,
+        r#"    <cv id="MS" fullName="Proteomics Standards Initiative Mass Spectrometry Ontology" version="4.1.100" URI="https://raw.githubusercontent.com/HUPO-PSI/psi-ms-CV/master/psi-ms.obo"/>"#
+    )?;
+    writeln!(
+        out,
+        r#"    <cv id="UO" fullName="Unit Ontology" version="09:04:2014" URI="https://raw.githubusercontent.com/bio-ontology-research-group/unit-ontology/master/unit.obo"/>"#
+    )?;
     writeln!(out, r#"  </cvList>"#)?;
 
     // ── fileDescription ────────────────────────────────────────────────────
     writeln!(out, r#"  <fileDescription>"#)?;
     writeln!(out, r#"    <fileContent>"#)?;
-    writeln!(out, r#"      <cvParam cvRef="MS" accession="MS:1000579" name="MS1 spectrum" value=""/>"#)?;
-    writeln!(out, r#"      <cvParam cvRef="MS" accession="MS:1000580" name="MSn spectrum" value=""/>"#)?;
+    writeln!(
+        out,
+        r#"      <cvParam cvRef="MS" accession="MS:1000579" name="MS1 spectrum" value=""/>"#
+    )?;
+    writeln!(
+        out,
+        r#"      <cvParam cvRef="MS" accession="MS:1000580" name="MSn spectrum" value=""/>"#
+    )?;
     writeln!(out, r#"    </fileContent>"#)?;
     writeln!(out, r#"    <sourceFileList count="1">"#)?;
     writeln!(
@@ -215,8 +255,14 @@ where
         r#"      <sourceFile id="sf1" name="{}" location="">"#,
         escape(raw_filename)
     )?;
-    writeln!(out, r#"        <cvParam cvRef="MS" accession="MS:1000563" name="Thermo RAW format" value=""/>"#)?;
-    writeln!(out, r#"        <cvParam cvRef="MS" accession="MS:1000768" name="Thermo nativeID format" value=""/>"#)?;
+    writeln!(
+        out,
+        r#"        <cvParam cvRef="MS" accession="MS:1000563" name="Thermo RAW format" value=""/>"#
+    )?;
+    writeln!(
+        out,
+        r#"        <cvParam cvRef="MS" accession="MS:1000768" name="Thermo nativeID format" value=""/>"#
+    )?;
     writeln!(out, r#"      </sourceFile>"#)?;
     writeln!(out, r#"    </sourceFileList>"#)?;
     writeln!(out, r#"  </fileDescription>"#)?;
@@ -224,7 +270,10 @@ where
     // ── softwareList ───────────────────────────────────────────────────────
     writeln!(out, r#"  <softwareList count="1">"#)?;
     writeln!(out, r#"    <software id="opentfraw" version="0.1.0">"#)?;
-    writeln!(out, r#"      <cvParam cvRef="MS" accession="MS:1000799" name="custom unreleased software tool" value="opentfraw"/>"#)?;
+    writeln!(
+        out,
+        r#"      <cvParam cvRef="MS" accession="MS:1000799" name="custom unreleased software tool" value="opentfraw"/>"#
+    )?;
     writeln!(out, r#"    </software>"#)?;
     writeln!(out, r#"  </softwareList>"#)?;
 
@@ -234,7 +283,8 @@ where
     writeln!(
         out,
         r#"      <cvParam cvRef="MS" accession="{}" name="{}" value=""/>"#,
-        inst_acc, escape(inst_name)
+        inst_acc,
+        escape(inst_name)
     )?;
     writeln!(out, r#"    </instrumentConfiguration>"#)?;
     writeln!(out, r#"  </instrumentConfigurationList>"#)?;
@@ -242,8 +292,14 @@ where
     // ── dataProcessingList ─────────────────────────────────────────────────
     writeln!(out, r#"  <dataProcessingList count="1">"#)?;
     writeln!(out, r#"    <dataProcessing id="dp1">"#)?;
-    writeln!(out, r#"      <processingMethod order="0" softwareRef="opentfraw">"#)?;
-    writeln!(out, r#"        <cvParam cvRef="MS" accession="MS:1000544" name="Conversion to mzML" value=""/>"#)?;
+    writeln!(
+        out,
+        r#"      <processingMethod order="0" softwareRef="opentfraw">"#
+    )?;
+    writeln!(
+        out,
+        r#"        <cvParam cvRef="MS" accession="MS:1000544" name="Conversion to mzML" value=""/>"#
+    )?;
     writeln!(out, r#"      </processingMethod>"#)?;
     writeln!(out, r#"    </dataProcessing>"#)?;
     writeln!(out, r#"  </dataProcessingList>"#)?;
@@ -484,7 +540,10 @@ fn write_spectrum<W: Write>(
             .filter(|&mz| mz > 0.0)
             .or(target_mz);
         let iso_width = params.as_ref().and_then(|p| p.isolation_width_mz());
-        let charge = params.as_ref().and_then(|p| p.charge_state()).filter(|&z| z > 0);
+        let charge = params
+            .as_ref()
+            .and_then(|p| p.charge_state())
+            .filter(|&z| z > 0);
         let act_energy = params
             .as_ref()
             .and_then(|p| p.activation_energy())
@@ -589,10 +648,7 @@ fn write_spectrum<W: Write>(
         let mz_b64 = encode_f64_array(mz_vals);
         let int_b64 = encode_f32_array(int_vals);
 
-        writeln!(
-            out,
-            r#"        <binaryDataArrayList count="{n_arrays}">"#
-        )?;
+        writeln!(out, r#"        <binaryDataArrayList count="{n_arrays}">"#)?;
 
         // m/z array — f64, no compression
         writeln!(
@@ -600,9 +656,18 @@ fn write_spectrum<W: Write>(
             r#"          <binaryDataArray encodedLength="{}">"#,
             mz_b64.len()
         )?;
-        writeln!(out, r#"            <cvParam cvRef="MS" accession="MS:1000514" name="m/z array" value=""/>"#)?;
-        writeln!(out, r#"            <cvParam cvRef="MS" accession="MS:1000523" name="64-bit float" value=""/>"#)?;
-        writeln!(out, r#"            <cvParam cvRef="MS" accession="MS:1000576" name="no compression" value=""/>"#)?;
+        writeln!(
+            out,
+            r#"            <cvParam cvRef="MS" accession="MS:1000514" name="m/z array" value=""/>"#
+        )?;
+        writeln!(
+            out,
+            r#"            <cvParam cvRef="MS" accession="MS:1000523" name="64-bit float" value=""/>"#
+        )?;
+        writeln!(
+            out,
+            r#"            <cvParam cvRef="MS" accession="MS:1000576" name="no compression" value=""/>"#
+        )?;
         writeln!(out, r#"            <binary>{mz_b64}</binary>"#)?;
         writeln!(out, r#"          </binaryDataArray>"#)?;
 
@@ -612,9 +677,18 @@ fn write_spectrum<W: Write>(
             r#"          <binaryDataArray encodedLength="{}">"#,
             int_b64.len()
         )?;
-        writeln!(out, r#"            <cvParam cvRef="MS" accession="MS:1000515" name="intensity array" value=""/>"#)?;
-        writeln!(out, r#"            <cvParam cvRef="MS" accession="MS:1000521" name="32-bit float" value=""/>"#)?;
-        writeln!(out, r#"            <cvParam cvRef="MS" accession="MS:1000576" name="no compression" value=""/>"#)?;
+        writeln!(
+            out,
+            r#"            <cvParam cvRef="MS" accession="MS:1000515" name="intensity array" value=""/>"#
+        )?;
+        writeln!(
+            out,
+            r#"            <cvParam cvRef="MS" accession="MS:1000521" name="32-bit float" value=""/>"#
+        )?;
+        writeln!(
+            out,
+            r#"            <cvParam cvRef="MS" accession="MS:1000576" name="no compression" value=""/>"#
+        )?;
         writeln!(out, r#"            <binary>{int_b64}</binary>"#)?;
         writeln!(out, r#"          </binaryDataArray>"#)?;
 

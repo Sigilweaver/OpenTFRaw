@@ -2,70 +2,92 @@
     {
         "instrument": "LCQ Classic",
         "accession": "PXD044152",
-        "files": ["Ex250122_K50ng_60m2.raw"],
+        "files": [
+            "Ex250122_K50ng_60m2.raw"
+        ],
         "count": 6
     },
     {
         "instrument": "LTQ",
         "accession": "PXD039587",
-        "files": ["20220715NRCMs_3_3006.raw"],
+        "files": [
+            "20220715NRCMs_3_3006.raw"
+        ],
         "count": 1
     },
     {
         "instrument": "LTQ XL",
         "accession": "PXD059878",
-        "files": ["2013_30_Amrutha_050713_1.raw"],
+        "files": [
+            "2013_30_Amrutha_050713_1.raw"
+        ],
         "count": 1
     },
     {
         "instrument": "LTQ Velos",
         "accession": "PXD031068",
-        "files": ["150624_AT1.raw"],
+        "files": [
+            "150624_AT1.raw"
+        ],
         "count": 6
     },
     {
         "instrument": "LTQ FT",
         "accession": "PXD054004",
-        "files": ["20171113_Map_NS1_1to139_4deg_50uM_001.raw"],
+        "files": [
+            "20171113_Map_NS1_1to139_4deg_50uM_001.raw"
+        ],
         "count": 3
     },
     {
         "instrument": "LTQ Orbitrap",
         "accession": "PXD069348",
-        "files": ["LTQOrbitrap.RAW"],
+        "files": [
+            "LTQOrbitrap.RAW"
+        ],
         "count": 10
     },
     {
         "instrument": "LTQ Orbitrap XL",
         "accession": "PXD055201",
-        "files": ["20170427_CO_0673AnGS_DM_Mix1_R12R13R14_2.raw"],
+        "files": [
+            "20170427_CO_0673AnGS_DM_Mix1_R12R13R14_2.raw"
+        ],
         "count": 3
     },
     {
         "instrument": "LTQ Orbitrap",
         "mode": "ETD",
         "accession": "PXD006767",
-        "files": ["EFM7_lysargiNase_ETD_22032016.raw"],
+        "files": [
+            "EFM7_lysargiNase_ETD_22032016.raw"
+        ],
         "count": 5
     },
     {
         "instrument": "LTQ Orbitrap Velos",
         "accession": "PXD035901",
-        "files": ["MS20211203-LMG-W1.raw"],
+        "files": [
+            "MS20211203-LMG-W1.raw"
+        ],
         "count": 1
     },
     {
         "instrument": "LTQ Orbitrap Velos",
         "mode": "DDA-2",
         "accession": "PXD001386",
-        "files": ["20131006-IL-B07.raw"],
+        "files": [
+            "20131006-IL-B07.raw"
+        ],
         "count": 5
     },
     {
         "instrument": "LTQ Orbitrap Velos",
         "mode": "DDA-3",
         "accession": "PXD044191",
-        "files": ["79504_A7R_136_GluC.raw"],
+        "files": [
+            "79504_A7R_136_GluC.raw"
+        ],
         "count": 5
     },
     {
@@ -83,19 +105,25 @@
     {
         "instrument": "LTQ Orbitrap Velos Pro",
         "accession": "PXD051336",
-        "files": ["171214_S_SPMM_01_01_45pto.raw"],
+        "files": [
+            "171214_S_SPMM_01_01_45pto.raw"
+        ],
         "count": 3
     },
     {
         "instrument": "LTQ Orbitrap Elite",
         "accession": "PXD000790",
-        "files": ["OEII12347.raw"],
+        "files": [
+            "OEII12347.raw"
+        ],
         "count": 1
     },
     {
         "instrument": "Q Exactive",
         "accession": "PXD067550",
-        "files": ["R20220100103_HSPA4.raw"],
+        "files": [
+            "R20220100103_HSPA4.raw"
+        ],
         "count": 1
     },
     {
@@ -107,20 +135,26 @@
     {
         "instrument": "Q Exactive Plus",
         "accession": "PXD064694",
-        "files": ["XB03600DA_MCAOglu.raw"],
+        "files": [
+            "XB03600DA_MCAOglu.raw"
+        ],
         "count": 4
     },
     {
         "instrument": "Q Exactive HF",
         "accession": "PXD021648",
-        "files": ["QExHFX4_RSLC3_BSA_DSBU.raw"],
+        "files": [
+            "QExHFX4_RSLC3_BSA_DSBU.raw"
+        ],
         "count": 1
     },
     {
         "instrument": "Q Exactive HF",
         "mode": "DIA",
         "accession": "PXD005573",
-        "files": ["Fig2HeLa-0-5h_MHRM_R01_T0.raw"],
+        "files": [
+            "Fig2HeLa-0-5h_MHRM_R01_T0.raw"
+        ],
         "count": 10
     },
     {
@@ -138,33 +172,43 @@
     {
         "instrument": "Q Exactive HF-X",
         "accession": "PXD071477",
-        "files": ["RS_300825_3.raw"],
+        "files": [
+            "RS_300825_3.raw"
+        ],
         "count": 6
     },
     {
         "instrument": "Q Exactive HF-X",
         "mode": "PRM",
         "accession": "PXD021080",
-        "files": ["Aug1_A057_0-2fmol_CSP-NP_12fmolHeavy_Mucus_iRT_PRM_7min_r1.raw"],
+        "files": [
+            "Aug1_A057_0-2fmol_CSP-NP_12fmolHeavy_Mucus_iRT_PRM_7min_r1.raw"
+        ],
         "count": 5
     },
     {
         "instrument": "Q Exactive UHMR",
         "accession": "PXD068962",
-        "files": ["insource-CID.raw"],
+        "files": [
+            "insource-CID.raw"
+        ],
         "count": 8
     },
     {
         "instrument": "Orbitrap Fusion",
         "accession": "PXD006060",
-        "files": ["20161205_CHO-Peak3.raw"],
+        "files": [
+            "20161205_CHO-Peak3.raw"
+        ],
         "count": 1
     },
     {
         "instrument": "Orbitrap Fusion",
         "mode": "DDA-3",
         "accession": "PXD017288",
-        "files": ["7_Memb_st_prot.raw"],
+        "files": [
+            "7_Memb_st_prot.raw"
+        ],
         "count": 5
     },
     {
@@ -176,28 +220,36 @@
     {
         "instrument": "Orbitrap Fusion Lumos",
         "accession": "PXD006062",
-        "files": ["20160315_HCP_55kDa_ingel.raw"],
+        "files": [
+            "20160315_HCP_55kDa_ingel.raw"
+        ],
         "count": 1
     },
     {
         "instrument": "Orbitrap Fusion Lumos",
         "mode": "DIA",
         "accession": "PXD031322",
-        "files": ["OFL001513-YLL-GPF-15K-1.raw"],
+        "files": [
+            "OFL001513-YLL-GPF-15K-1.raw"
+        ],
         "count": 5
     },
     {
         "instrument": "Orbitrap Fusion Lumos",
         "mode": "MS3",
         "accession": "PXD070648",
-        "files": ["MS238037LUM_Ryan_Walz_Trypsin_Chymotrypsin_1019_MS2-MS3.raw"],
+        "files": [
+            "MS238037LUM_Ryan_Walz_Trypsin_Chymotrypsin_1019_MS2-MS3.raw"
+        ],
         "count": 5
     },
     {
         "instrument": "Orbitrap Fusion Lumos",
         "mode": "EThcD",
         "accession": "PXD064117",
-        "files": ["FOXK2_HCD_EThcD.raw"],
+        "files": [
+            "FOXK2_HCD_EThcD.raw"
+        ],
         "count": 2
     },
     {
@@ -210,21 +262,27 @@
         "instrument": "Orbitrap Fusion Lumos",
         "mode": "DDA-2",
         "accession": "PXD044802",
-        "files": ["2023LZ018_NAKN_001_01_45pto.raw"],
+        "files": [
+            "2023LZ018_NAKN_001_01_45pto.raw"
+        ],
         "count": 5
     },
     {
         "instrument": "Orbitrap Fusion Lumos",
         "mode": "top-down",
         "accession": "PXD025230",
-        "files": ["esf_2547.raw"],
+        "files": [
+            "esf_2547.raw"
+        ],
         "count": 3
     },
     {
         "instrument": "Orbitrap Fusion Lumos",
         "mode": "TMT-frac",
         "accession": "PXD023217",
-        "files": ["F01_Fraction1.raw"],
+        "files": [
+            "F01_Fraction1.raw"
+        ],
         "count": 5
     },
     {
@@ -254,14 +312,18 @@
     {
         "instrument": "Orbitrap Eclipse",
         "accession": "PXD054530",
-        "files": ["E20231027_02.raw"],
+        "files": [
+            "E20231027_02.raw"
+        ],
         "count": 1
     },
     {
         "instrument": "Orbitrap Eclipse",
         "mode": "EThcD",
         "accession": "PXD077396",
-        "files": ["EC-OT30-25-190-EThcD-09.raw"],
+        "files": [
+            "EC-OT30-25-190-EThcD-09.raw"
+        ],
         "count": 3
     },
     {
@@ -279,39 +341,51 @@
     {
         "instrument": "Orbitrap Ascend",
         "accession": "PXD061791",
-        "files": ["sa01102.raw"],
+        "files": [
+            "sa01102.raw"
+        ],
         "count": 2
     },
     {
         "instrument": "Orbitrap Exploris 120",
         "accession": "PXD069455",
-        "files": ["01-31-25_SS26_N_MSMS-200c-17min_elution.raw"],
+        "files": [
+            "01-31-25_SS26_N_MSMS-200c-17min_elution.raw"
+        ],
         "count": 10
     },
     {
         "instrument": "Orbitrap Exploris 240",
         "accession": "PXD064525",
-        "files": ["136-so0410-Asn-Ev-V1.raw"],
+        "files": [
+            "136-so0410-Asn-Ev-V1.raw"
+        ],
         "count": 10
     },
     {
         "instrument": "Orbitrap Exploris 480",
         "accession": "PXD064947",
-        "files": ["X6212FD_2.raw"],
+        "files": [
+            "X6212FD_2.raw"
+        ],
         "count": 1
     },
     {
         "instrument": "Orbitrap Exploris 480",
         "mode": "DDA-2",
         "accession": "PXD075759",
-        "files": ["E2_4597_11.raw"],
+        "files": [
+            "E2_4597_11.raw"
+        ],
         "count": 10
     },
     {
         "instrument": "Orbitrap Exploris 480",
         "mode": "FAIMS",
         "accession": "PXD040898",
-        "files": ["01_TK_FAIMS_-30_mouse_liver_ADPr_HCD-OT_700-1000_60min_20221014191505.raw"],
+        "files": [
+            "01_TK_FAIMS_-30_mouse_liver_ADPr_HCD-OT_700-1000_60min_20221014191505.raw"
+        ],
         "count": 5
     },
     {
@@ -323,34 +397,46 @@
     {
         "instrument": "Orbitrap Astral",
         "accession": "PXD066600",
-        "files": ["1_1.raw"],
+        "files": [
+            "1_1.raw"
+        ],
         "count": 3
     },
     {
         "instrument": "Orbitrap Astral",
         "mode": "DDA-2",
         "accession": "PXD066600",
-        "files": ["1_2.raw"]
+        "files": [
+            "1_2.raw"
+        ]
     },
     {
         "instrument": "TSQ Vantage",
         "accession": "PXD020246",
-        "files": ["TSQVantage.RAW"]
+        "files": [
+            "TSQVantage.RAW"
+        ]
     },
     {
         "instrument": "TSQ Quantiva",
         "accession": "PXD056439",
-        "files": ["KMT2CD_dKO_2.raw"]
+        "files": [
+            "KMT2CD_dKO_2.raw"
+        ]
     },
     {
         "instrument": "TSQ Altis",
         "accession": "PXD041995",
-        "files": ["milla010603.raw"]
+        "files": [
+            "milla010603.raw"
+        ]
     },
     {
         "instrument": "TSQ Altis",
         "mode": "SRM-2",
         "accession": "PXD069101",
-        "files": ["milla0255_01.raw"]
+        "files": [
+            "milla0255_01.raw"
+        ]
     }
 ]

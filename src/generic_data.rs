@@ -106,11 +106,7 @@ impl GenericDataHeader {
     /// real labels and has a non-trivial fixed record size. Used to reject
     /// false positives picked up by the forward scan.
     fn looks_meaningful(&self) -> bool {
-        let named = self
-            .fields
-            .iter()
-            .filter(|f| !f.label.is_empty())
-            .count();
+        let named = self.fields.iter().filter(|f| !f.label.is_empty()).count();
         named >= 2 && self.fixed_record_size() > 0
     }
 
