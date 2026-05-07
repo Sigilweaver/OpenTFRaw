@@ -70,7 +70,14 @@ impl GenericDataHeader {
                         return Ok(None);
                     }
                     r.seek_to(label_start)?;
-                    let label = r.read_pascal_string()?;
+                    let label = match r.read_pascal_string() {
+                        Ok(s) => s,
+                        Err(crate::error::Error::InvalidUtf16(_)) => {
+                            r.seek_to(saved_pos)?;
+                            return Ok(None);
+                        }
+                        Err(e) => return Err(e),
+                    };
                     if !label_is_plausible(&label) {
                         r.seek_to(saved_pos)?;
                         return Ok(None);
