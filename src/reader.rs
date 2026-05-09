@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 
 use crate::error::{Error, Result};
@@ -207,6 +208,11 @@ pub struct RawFileReader {
     /// metadata region (e.g. `"Orbitrap Fusion Lumos"`). `None` means only
     /// the coarse family could be inferred.
     pub instrument_model: Option<&'static str>,
+    /// For SRM (flat-peak) files: maps scan_event index → Q1 precursor mass (m/z).
+    ///
+    /// Populated at open time by scanning the method/transition table stored
+    /// in the pre-scan-data header region. Empty for non-SRM instruments.
+    pub srm_q1_by_event: HashMap<u16, f64>,
 }
 
 // ─── Multi-controller metadata ───────────────────────────────────────────────
@@ -514,11 +520,10 @@ impl RawFileReader {
         let scan_format = crate::scan_format::ScanDataFormat::detect(version, flat_peaks);
         let first_analyzer = scan_events.first().and_then(|e| e.preamble.analyzer());
 
-        // Scan a prefix of the file for the canonical instrument model string.
-        // Thermo embeds the model as a UTF-16LE string in the metadata region
-        // preceding the scan data — almost always within the first ~16 KB.
-        // Cap at 64 KB to give plenty of headroom without scanning large files.
-        let scan_window_cap = 64 * 1024u64;
+        // For SRM (flat-peak) files, read the entire pre-scan-data region so that
+        // we can extract Q1 values from the method/transition table stored there.
+        // For other instruments, read only 64 KB for instrument model detection.
+        let scan_window_cap = if flat_peaks { data_addr } else { 64 * 1024u64 };
         let window_len = scan_window_cap.min(data_addr);
         let metadata_window = if window_len > 0 {
             r.seek_to(0)?;
@@ -534,6 +539,56 @@ impl RawFileReader {
         );
         let device_family = detected.family;
         let instrument_model = detected.model;
+
+        // For SRM files: extract Q1 masses from the method/transition section.
+        //
+        // In Thermo TSQ RAW files, the SRM transition list is embedded in a
+        // method structure stored in the pre-scan-data header region (bytes 0 to
+        // data_addr). Each transition record stores (Q1: f64, Q3_lo: f64, Q3_hi: f64)
+        // consecutively. We locate records by searching for Q3_lo values that match
+        // the per-scan-event Q3 window lower bounds stored in the scan index.
+        //
+        // The scan_index low_mz field holds the minimum Q3 lower bound for a given
+        // scan event (derived from f32 scan data, so it may differ from the f64 method
+        // value by up to ~0.002 Da). We use a 0.002 Da tolerance for matching.
+        let srm_q1_by_event = if flat_peaks && metadata_window.len() >= 24 {
+            // Collect the first observed Q3 lower bound for each unique scan event.
+            let mut event_q3_lo: HashMap<u16, f64> = HashMap::new();
+            for entry in &scan_index {
+                if entry.low_mz > 50.0 && entry.low_mz < 2000.0 {
+                    event_q3_lo.entry(entry.scan_event).or_insert(entry.low_mz);
+                }
+            }
+
+            let data = &metadata_window;
+            let mut q1_map: HashMap<u16, f64> = HashMap::new();
+
+            'outer: for (&event, &q3_lo_target) in &event_q3_lo {
+                // Scan byte-by-byte for a f64 that approximates q3_lo_target.
+                // The transition record layout is: [Q1: f64][Q3_lo: f64][Q3_hi: f64]...
+                // so Q1 is at offset -8 and Q3_hi is at offset +8 from Q3_lo.
+                let end = data.len().saturating_sub(16);
+                for i in 8..end {
+                    // SAFETY: bounds checked above; arrays are exactly 8 bytes.
+                    let v = f64::from_le_bytes(data[i..i + 8].try_into().unwrap());
+                    if (v - q3_lo_target).abs() < 0.002 {
+                        let hi = f64::from_le_bytes(data[i + 8..i + 16].try_into().unwrap());
+                        // Q3_hi must be slightly larger than Q3_lo (window < 0.1 Da).
+                        if hi > v && (hi - v) < 0.1 {
+                            let q1 = f64::from_le_bytes(data[i - 8..i].try_into().unwrap());
+                            // Q1 must be a plausible precursor mass.
+                            if q1 > 50.0 && q1 < 3000.0 {
+                                q1_map.insert(event, q1);
+                                continue 'outer;
+                            }
+                        }
+                    }
+                }
+            }
+            q1_map
+        } else {
+            HashMap::new()
+        };
 
         Ok(Self {
             header,
@@ -554,6 +609,7 @@ impl RawFileReader {
             scan_format,
             device_family,
             instrument_model,
+            srm_q1_by_event,
         })
     }
 

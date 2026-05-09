@@ -332,14 +332,31 @@ where
             Err(_) => continue,
         };
 
-        let level = event
-            .and_then(|e| e.preamble.ms_power())
-            .map(ms_level)
-            .unwrap_or(1);
+        // SRM (flat-peak) files have no scan events; derive ms_level and scan mode directly.
+        let is_srm = raw.flat_peaks;
+        let level = if is_srm {
+            2
+        } else {
+            event
+                .and_then(|e| e.preamble.ms_power())
+                .map(ms_level)
+                .unwrap_or(1)
+        };
         let polarity = event.and_then(|e| e.preamble.polarity());
-        let scan_mode = event.and_then(|e| e.preamble.scan_mode());
+        // SRM peaks are always centroid; fall back to scan event preamble for other formats.
+        let scan_mode = if is_srm {
+            Some(crate::ScanMode::Centroid)
+        } else {
+            event.and_then(|e| e.preamble.scan_mode())
+        };
         let filter = raw.scan_filter(scan_number);
-        let is_ms1 = level == 1;
+        let is_ms1 = !is_srm && level == 1;
+        // Q1 precursor mass for SRM scans (looked up by scan event class).
+        let srm_q1 = if is_srm {
+            raw.srm_q1_by_event.get(&entry.scan_event).copied()
+        } else {
+            None
+        };
 
         let mz_vals: Vec<f64> = peaks.iter().map(|p| p.mz as f64).collect();
         let int_vals: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
@@ -357,6 +374,7 @@ where
             entry,
             event,
             params,
+            srm_q1,
             &mz_vals,
             &int_vals,
             n_peaks,
@@ -382,6 +400,7 @@ fn write_spectrum<W: Write>(
     entry: &ScanIndexEntry,
     event: Option<&ScanEvent>,
     params: Option<crate::ScanParams<'_>>,
+    srm_q1: Option<f64>,
     mz_vals: &[f64],
     int_vals: &[f32],
     n_peaks: usize,
@@ -520,34 +539,55 @@ fn write_spectrum<W: Write>(
 
     // Precursor info for MS2+
     //
-    // In v66 RAW files, scan-event reactions are empty and the precursor
-    // info lives entirely in the per-scan parameter table. Older formats
-    // populate `event.reactions[0]`. We emit a <precursor> block whenever
+    // For SRM (flat-peak) scans: Q1 is stored in the method transition table
+    // and retrieved via srm_q1. The isolation window is ±0.35 Da (TSQ default).
+    //
+    // For other MS2+ scans: in v66 RAW files, scan-event reactions are empty and
+    // the precursor info lives entirely in the per-scan parameter table. Older
+    // formats populate `event.reactions[0]`. We emit a <precursor> block whenever
     // we have enough data from either source.
     if !is_ms1 {
-        // Resolve precursor m/z, width, charge, and energy from whichever
-        // source has it. Priority: params > event.reactions.
-        let reaction = event.and_then(|e| e.reactions.first());
-        let target_mz = params
-            .as_ref()
-            .and_then(|p| p.isolation_target_mz())
-            .or_else(|| params.as_ref().and_then(|p| p.monoisotopic_mz()))
-            .filter(|&mz| mz > 0.0)
-            .or_else(|| reaction.map(|r| r.precursor_mz).filter(|&mz| mz > 0.0));
-        let sel_mz = params
-            .as_ref()
-            .and_then(|p| p.monoisotopic_mz())
-            .filter(|&mz| mz > 0.0)
-            .or(target_mz);
-        let iso_width = params.as_ref().and_then(|p| p.isolation_width_mz());
-        let charge = params
-            .as_ref()
-            .and_then(|p| p.charge_state())
-            .filter(|&z| z > 0);
-        let act_energy = params
-            .as_ref()
-            .and_then(|p| p.activation_energy())
-            .or_else(|| reaction.map(|r| r.energy).filter(|&e| e > 0.0));
+        // For SRM scans, Q1 is the precursor; isolation window is ±0.35 Da.
+        // For other MS2+: resolve from params or event.reactions.
+        let (target_mz, sel_mz, iso_width, charge, act_energy) = if srm_q1.is_some() {
+            (srm_q1, srm_q1, Some(0.7f64), None::<i32>, None::<f64>)
+        } else {
+            let reaction = event.and_then(|e| e.reactions.first());
+            // Build target_mz from the best available source. Each source is
+            // filtered to exclude 0.0 (absent/unknown) before trying the next:
+            //   1. isolation_target_mz() — "MS2 Isolation Offset:" or "Target M/Z:" in scan params
+            //   2. monoisotopic_mz()     — "Monoisotopic M/Z:" in scan params (v66 DDA)
+            //   3. reaction.precursor_mz — scan-event body (tribrid / older formats)
+            // Applying filter() per-source ensures a 0.0 from source 1 does NOT
+            // prevent source 2 from being tried (the bug that caused isolation
+            // window target to be absent for Q Exactive HF DDA MS2 scans).
+            let tm = params
+                .as_ref()
+                .and_then(|p| p.isolation_target_mz())
+                .filter(|&mz| mz > 0.0)
+                .or_else(|| {
+                    params
+                        .as_ref()
+                        .and_then(|p| p.monoisotopic_mz())
+                        .filter(|&mz| mz > 0.0)
+                })
+                .or_else(|| reaction.map(|r| r.precursor_mz).filter(|&mz| mz > 0.0));
+            let sm = params
+                .as_ref()
+                .and_then(|p| p.monoisotopic_mz())
+                .filter(|&mz| mz > 0.0)
+                .or(tm);
+            let iw = params.as_ref().and_then(|p| p.isolation_width_mz());
+            let ch = params
+                .as_ref()
+                .and_then(|p| p.charge_state())
+                .filter(|&z| z > 0);
+            let ae = params
+                .as_ref()
+                .and_then(|p| p.activation_energy())
+                .or_else(|| reaction.map(|r| r.energy).filter(|&e| e > 0.0));
+            (tm, sm, iw, ch, ae)
+        };
 
         // Always emit a <precursorList> for MSn spectra; mzML requires it.
         // For DIA scans the precursor m/z is 0/unknown, but the activation
