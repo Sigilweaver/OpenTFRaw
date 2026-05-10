@@ -350,3 +350,36 @@ pub fn read_scan_srm_v66<R: Read + Seek>(
 
     Ok(peaks)
 }
+
+/// Read the Q3 isolation window table from an SRM v66 scan record.
+///
+/// Returns one `(lo_mz, hi_mz)` pair per active transition channel,
+/// in channel order.
+pub fn read_scan_srm_v66_windows<R: Read + Seek>(
+    source: &mut R,
+    data_addr: u64,
+    start_offset: u64,
+) -> Result<Vec<(f32, f32)>> {
+    let abs_start = data_addr + start_offset;
+    source.seek(SeekFrom::Start(abs_start))?;
+    let mut r = BinaryReader::new(source);
+
+    // n_peaks at byte 0
+    let n_peaks = r.read_u32()? as usize;
+    if n_peaks == 0 {
+        return Ok(Vec::new());
+    }
+
+    // Skip remaining header: bytes 4–31 (28 bytes)
+    r.skip(28)?;
+
+    // Read m/z window table: n_peaks × 8 bytes (lo_mz f32, hi_mz f32)
+    let mut windows = Vec::with_capacity(n_peaks);
+    for _ in 0..n_peaks {
+        let lo = r.read_f32()?;
+        let hi = r.read_f32()?;
+        windows.push((lo, hi));
+    }
+
+    Ok(windows)
+}

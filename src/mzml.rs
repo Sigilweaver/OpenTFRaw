@@ -342,7 +342,13 @@ where
                 .map(ms_level)
                 .unwrap_or(1)
         };
-        let polarity = event.and_then(|e| e.preamble.polarity());
+        // SRM files have no scan events; default to positive polarity (the vast majority of SRM
+        // experiments are positive-mode). Other formats read polarity from the scan event preamble.
+        let polarity = if is_srm {
+            Some(crate::types::Polarity::Positive)
+        } else {
+            event.and_then(|e| e.preamble.polarity())
+        };
         // SRM peaks are always centroid; fall back to scan event preamble for other formats.
         let scan_mode = if is_srm {
             Some(crate::ScanMode::Centroid)
@@ -413,7 +419,7 @@ fn write_spectrum<W: Write>(
 
     writeln!(
         out,
-        r#"      <spectrum id="scan={scan}" index="{idx}" defaultArrayLength="{n}">"#,
+        r#"      <spectrum id="controllerType=0 controllerNumber=1 scan={scan}" index="{idx}" defaultArrayLength="{n}">"#,
         scan = scan_number,
         idx = index,
         n = n_peaks
@@ -549,8 +555,8 @@ fn write_spectrum<W: Write>(
     if !is_ms1 {
         // For SRM scans, Q1 is the precursor; isolation window is ±0.35 Da.
         // For other MS2+: resolve from params or event.reactions.
-        let (target_mz, sel_mz, iso_width, charge, act_energy) = if srm_q1.is_some() {
-            (srm_q1, srm_q1, Some(0.7f64), None::<i32>, None::<f64>)
+        let (target_mz, sel_mz, iso_width, charge, act_energy, act_energy_is_nce) = if srm_q1.is_some() {
+            (srm_q1, srm_q1, Some(0.7f64), None::<i32>, None::<f64>, false)
         } else {
             let reaction = event.and_then(|e| e.reactions.first());
             // Build target_mz from the best available source. Each source is
@@ -582,11 +588,18 @@ fn write_spectrum<W: Write>(
                 .as_ref()
                 .and_then(|p| p.charge_state())
                 .filter(|&z| z > 0);
-            let ae = params
+            let ae_from_params = params
                 .as_ref()
                 .and_then(|p| p.activation_energy())
+                .filter(|&e| e > 0.0);
+            let ae_is_nce = ae_from_params.is_some()
+                && params
+                    .as_ref()
+                    .map(|p| p.activation_energy_is_nce())
+                    .unwrap_or(false);
+            let ae = ae_from_params
                 .or_else(|| reaction.map(|r| r.energy).filter(|&e| e > 0.0));
-            (tm, sm, iw, ch, ae)
+            (tm, sm, iw, ch, ae, ae_is_nce)
         };
 
         // Always emit a <precursorList> for MSn spectra; mzML requires it.
@@ -599,7 +612,7 @@ fn write_spectrum<W: Write>(
             .as_ref()
             .and_then(|p| p.master_scan_number())
             .filter(|&n| n > 0)
-            .map(|n| format!("scan={n}"));
+            .map(|n| format!("controllerType=0 controllerNumber=1 scan={n}"));
         if let Some(ref mref) = master_ref {
             writeln!(out, r#"          <precursor spectrumRef="{mref}">"#)?;
         } else {
@@ -670,11 +683,19 @@ fn write_spectrum<W: Write>(
             )?;
         }
         if let Some(e) = act_energy {
-            writeln!(
-                out,
-                r#"              <cvParam cvRef="MS" accession="MS:1000045" name="collision energy" value="{:.2}" unitCvRef="UO" unitAccession="UO:0000266" unitName="electronvolt"/>"#,
-                e
-            )?;
+            if act_energy_is_nce {
+                writeln!(
+                    out,
+                    r#"              <cvParam cvRef="MS" accession="MS:1002013" name="normalized collision energy" value="{:.2}"/>"#,
+                    e
+                )?;
+            } else {
+                writeln!(
+                    out,
+                    r#"              <cvParam cvRef="MS" accession="MS:1000045" name="collision energy" value="{:.2}" unitCvRef="UO" unitAccession="UO:0000266" unitName="electronvolt"/>"#,
+                    e
+                )?;
+            }
         }
         writeln!(out, r#"            </activation>"#)?;
 

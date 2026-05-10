@@ -23,6 +23,10 @@ impl<R: Read + Seek> BinaryReader<R> {
         Self { inner, pos: 0 }
     }
 
+    pub fn into_inner(self) -> R {
+        self.inner
+    }
+
     #[allow(dead_code)]
     pub(crate) fn position(&self) -> u64 {
         self.pos
@@ -213,6 +217,11 @@ pub struct RawFileReader {
     /// Populated at open time by scanning the method/transition table stored
     /// in the pre-scan-data header region. Empty for non-SRM instruments.
     pub srm_q1_by_event: HashMap<u16, f64>,
+    /// For SRM (flat-peak) files: maps scan_event index → Q3 isolation window pairs (lo, hi) in m/z.
+    ///
+    /// Populated at open time by reading the Q3 window table from the first scan record
+    /// of each unique scan event class. Empty for non-SRM instruments.
+    pub srm_q3_windows: HashMap<u16, Vec<(f32, f32)>>,
 }
 
 // ─── Multi-controller metadata ───────────────────────────────────────────────
@@ -531,6 +540,9 @@ impl RawFileReader {
         } else {
             Vec::new()
         };
+        // All BinaryReader operations are complete; reclaim the underlying source so
+        // it can be used for on-demand reads (e.g. Q3 window table from scan records).
+        let mut source = r.into_inner();
         let detected = crate::device::DeviceFamily::detect_instrument(
             &metadata_window,
             &header.audit_start.tag2,
@@ -548,34 +560,39 @@ impl RawFileReader {
         // consecutively. We locate records by searching for Q3_lo values that match
         // the per-scan-event Q3 window lower bounds stored in the scan index.
         //
-        // The scan_index low_mz field holds the minimum Q3 lower bound for a given
-        // scan event (derived from f32 scan data, so it may differ from the f64 method
-        // value by up to ~0.002 Da). We use a 0.002 Da tolerance for matching.
+        // Each scan event class in the binary transition table has one entry per channel:
+        //   [Q1: f64][Q3_lo: f64][Q3_hi: f64]
+        // scan_index.high_mz equals the Q3_hi of the highest-Q3 channel for that event
+        // class (the maximum across all channels).  Anchoring the search on Q3_hi instead
+        // of Q3_lo avoids false positives when multiple event classes share the same
+        // minimum Q3 lower bound.  Q1 is 16 bytes before the matching Q3_hi.
+        //
+        // The f32→f64 round-trip in scan data can shift values by up to ~0.002 Da.
         let srm_q1_by_event = if flat_peaks && metadata_window.len() >= 24 {
-            // Collect the first observed Q3 lower bound for each unique scan event.
-            let mut event_q3_lo: HashMap<u16, f64> = HashMap::new();
+            // Collect the Q3_hi of the highest-Q3 channel for each unique scan event.
+            let mut event_q3_hi: HashMap<u16, f64> = HashMap::new();
             for entry in &scan_index {
-                if entry.low_mz > 50.0 && entry.low_mz < 2000.0 {
-                    event_q3_lo.entry(entry.scan_event).or_insert(entry.low_mz);
+                if entry.high_mz > 50.0 && entry.high_mz < 2000.0 {
+                    event_q3_hi
+                        .entry(entry.scan_event)
+                        .or_insert(entry.high_mz);
                 }
             }
 
             let data = &metadata_window;
             let mut q1_map: HashMap<u16, f64> = HashMap::new();
 
-            'outer: for (&event, &q3_lo_target) in &event_q3_lo {
-                // Scan byte-by-byte for a f64 that approximates q3_lo_target.
-                // The transition record layout is: [Q1: f64][Q3_lo: f64][Q3_hi: f64]...
-                // so Q1 is at offset -8 and Q3_hi is at offset +8 from Q3_lo.
-                let end = data.len().saturating_sub(16);
-                for i in 8..end {
-                    // SAFETY: bounds checked above; arrays are exactly 8 bytes.
-                    let v = f64::from_le_bytes(data[i..i + 8].try_into().unwrap());
-                    if (v - q3_lo_target).abs() < 0.002 {
-                        let hi = f64::from_le_bytes(data[i + 8..i + 16].try_into().unwrap());
-                        // Q3_hi must be slightly larger than Q3_lo (window < 0.1 Da).
-                        if hi > v && (hi - v) < 0.1 {
-                            let q1 = f64::from_le_bytes(data[i - 8..i].try_into().unwrap());
+            'outer: for (&event, &q3_hi_target) in &event_q3_hi {
+                // Scan for Q3_hi matching the event's maximum Q3 upper bound.
+                // Layout: [Q1: f64 @ i-16][Q3_lo: f64 @ i-8][Q3_hi: f64 @ i]
+                let end = data.len().saturating_sub(8);
+                for i in 16..end {
+                    let hi = f64::from_le_bytes(data[i..i + 8].try_into().unwrap());
+                    if (hi - q3_hi_target).abs() < 0.002 {
+                        let lo = f64::from_le_bytes(data[i - 8..i].try_into().unwrap());
+                        // Confirm this is a narrow Q3 isolation window (< 0.1 Da).
+                        if hi > lo && (hi - lo) < 0.1 {
+                            let q1 = f64::from_le_bytes(data[i - 16..i - 8].try_into().unwrap());
                             // Q1 must be a plausible precursor mass.
                             if q1 > 50.0 && q1 < 3000.0 {
                                 q1_map.insert(event, q1);
@@ -586,6 +603,29 @@ impl RawFileReader {
                 }
             }
             q1_map
+        } else {
+            HashMap::new()
+        };
+
+        // Build Q3 window map: for flat-peaks files, read the Q3 window table from the
+        // first scan record of each unique scan event class.
+        let srm_q3_windows = if flat_peaks {
+            let mut seen: HashMap<u16, bool> = HashMap::new();
+            let mut q3_map: HashMap<u16, Vec<(f32, f32)>> = HashMap::new();
+            for entry in &scan_index {
+                if seen.contains_key(&entry.scan_event) {
+                    continue;
+                }
+                seen.insert(entry.scan_event, true);
+                if let Ok(windows) =
+                    crate::scan_data::read_scan_srm_v66_windows(&mut source, data_addr, entry.offset)
+                {
+                    if !windows.is_empty() {
+                        q3_map.insert(entry.scan_event, windows);
+                    }
+                }
+            }
+            q3_map
         } else {
             HashMap::new()
         };
@@ -610,6 +650,7 @@ impl RawFileReader {
             device_family,
             instrument_model,
             srm_q1_by_event,
+            srm_q3_windows,
         })
     }
 
@@ -821,8 +862,30 @@ impl RawFileReader {
     pub fn scan_filter(&self, scan_number: u32) -> Option<String> {
         let first = self.run_header.sample_info.first_scan_number;
         let idx = scan_number.checked_sub(first)? as usize;
-        let event = self.scan_events.get(idx)?;
         let entry = self.scan_index.get(idx)?;
+
+        // SRM files have no scan events; build the filter string from
+        // the pre-loaded Q1 and Q3 window maps.
+        if self.flat_peaks {
+            let q1 = self.srm_q1_by_event.get(&entry.scan_event).copied()?;
+            let windows = self.srm_q3_windows.get(&entry.scan_event)?;
+            // Format: "+ c ESI SRM ms2 {Q1:.3} [{lo1:.3}-{hi1:.3}, ...]"
+            let mut s = format!("+ c ESI SRM ms2 {:.3}", q1);
+            if !windows.is_empty() {
+                s.push(' ');
+                s.push('[');
+                for (i, (lo, hi)) in windows.iter().enumerate() {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&format!("{:.3}-{:.3}", lo, hi));
+                }
+                s.push(']');
+            }
+            return Some(s);
+        }
+
+        let event = self.scan_events.get(idx)?;
         // Precursor m/z and activation energy come from the per-scan params
         // table (not the event body) for v66+. Fall back silently if missing.
         let params = self.scan_params(scan_number);
@@ -1119,22 +1182,67 @@ impl<'a> ScanParams<'a> {
     /// - `"Collision Energy (eV):"` — ITMS CID
     /// - `"CE:"` — short form on some firmware
     pub fn activation_energy(&self) -> Option<f64> {
-        if let Some(v) = self.0.get_f64("HCD Energy (eV):") {
+        // eV labels: skip 0.0 (sentinel for "not set").
+        if let Some(v) = self.0.get_f64("HCD Energy (eV):").filter(|&v| v > 0.0) {
             return Some(v);
         }
-        if let Some(v) = self.0.get_f64("HCD Energy eV:") {
+        if let Some(v) = self.0.get_f64("HCD Energy eV:").filter(|&v| v > 0.0) {
             return Some(v);
         }
+        // NCE (normalized collision energy) string labels.
         for label in &["HCD Energy:", "HCD Energy V:", "CE:"] {
             if let Some(s) = self.0.get_string(label) {
                 if let Ok(v) = s.trim().trim_end_matches('%').parse::<f64>() {
-                    return Some(v);
+                    if v > 0.0 {
+                        return Some(v);
+                    }
                 }
             }
         }
         self.0
             .get_f64("Normalized Collision Energy:")
-            .or_else(|| self.0.get_f64("Collision Energy (eV):"))
+            .filter(|&v| v > 0.0)
+            .or_else(|| {
+                self.0
+                    .get_f64("Collision Energy (eV):")
+                    .filter(|&v| v > 0.0)
+            })
+    }
+
+    /// Whether the value returned by [`activation_energy`] is a normalized
+    /// collision energy (NCE, dimensionless %) rather than an absolute eV value.
+    ///
+    /// Returns `true` when the energy came from `HCD Energy:`, `CE:`, or
+    /// `Normalized Collision Energy:` labels. Returns `false` when it came
+    /// from `HCD Energy eV:` or `Collision Energy (eV):`.
+    pub fn activation_energy_is_nce(&self) -> bool {
+        // If an eV label is present and non-zero, it's eV not NCE.
+        if self
+            .0
+            .get_f64("HCD Energy (eV):")
+            .filter(|&v| v > 0.0)
+            .is_some()
+        {
+            return false;
+        }
+        if self
+            .0
+            .get_f64("HCD Energy eV:")
+            .filter(|&v| v > 0.0)
+            .is_some()
+        {
+            return false;
+        }
+        if self
+            .0
+            .get_f64("Collision Energy (eV):")
+            .filter(|&v| v > 0.0)
+            .is_some()
+        {
+            return false;
+        }
+        // If we got a value, it came from an NCE label.
+        true
     }
 
     /// Supplemental activation energy for EThcD scans (the HCD component).
