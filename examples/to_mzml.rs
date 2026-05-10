@@ -1,10 +1,12 @@
 //! Convert a Thermo RAW file to mzML.
 //!
-//! Usage: to_mzml <input.raw> [output.mzML]
+//! Usage: to_mzml [--indexed] <input.raw> [output.mzML]
 //!
 //! If no output path is given, writes to stdout.
+//! Pass --indexed to produce an indexed mzML file with spectrum byte offsets
+//! and a SHA-1 file checksum.
 
-use opentfraw::{write_mzml, RawFileReader};
+use opentfraw::{write_indexed_mzml, write_mzml, RawFileReader};
 use std::{
     fs::File,
     io::{BufReader, BufWriter},
@@ -12,12 +14,15 @@ use std::{
 };
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: to_mzml <input.raw> [output.mzML]");
+    let raw_args: Vec<String> = std::env::args().skip(1).collect();
+    let indexed = raw_args.iter().any(|a| a == "--indexed");
+    let positional: Vec<&String> = raw_args.iter().filter(|a| *a != "--indexed").collect();
+
+    if positional.is_empty() {
+        eprintln!("Usage: to_mzml [--indexed] <input.raw> [output.mzML]");
         std::process::exit(1);
     }
-    let raw_path = Path::new(&args[1]);
+    let raw_path = Path::new(positional[0]);
     let raw_filename = raw_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -39,7 +44,7 @@ fn main() {
         }
     };
 
-    if let Some(out_path) = args.get(2) {
+    if let Some(&out_path) = positional.get(1) {
         let out_file = match File::create(out_path) {
             Ok(f) => f,
             Err(e) => {
@@ -49,12 +54,18 @@ fn main() {
         };
         let mut out = BufWriter::new(out_file);
         let t0 = std::time::Instant::now();
-        match write_mzml(&raw, &mut source, &mut out, raw_filename) {
+        let result = if indexed {
+            write_indexed_mzml(&raw, &mut source, &mut out, raw_filename)
+        } else {
+            write_mzml(&raw, &mut source, &mut out, raw_filename)
+        };
+        match result {
             Ok(()) => {
                 eprintln!(
-                    "Written {} spectra to {out_path} in {:.1}s",
+                    "Written {} spectra to {out_path} in {:.1}s{}",
                     raw.num_scans,
-                    t0.elapsed().as_secs_f64()
+                    t0.elapsed().as_secs_f64(),
+                    if indexed { " (indexed)" } else { "" }
                 );
             }
             Err(e) => {
@@ -66,7 +77,12 @@ fn main() {
         // Write to stdout.
         let stdout = std::io::stdout();
         let mut out = BufWriter::new(stdout.lock());
-        if let Err(e) = write_mzml(&raw, &mut source, &mut out, raw_filename) {
+        let result = if indexed {
+            write_indexed_mzml(&raw, &mut source, &mut out, raw_filename)
+        } else {
+            write_mzml(&raw, &mut source, &mut out, raw_filename)
+        };
+        if let Err(e) = result {
             eprintln!("Error writing mzML: {e}");
             std::process::exit(1);
         }

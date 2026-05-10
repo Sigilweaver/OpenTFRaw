@@ -7,7 +7,7 @@ use crate::generic_data::{GenericDataHeader, GenericRecord, GenericValue};
 use crate::header::FileHeader;
 use crate::raw_file_info::RawFileInfo;
 use crate::run_header::RunHeader;
-use crate::scan_data::{read_flat_peaks, read_scan_srm_v66, Peak, ScanDataPacket};
+use crate::scan_data::{read_flat_peaks, read_scan_srm_v66, search_v63_transition, Peak, ScanDataPacket};
 use crate::scan_event::{ScanEvent, ScanEventPreamble};
 use crate::scan_index::ScanIndexEntry;
 use crate::seq_row::SeqRow;
@@ -222,6 +222,12 @@ pub struct RawFileReader {
     /// Populated at open time by reading the Q3 window table from the first scan record
     /// of each unique scan event class. Empty for non-SRM instruments.
     pub srm_q3_windows: HashMap<u16, Vec<(f32, f32)>>,
+    /// For SRM (flat-peak) files: maps scan_event index → collision energy (eV).
+    ///
+    /// Populated from the v63 transition table at open time.  For v66 files the
+    /// collision energy is read from per-scan parameters instead, so this map is
+    /// empty for v66/TSQ Altis files.
+    pub srm_ce_by_event: HashMap<u16, f64>,
 }
 
 // ─── Multi-controller metadata ───────────────────────────────────────────────
@@ -552,82 +558,117 @@ impl RawFileReader {
         let device_family = detected.family;
         let instrument_model = detected.model;
 
-        // For SRM files: extract Q1 masses from the method/transition section.
+        // For SRM files: extract Q1 masses, Q3 window pairs, and (for v63) collision energies
+        // from the pre-scan-data header region and/or the scan data records.
         //
-        // In Thermo TSQ RAW files, the SRM transition list is embedded in a
-        // method structure stored in the pre-scan-data header region (bytes 0 to
-        // data_addr). Each transition record stores (Q1: f64, Q3_lo: f64, Q3_hi: f64)
-        // consecutively. We locate records by searching for Q3_lo values that match
-        // the per-scan-event Q3 window lower bounds stored in the scan index.
+        // v66 (TSQ Quantiva / TSQ Altis, FlatV66):
+        //   Transition table layout: [Q1: f64][Q3_lo: f64][Q3_hi: f64] per channel.
+        //   Anchor: scan_index.high_mz equals the Q3_hi of the highest-Q3 channel for each
+        //   event class.  Q3 window pairs come from the per-scan record header.
         //
-        // Each scan event class in the binary transition table has one entry per channel:
-        //   [Q1: f64][Q3_lo: f64][Q3_hi: f64]
-        // scan_index.high_mz equals the Q3_hi of the highest-Q3 channel for that event
-        // class (the maximum across all channels).  Anchoring the search on Q3_hi instead
-        // of Q3_lo avoids false positives when multiple event classes share the same
-        // minimum Q3 lower bound.  Q1 is 16 bytes before the matching Q3_hi.
-        //
-        // The f32→f64 round-trip in scan data can shift values by up to ~0.002 Da.
-        let srm_q1_by_event = if flat_peaks && metadata_window.len() >= 24 {
-            // Collect the Q3_hi of the highest-Q3 channel for each unique scan event.
-            let mut event_q3_hi: HashMap<u16, f64> = HashMap::new();
-            for entry in &scan_index {
-                if entry.high_mz > 50.0 && entry.high_mz < 2000.0 {
-                    event_q3_hi
-                        .entry(entry.scan_event)
-                        .or_insert(entry.high_mz);
-                }
-            }
-
-            let data = &metadata_window;
-            let mut q1_map: HashMap<u16, f64> = HashMap::new();
-
-            'outer: for (&event, &q3_hi_target) in &event_q3_hi {
-                // Scan for Q3_hi matching the event's maximum Q3 upper bound.
-                // Layout: [Q1: f64 @ i-16][Q3_lo: f64 @ i-8][Q3_hi: f64 @ i]
-                let end = data.len().saturating_sub(8);
-                for i in 16..end {
-                    let hi = f64::from_le_bytes(data[i..i + 8].try_into().unwrap());
-                    if (hi - q3_hi_target).abs() < 0.002 {
-                        let lo = f64::from_le_bytes(data[i - 8..i].try_into().unwrap());
-                        // Confirm this is a narrow Q3 isolation window (< 0.1 Da).
-                        if hi > lo && (hi - lo) < 0.1 {
-                            let q1 = f64::from_le_bytes(data[i - 16..i - 8].try_into().unwrap());
-                            // Q1 must be a plausible precursor mass.
-                            if q1 > 50.0 && q1 < 3000.0 {
-                                q1_map.insert(event, q1);
-                                continue 'outer;
+        // v63 (TSQ Quantum / TSQ Vantage, FlatV63):
+        //   Transition table layout: 72-byte records; Q1 at [+16], Q3_center at [+24],
+        //   Q3_width at [+32], CE at [+48].  scan_index.low_mz/high_mz hold the instrument
+        //   scan range (not per-transition values), so the high_mz anchor does not apply.
+        //   Q3 centers come from the first scan's peak list; Q3 windows are computed as
+        //   Q3_center ± Q3_width/2.
+        let (srm_q1_by_event, srm_q3_windows, srm_ce_by_event) = {
+            use crate::scan_format::ScanDataFormat;
+            match (flat_peaks, scan_format) {
+                (true, ScanDataFormat::FlatV66) if metadata_window.len() >= 24 => {
+                    // --- v66 Q1 extraction: anchor on scan_index.high_mz ---
+                    let mut event_q3_hi: HashMap<u16, f64> = HashMap::new();
+                    for entry in &scan_index {
+                        if entry.high_mz > 50.0 && entry.high_mz < 2000.0 {
+                            event_q3_hi
+                                .entry(entry.scan_event)
+                                .or_insert(entry.high_mz);
+                        }
+                    }
+                    let data = &metadata_window;
+                    let mut q1_map: HashMap<u16, f64> = HashMap::new();
+                    'outer_v66: for (&event, &q3_hi_target) in &event_q3_hi {
+                        let end = data.len().saturating_sub(8);
+                        for i in 16..end {
+                            let hi = f64::from_le_bytes(data[i..i + 8].try_into().unwrap());
+                            if (hi - q3_hi_target).abs() < 0.002 {
+                                let lo = f64::from_le_bytes(data[i - 8..i].try_into().unwrap());
+                                if hi > lo && (hi - lo) < 0.1 {
+                                    let q1 = f64::from_le_bytes(
+                                        data[i - 16..i - 8].try_into().unwrap(),
+                                    );
+                                    if q1 > 50.0 && q1 < 3000.0 {
+                                        q1_map.insert(event, q1);
+                                        continue 'outer_v66;
+                                    }
+                                }
                             }
                         }
                     }
-                }
-            }
-            q1_map
-        } else {
-            HashMap::new()
-        };
-
-        // Build Q3 window map: for flat-peaks files, read the Q3 window table from the
-        // first scan record of each unique scan event class.
-        let srm_q3_windows = if flat_peaks {
-            let mut seen: HashMap<u16, bool> = HashMap::new();
-            let mut q3_map: HashMap<u16, Vec<(f32, f32)>> = HashMap::new();
-            for entry in &scan_index {
-                if seen.contains_key(&entry.scan_event) {
-                    continue;
-                }
-                seen.insert(entry.scan_event, true);
-                if let Ok(windows) =
-                    crate::scan_data::read_scan_srm_v66_windows(&mut source, data_addr, entry.offset)
-                {
-                    if !windows.is_empty() {
-                        q3_map.insert(entry.scan_event, windows);
+                    // --- v66 Q3 window extraction: read per-scan record header ---
+                    let mut seen: HashMap<u16, bool> = HashMap::new();
+                    let mut q3_map: HashMap<u16, Vec<(f32, f32)>> = HashMap::new();
+                    for entry in &scan_index {
+                        if seen.contains_key(&entry.scan_event) {
+                            continue;
+                        }
+                        seen.insert(entry.scan_event, true);
+                        if let Ok(windows) = crate::scan_data::read_scan_srm_v66_windows(
+                            &mut source,
+                            data_addr,
+                            entry.offset,
+                        ) {
+                            if !windows.is_empty() {
+                                q3_map.insert(entry.scan_event, windows);
+                            }
+                        }
                     }
+                    (q1_map, q3_map, HashMap::new())
                 }
+                (true, ScanDataFormat::FlatV63) => {
+                    // --- v63 Q1 + Q3 window + CE extraction ---
+                    // Read peaks from the first scan of each event class; each peak's mz
+                    // is the Q3 center for that channel.  Search the pre-data region for
+                    // the Q3_center value to find Q1, Q3_width, and CE from the transition
+                    // table.  Q3 windows are computed as (Q3_center - width/2, Q3_center + width/2).
+                    let mut seen: HashMap<u16, bool> = HashMap::new();
+                    let mut q1_map: HashMap<u16, f64> = HashMap::new();
+                    let mut q3_map: HashMap<u16, Vec<(f32, f32)>> = HashMap::new();
+                    let mut ce_map: HashMap<u16, f64> = HashMap::new();
+                    let data = &metadata_window;
+                    for entry in &scan_index {
+                        let ev = entry.scan_event;
+                        if seen.contains_key(&ev) {
+                            continue;
+                        }
+                        seen.insert(ev, true);
+                        let peaks = match read_flat_peaks(
+                            &mut source,
+                            data_addr,
+                            entry.offset,
+                            entry.data_size,
+                        ) {
+                            Ok(p) if !p.is_empty() => p,
+                            _ => continue,
+                        };
+                        // Use the first peak's mz as Q3_center anchor.
+                        if let Some((q1, q3w, ce)) =
+                            search_v63_transition(data, peaks[0].mz)
+                        {
+                            q1_map.insert(ev, q1);
+                            ce_map.insert(ev, ce);
+                            let half = (q3w / 2.0) as f32;
+                            let windows: Vec<(f32, f32)> = peaks
+                                .iter()
+                                .map(|p| (p.mz as f32 - half, p.mz as f32 + half))
+                                .collect();
+                            q3_map.insert(ev, windows);
+                        }
+                    }
+                    (q1_map, q3_map, ce_map)
+                }
+                _ => (HashMap::new(), HashMap::new(), HashMap::new()),
             }
-            q3_map
-        } else {
-            HashMap::new()
         };
 
         Ok(Self {
@@ -651,6 +692,7 @@ impl RawFileReader {
             instrument_model,
             srm_q1_by_event,
             srm_q3_windows,
+            srm_ce_by_event,
         })
     }
 
@@ -869,8 +911,23 @@ impl RawFileReader {
         if self.flat_peaks {
             let q1 = self.srm_q1_by_event.get(&entry.scan_event).copied()?;
             let windows = self.srm_q3_windows.get(&entry.scan_event)?;
-            // Format: "+ c ESI SRM ms2 {Q1:.3} [{lo1:.3}-{hi1:.3}, ...]"
-            let mut s = format!("+ c ESI SRM ms2 {:.3}", q1);
+            // v63 (TSQ Quantum/Vantage): NSI ionization, @cid{CE:.2} after Q1.
+            // v66 (TSQ Quantiva/Altis): ESI ionization, no CE in filter.
+            use crate::scan_format::ScanDataFormat;
+            let ionization = match self.scan_format {
+                ScanDataFormat::FlatV63 => "NSI",
+                _ => "ESI",
+            };
+            let ce_part = if self.scan_format == ScanDataFormat::FlatV63 {
+                self.srm_ce_by_event
+                    .get(&entry.scan_event)
+                    .map(|&ce| format!("@cid{:.2}", ce))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            // Format: "+ c {ION} SRM ms2 {Q1:.3}{@cidCE} [{lo1:.3}-{hi1:.3}, ...]"
+            let mut s = format!("+ c {} SRM ms2 {:.3}{}", ionization, q1, ce_part);
             if !windows.is_empty() {
                 s.push(' ');
                 s.push('[');
@@ -1174,22 +1231,21 @@ impl<'a> ScanParams<'a> {
 
     /// Activation energy (eV or %) for the primary activation step.
     ///
-    /// Tries several label variants present across instrument families:
-    /// - `"HCD Energy (eV):"` — explicit eV label (Q Exactive HF-X, Exploris)
-    /// - `"HCD Energy:"` — string form (e.g. "28.00" or "28%")
-    /// - `"HCD Energy V:"` — Exploris variant
-    /// - `"Normalized Collision Energy:"` — ion-trap CID variant
-    /// - `"Collision Energy (eV):"` — ITMS CID
-    /// - `"CE:"` — short form on some firmware
+    /// Tries several label variants present across instrument families.
+    /// NCE (normalized collision energy) labels are checked first because
+    /// they reflect the user-set method value and are what reference tools
+    /// (ThermoRawFileParser, Proteome Discoverer) report.  eV labels are
+    /// used as a fallback when no NCE label is present.
+    ///
+    /// Label priority:
+    /// 1. `"HCD Energy:"` / `"HCD Energy V:"` / `"CE:"` — NCE string form
+    /// 2. `"Normalized Collision Energy:"` — ion-trap CID NCE
+    /// 3. `"HCD Energy (eV):"` — explicit eV label (Q Exactive HF-X, Exploris)
+    /// 4. `"HCD Energy eV:"` — eV variant
+    /// 5. `"Collision Energy (eV):"` — ITMS CID eV
     pub fn activation_energy(&self) -> Option<f64> {
-        // eV labels: skip 0.0 (sentinel for "not set").
-        if let Some(v) = self.0.get_f64("HCD Energy (eV):").filter(|&v| v > 0.0) {
-            return Some(v);
-        }
-        if let Some(v) = self.0.get_f64("HCD Energy eV:").filter(|&v| v > 0.0) {
-            return Some(v);
-        }
-        // NCE (normalized collision energy) string labels.
+        // NCE labels: preferred because they match the user-set method value.
+        // Skip 0.0 (sentinel for "not set").
         for label in &["HCD Energy:", "HCD Energy V:", "CE:"] {
             if let Some(s) = self.0.get_string(label) {
                 if let Ok(v) = s.trim().trim_end_matches('%').parse::<f64>() {
@@ -1199,50 +1255,46 @@ impl<'a> ScanParams<'a> {
                 }
             }
         }
-        self.0
+        if let Some(v) = self
+            .0
             .get_f64("Normalized Collision Energy:")
             .filter(|&v| v > 0.0)
-            .or_else(|| {
-                self.0
-                    .get_f64("Collision Energy (eV):")
-                    .filter(|&v| v > 0.0)
-            })
+        {
+            return Some(v);
+        }
+        // eV labels: used when no NCE label is available.
+        if let Some(v) = self.0.get_f64("HCD Energy (eV):").filter(|&v| v > 0.0) {
+            return Some(v);
+        }
+        if let Some(v) = self.0.get_f64("HCD Energy eV:").filter(|&v| v > 0.0) {
+            return Some(v);
+        }
+        self.0
+            .get_f64("Collision Energy (eV):")
+            .filter(|&v| v > 0.0)
     }
 
     /// Whether the value returned by [`activation_energy`] is a normalized
     /// collision energy (NCE, dimensionless %) rather than an absolute eV value.
     ///
-    /// Returns `true` when the energy came from `HCD Energy:`, `CE:`, or
-    /// `Normalized Collision Energy:` labels. Returns `false` when it came
-    /// from `HCD Energy eV:` or `Collision Energy (eV):`.
+    /// Returns `true` when `activation_energy` found a value from an NCE label
+    /// (`HCD Energy:`, `HCD Energy V:`, `CE:`, or `Normalized Collision Energy:`).
+    /// Returns `false` when only eV labels were present or no energy was found.
     pub fn activation_energy_is_nce(&self) -> bool {
-        // If an eV label is present and non-zero, it's eV not NCE.
-        if self
-            .0
-            .get_f64("HCD Energy (eV):")
+        // Returns true if activation_energy() took the NCE path.
+        for label in &["HCD Energy:", "HCD Energy V:", "CE:"] {
+            if let Some(s) = self.0.get_string(label) {
+                if let Ok(v) = s.trim().trim_end_matches('%').parse::<f64>() {
+                    if v > 0.0 {
+                        return true;
+                    }
+                }
+            }
+        }
+        self.0
+            .get_f64("Normalized Collision Energy:")
             .filter(|&v| v > 0.0)
             .is_some()
-        {
-            return false;
-        }
-        if self
-            .0
-            .get_f64("HCD Energy eV:")
-            .filter(|&v| v > 0.0)
-            .is_some()
-        {
-            return false;
-        }
-        if self
-            .0
-            .get_f64("Collision Energy (eV):")
-            .filter(|&v| v > 0.0)
-            .is_some()
-        {
-            return false;
-        }
-        // If we got a value, it came from an NCE label.
-        true
     }
 
     /// Supplemental activation energy for EThcD scans (the HCD component).

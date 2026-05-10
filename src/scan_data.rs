@@ -383,3 +383,53 @@ pub fn read_scan_srm_v66_windows<R: Read + Seek>(
 
     Ok(windows)
 }
+
+/// Search the pre-data method/transition table for a v63 SRM transition record
+/// matching the given Q3 center mass.
+///
+/// v63 (TSQ Quantum/Vantage) transition table layout: 72 bytes per channel record.
+/// Relevant fields (all f64 little-endian):
+///   - [+ 0] active-channel flag (1.0 for first channel of each precursor)
+///   - [+ 8] unknown
+///   - [+16] Q1 precursor mass (m/z)   ← returned
+///   - [+24] Q3 center mass (m/z)      ← anchor for search
+///   - [+32] Q3 window width (Da)      ← returned
+///   - [+40] dwell time (s)
+///   - [+48] collision energy (eV)     ← returned
+///
+/// Returns `(Q1, Q3_width, CE_eV)` if a plausible match is found.
+pub fn search_v63_transition(data: &[u8], q3_center_target: f64) -> Option<(f64, f64, f64)> {
+    let end = data.len().saturating_sub(32);
+    for j in 8..end {
+        if j + 8 > data.len() {
+            break;
+        }
+        let v = f64::from_le_bytes(data[j..j + 8].try_into().ok()?);
+        if (v - q3_center_target).abs() > 0.002 {
+            continue;
+        }
+        // Candidate Q3_center at position j. Q1 is 8 bytes before.
+        let q1 = f64::from_le_bytes(data[j - 8..j].try_into().ok()?);
+        if !q1.is_finite() || q1 < 50.0 || q1 > 3000.0 {
+            continue;
+        }
+        // Q3_width is 8 bytes after Q3_center.
+        if j + 16 > data.len() {
+            continue;
+        }
+        let q3w = f64::from_le_bytes(data[j + 8..j + 16].try_into().ok()?);
+        if !q3w.is_finite() || q3w < 0.01 || q3w > 10.0 {
+            continue;
+        }
+        // CE is 24 bytes after Q3_center.
+        if j + 32 > data.len() {
+            continue;
+        }
+        let ce = f64::from_le_bytes(data[j + 24..j + 32].try_into().ok()?);
+        if !ce.is_finite() || ce < 0.1 || ce > 300.0 {
+            continue;
+        }
+        return Some((q1, q3w, ce));
+    }
+    None
+}

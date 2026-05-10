@@ -21,6 +21,125 @@ use crate::scan_index::ScanIndexEntry;
 use crate::types::{Activation, MsPower, Polarity};
 use crate::RawFileReader;
 
+// ─── Byte-counting Write wrapper ─────────────────────────────────────────────
+
+struct CountingWriter<'a, W: Write> {
+    inner: &'a mut W,
+    pos: u64,
+    sha1: Sha1,
+    hashing: bool,
+}
+
+impl<'a, W: Write> CountingWriter<'a, W> {
+    fn new(inner: &'a mut W) -> Self {
+        Self {
+            inner,
+            pos: 0,
+            sha1: Sha1::new(),
+            hashing: true,
+        }
+    }
+}
+
+impl<W: Write> Write for CountingWriter<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.pos += n as u64;
+        if self.hashing {
+            self.sha1.update(&buf[..n]);
+        }
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+// ─── Minimal SHA-1 (RFC 3174) ─────────────────────────────────────────────────
+
+struct Sha1 {
+    state: [u32; 5],
+    count: u64,
+    buf: [u8; 64],
+    buf_len: usize,
+}
+
+impl Sha1 {
+    fn new() -> Self {
+        Self {
+            state: [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0],
+            count: 0,
+            buf: [0u8; 64],
+            buf_len: 0,
+        }
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        let mut off = 0;
+        while off < data.len() {
+            let space = 64 - self.buf_len;
+            let take = space.min(data.len() - off);
+            self.buf[self.buf_len..self.buf_len + take].copy_from_slice(&data[off..off + take]);
+            self.buf_len += take;
+            self.count += take as u64;
+            off += take;
+            if self.buf_len == 64 {
+                self.compress();
+                self.buf_len = 0;
+            }
+        }
+    }
+
+    fn compress(&mut self) {
+        let mut w = [0u32; 80];
+        for i in 0..16 {
+            w[i] = u32::from_be_bytes(self.buf[i * 4..i * 4 + 4].try_into().unwrap());
+        }
+        for i in 16..80 {
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e] = self.state;
+        for i in 0..80 {
+            let (f, k) = match i {
+                0..=19 => ((b & c) | (!b & d), 0x5A827999u32),
+                20..=39 => (b ^ c ^ d, 0x6ED9EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1BBCDC),
+                _ => (b ^ c ^ d, 0xCA62C1D6),
+            };
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(w[i]);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+        self.state[0] = self.state[0].wrapping_add(a);
+        self.state[1] = self.state[1].wrapping_add(b);
+        self.state[2] = self.state[2].wrapping_add(c);
+        self.state[3] = self.state[3].wrapping_add(d);
+        self.state[4] = self.state[4].wrapping_add(e);
+    }
+
+    fn finalize(mut self) -> [u8; 20] {
+        let bit_count = self.count * 8;
+        self.update(&[0x80]);
+        while self.buf_len != 56 {
+            self.update(&[0u8]);
+        }
+        self.update(&bit_count.to_be_bytes());
+        let mut digest = [0u8; 20];
+        for (i, &word) in self.state.iter().enumerate() {
+            digest[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
+        }
+        digest
+    }
+}
+
 // ─── Base64 (RFC 4648 §4, no line wrapping) ─────────────────────────────────
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -363,6 +482,12 @@ where
         } else {
             None
         };
+        // Collision energy for v63 SRM scans (from transition table; empty for v66).
+        let srm_ce = if is_srm {
+            raw.srm_ce_by_event.get(&entry.scan_event).copied()
+        } else {
+            None
+        };
 
         let mz_vals: Vec<f64> = peaks.iter().map(|p| p.mz as f64).collect();
         let int_vals: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
@@ -381,6 +506,7 @@ where
             event,
             params,
             srm_q1,
+            srm_ce,
             &mz_vals,
             &int_vals,
             n_peaks,
@@ -390,6 +516,242 @@ where
     writeln!(out, r#"    </spectrumList>"#)?;
     writeln!(out, r#"  </run>"#)?;
     writeln!(out, r#"</mzML>"#)?;
+    Ok(())
+}
+
+/// Write the contents of `raw` as an indexed mzML 1.1.0 document.
+///
+/// Indexed mzML adds a `<indexList>` element after all spectra with the byte
+/// offset of each `<spectrum>` element, enabling random-access parsing by
+/// tools such as pyteomics and pymzml without a full file scan.
+///
+/// The `<fileChecksum>` element contains the SHA-1 hash of the file content
+/// up to and including `</indexList>`, computed on the fly.
+pub fn write_indexed_mzml<R, W>(
+    raw: &RawFileReader,
+    source: &mut R,
+    out: &mut W,
+    raw_filename: &str,
+) -> Result<()>
+where
+    R: Read + Seek,
+    W: Write,
+{
+    let first_scan = raw.run_header.sample_info.first_scan_number;
+    let n_spectra = raw.num_scans as usize;
+    let (inst_acc, inst_name) = instrument_cv(raw);
+
+    // CountingWriter tracks byte offsets and feeds bytes into SHA-1 while hashing=true.
+    let mut cw = CountingWriter::new(out);
+
+    // ── XML declaration + root (indexedmzML wrapper) ───────────────────────
+    writeln!(cw, r#"<?xml version="1.0" encoding="utf-8"?>"#)?;
+    writeln!(cw, r#"<indexedmzML xmlns="http://psi.hupo.org/ms/mzml""#)?;
+    writeln!(
+        cw,
+        r#"             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance""#
+    )?;
+    writeln!(
+        cw,
+        r#"             xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.2_idx.xsd">"#
+    )?;
+    writeln!(cw, r#"  <mzML xmlns="http://psi.hupo.org/ms/mzml" version="1.1.0">"#)?;
+
+    // ── cvList ─────────────────────────────────────────────────────────────
+    writeln!(cw, r#"  <cvList count="2">"#)?;
+    writeln!(
+        cw,
+        r#"    <cv id="MS" fullName="Proteomics Standards Initiative Mass Spectrometry Ontology" version="4.1.100" URI="https://raw.githubusercontent.com/HUPO-PSI/psi-ms-CV/master/psi-ms.obo"/>"#
+    )?;
+    writeln!(
+        cw,
+        r#"    <cv id="UO" fullName="Unit Ontology" version="09:04:2014" URI="https://raw.githubusercontent.com/bio-ontology-research-group/unit-ontology/master/unit.obo"/>"#
+    )?;
+    writeln!(cw, r#"  </cvList>"#)?;
+
+    // ── fileDescription ────────────────────────────────────────────────────
+    writeln!(cw, r#"  <fileDescription>"#)?;
+    writeln!(cw, r#"    <fileContent>"#)?;
+    writeln!(
+        cw,
+        r#"      <cvParam cvRef="MS" accession="MS:1000579" name="MS1 spectrum" value=""/>"#
+    )?;
+    writeln!(
+        cw,
+        r#"      <cvParam cvRef="MS" accession="MS:1000580" name="MSn spectrum" value=""/>"#
+    )?;
+    writeln!(cw, r#"    </fileContent>"#)?;
+    writeln!(cw, r#"    <sourceFileList count="1">"#)?;
+    writeln!(
+        cw,
+        r#"      <sourceFile id="sf1" name="{}" location="">"#,
+        escape(raw_filename)
+    )?;
+    writeln!(
+        cw,
+        r#"        <cvParam cvRef="MS" accession="MS:1000563" name="Thermo RAW format" value=""/>"#
+    )?;
+    writeln!(
+        cw,
+        r#"        <cvParam cvRef="MS" accession="MS:1000768" name="Thermo nativeID format" value=""/>"#
+    )?;
+    writeln!(cw, r#"      </sourceFile>"#)?;
+    writeln!(cw, r#"    </sourceFileList>"#)?;
+    writeln!(cw, r#"  </fileDescription>"#)?;
+
+    // ── softwareList ───────────────────────────────────────────────────────
+    writeln!(cw, r#"  <softwareList count="1">"#)?;
+    writeln!(cw, r#"    <software id="opentfraw" version="0.1.0">"#)?;
+    writeln!(
+        cw,
+        r#"      <cvParam cvRef="MS" accession="MS:1000799" name="custom unreleased software tool" value="opentfraw"/>"#
+    )?;
+    writeln!(cw, r#"    </software>"#)?;
+    writeln!(cw, r#"  </softwareList>"#)?;
+
+    // ── instrumentConfigurationList ────────────────────────────────────────
+    writeln!(cw, r#"  <instrumentConfigurationList count="1">"#)?;
+    writeln!(cw, r#"    <instrumentConfiguration id="IC1">"#)?;
+    writeln!(
+        cw,
+        r#"      <cvParam cvRef="MS" accession="{}" name="{}" value=""/>"#,
+        inst_acc,
+        escape(inst_name)
+    )?;
+    writeln!(cw, r#"    </instrumentConfiguration>"#)?;
+    writeln!(cw, r#"  </instrumentConfigurationList>"#)?;
+
+    // ── dataProcessingList ─────────────────────────────────────────────────
+    writeln!(cw, r#"  <dataProcessingList count="1">"#)?;
+    writeln!(cw, r#"    <dataProcessing id="dp1">"#)?;
+    writeln!(
+        cw,
+        r#"      <processingMethod order="0" softwareRef="opentfraw">"#
+    )?;
+    writeln!(
+        cw,
+        r#"        <cvParam cvRef="MS" accession="MS:1000544" name="Conversion to mzML" value=""/>"#
+    )?;
+    writeln!(cw, r#"      </processingMethod>"#)?;
+    writeln!(cw, r#"    </dataProcessing>"#)?;
+    writeln!(cw, r#"  </dataProcessingList>"#)?;
+
+    // ── run ────────────────────────────────────────────────────────────────
+    writeln!(
+        cw,
+        r#"  <run id="{}" defaultInstrumentConfigurationRef="IC1" defaultSourceFileRef="sf1">"#,
+        escape(raw_filename)
+    )?;
+    writeln!(
+        cw,
+        r#"    <spectrumList count="{}" defaultDataProcessingRef="dp1">"#,
+        n_spectra
+    )?;
+
+    // ── spectra (record byte offset before each <spectrum>) ────────────────
+    let mut spectrum_offsets: Vec<(u32, u64)> = Vec::with_capacity(n_spectra);
+    for idx in 0..raw.num_scans {
+        let scan_number = first_scan + idx;
+        let entry = &raw.scan_index[idx as usize];
+        let event = raw.scan_events.get(idx as usize);
+        let params = raw.scan_params(scan_number);
+
+        let peaks = match raw.read_peaks_only(source, scan_number) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        let is_srm = raw.flat_peaks;
+        let level = if is_srm {
+            2
+        } else {
+            event
+                .and_then(|e| e.preamble.ms_power())
+                .map(ms_level)
+                .unwrap_or(1)
+        };
+        let polarity = if is_srm {
+            Some(crate::types::Polarity::Positive)
+        } else {
+            event.and_then(|e| e.preamble.polarity())
+        };
+        let scan_mode = if is_srm {
+            Some(crate::ScanMode::Centroid)
+        } else {
+            event.and_then(|e| e.preamble.scan_mode())
+        };
+        let filter = raw.scan_filter(scan_number);
+        let is_ms1 = !is_srm && level == 1;
+        let srm_q1 = if is_srm {
+            raw.srm_q1_by_event.get(&entry.scan_event).copied()
+        } else {
+            None
+        };
+        let srm_ce = if is_srm {
+            raw.srm_ce_by_event.get(&entry.scan_event).copied()
+        } else {
+            None
+        };
+
+        let mz_vals: Vec<f64> = peaks.iter().map(|p| p.mz as f64).collect();
+        let int_vals: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
+        let n_peaks = mz_vals.len();
+
+        // Record byte offset of this <spectrum> element before writing it.
+        spectrum_offsets.push((scan_number, cw.pos));
+
+        write_spectrum(
+            &mut cw,
+            idx as usize,
+            scan_number,
+            level,
+            polarity,
+            scan_mode,
+            filter.as_deref(),
+            is_ms1,
+            entry,
+            event,
+            params,
+            srm_q1,
+            srm_ce,
+            &mz_vals,
+            &int_vals,
+            n_peaks,
+        )?;
+    }
+
+    writeln!(cw, r#"    </spectrumList>"#)?;
+    writeln!(cw, r#"  </run>"#)?;
+    writeln!(cw, r#"  </mzML>"#)?;
+
+    // ── indexList ──────────────────────────────────────────────────────────
+    let index_list_offset = cw.pos;
+    writeln!(cw, r#"  <indexList count="1">"#)?;
+    writeln!(cw, r#"    <index name="spectrum">"#)?;
+    for (scan_number, offset) in &spectrum_offsets {
+        writeln!(
+            cw,
+            r#"      <offset idRef="controllerType=0 controllerNumber=1 scan={}">{}</offset>"#,
+            scan_number,
+            offset
+        )?;
+    }
+    writeln!(cw, r#"    </index>"#)?;
+    writeln!(cw, r#"  </indexList>"#)?;
+
+    // Stop hashing; compute SHA-1 of everything through </indexList>.
+    cw.hashing = false;
+    let finished_sha1 = std::mem::replace(&mut cw.sha1, Sha1::new());
+    let digest = finished_sha1.finalize();
+    let hex: String = digest.iter().map(|b| format!("{:02x}", b)).collect();
+
+    writeln!(
+        cw,
+        r#"  <indexListOffset>{}</indexListOffset>"#,
+        index_list_offset
+    )?;
+    writeln!(cw, r#"  <fileChecksum>{}</fileChecksum>"#, hex)?;
+    writeln!(cw, r#"</indexedmzML>"#)?;
     Ok(())
 }
 
@@ -407,6 +769,7 @@ fn write_spectrum<W: Write>(
     event: Option<&ScanEvent>,
     params: Option<crate::ScanParams<'_>>,
     srm_q1: Option<f64>,
+    srm_ce: Option<f64>,
     mz_vals: &[f64],
     int_vals: &[f32],
     n_peaks: usize,
@@ -556,7 +919,7 @@ fn write_spectrum<W: Write>(
         // For SRM scans, Q1 is the precursor; isolation window is ±0.35 Da.
         // For other MS2+: resolve from params or event.reactions.
         let (target_mz, sel_mz, iso_width, charge, act_energy, act_energy_is_nce) = if srm_q1.is_some() {
-            (srm_q1, srm_q1, Some(0.7f64), None::<i32>, None::<f64>, false)
+            (srm_q1, srm_q1, Some(0.7f64), None::<i32>, srm_ce, false)
         } else {
             let reaction = event.and_then(|e| e.reactions.first());
             // Build target_mz from the best available source. Each source is

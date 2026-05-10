@@ -20,7 +20,7 @@ pub mod seq_row;
 
 pub use device::{DetectedInstrument, DeviceFamily};
 pub use error::{Error, Result};
-pub use mzml::write_mzml;
+pub use mzml::{write_indexed_mzml, write_mzml};
 pub use reader::{ControllerInfo, ControllerType, RawFileReader, ScanParams, StatusLogEntry};
 pub use scan_format::ScanDataFormat;
 pub use types::*;
