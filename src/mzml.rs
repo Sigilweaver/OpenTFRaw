@@ -11,7 +11,7 @@
 /// let raw = RawFileReader::open_path("run.raw").unwrap();
 /// let mut out = std::fs::File::create("run.mzML").unwrap();
 /// let mut src = std::fs::File::open("run.raw").unwrap();
-/// write_mzml(&raw, &mut src, &mut out, "run.raw").unwrap();
+/// write_mzml(&raw, &mut src, &mut out, "run.raw", false).unwrap();
 /// ```
 use std::io::{Read, Seek, Write};
 
@@ -305,6 +305,54 @@ fn activation_cv(
     }
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Resolve the m/z and intensity arrays for a single scan.
+///
+/// When `include_profile=true` AND the scan packet contains profile data, the
+/// profile signal is decoded and returned as the primary arrays (with
+/// `effective_scan_mode = Some(ScanMode::Profile)`). Otherwise the centroid
+/// peak list is used.
+///
+/// Returns `None` when the scan cannot be read (caller should skip it).
+fn resolve_scan_arrays<R: Read + Seek>(
+    raw: &RawFileReader,
+    source: &mut R,
+    scan_number: u32,
+    include_profile: bool,
+    event: Option<&ScanEvent>,
+    nominal_scan_mode: Option<crate::ScanMode>,
+) -> Option<(Vec<f64>, Vec<f32>, Option<crate::ScanMode>)> {
+    if include_profile && !raw.flat_peaks {
+        let packet = raw.read_scan(source, scan_number).ok()?;
+        if let Some(profile) = packet.profile {
+            let coeffs = event.map(|e| e.coefficients.as_slice()).unwrap_or(&[]);
+            let pairs = profile.to_mz_intensity(coeffs);
+            // Filter out zero or negative m/z bins (can appear at edges of chunks).
+            let mz: Vec<f64> = pairs
+                .iter()
+                .filter(|(m, _)| *m > 0.0)
+                .map(|(m, _)| *m)
+                .collect();
+            let int: Vec<f32> = pairs
+                .iter()
+                .filter(|(m, _)| *m > 0.0)
+                .map(|(_, i)| *i as f32)
+                .collect();
+            return Some((mz, int, Some(crate::ScanMode::Profile)));
+        }
+        // No profile data in packet — fall through to centroid.
+        let mz: Vec<f64> = packet.peaks.iter().map(|p| p.mz).collect();
+        let int: Vec<f32> = packet.peaks.iter().map(|p| p.abundance).collect();
+        return Some((mz, int, nominal_scan_mode));
+    }
+    // Default path: fast centroid-only read.
+    let peaks = raw.read_peaks_only(source, scan_number).ok()?;
+    let mz: Vec<f64> = peaks.iter().map(|p| p.mz as f64).collect();
+    let int: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
+    Some((mz, int, nominal_scan_mode))
+}
+
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
 /// Write the contents of `raw` as mzML 1.1.0 to `out`.
@@ -313,6 +361,9 @@ fn activation_cv(
 ///   scan data packets).
 /// * `raw_filename` — the file name used for the `<sourceFile>` element.
 ///   Typically `Path::file_name()`.
+/// * `include_profile` — when `true`, profile-mode scans (Orbitrap MS1,
+///   etc.) export the raw profile signal instead of the centroid peak list.
+///   Centroid-mode scans are unaffected.
 ///
 /// All spectra are written; no filtering is applied. Scans for which peak
 /// data cannot be read are skipped silently.
@@ -321,6 +372,7 @@ pub fn write_mzml<R, W>(
     source: &mut R,
     out: &mut W,
     raw_filename: &str,
+    include_profile: bool,
 ) -> Result<()>
 where
     R: Read + Seek,
@@ -445,12 +497,6 @@ where
         let event = raw.scan_events.get(idx as usize);
         let params = raw.scan_params(scan_number);
 
-        // Read peaks — skip profile data for speed, skip scan on error.
-        let peaks = match raw.read_peaks_only(source, scan_number) {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-
         // SRM (flat-peak) files have no scan events; derive ms_level and scan mode directly.
         let is_srm = raw.flat_peaks;
         let level = if is_srm {
@@ -489,8 +535,12 @@ where
             None
         };
 
-        let mz_vals: Vec<f64> = peaks.iter().map(|p| p.mz as f64).collect();
-        let int_vals: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
+        let (mz_vals, int_vals, effective_scan_mode) = match resolve_scan_arrays(
+            raw, source, scan_number, include_profile, event, scan_mode,
+        ) {
+            Some(arrays) => arrays,
+            None => continue,
+        };
         let n_peaks = mz_vals.len();
 
         write_spectrum(
@@ -499,7 +549,7 @@ where
             scan_number,
             level,
             polarity,
-            scan_mode,
+            effective_scan_mode,
             filter.as_deref(),
             is_ms1,
             entry,
@@ -527,11 +577,15 @@ where
 ///
 /// The `<fileChecksum>` element contains the SHA-1 hash of the file content
 /// up to and including `</indexList>`, computed on the fly.
+///
+/// Pass `include_profile=true` to export raw profile signal for profile-mode
+/// scans instead of centroid peaks.
 pub fn write_indexed_mzml<R, W>(
     raw: &RawFileReader,
     source: &mut R,
     out: &mut W,
     raw_filename: &str,
+    include_profile: bool,
 ) -> Result<()>
 where
     R: Read + Seek,
@@ -656,11 +710,6 @@ where
         let event = raw.scan_events.get(idx as usize);
         let params = raw.scan_params(scan_number);
 
-        let peaks = match raw.read_peaks_only(source, scan_number) {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-
         let is_srm = raw.flat_peaks;
         let level = if is_srm {
             2
@@ -693,8 +742,12 @@ where
             None
         };
 
-        let mz_vals: Vec<f64> = peaks.iter().map(|p| p.mz as f64).collect();
-        let int_vals: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
+        let (mz_vals, int_vals, effective_scan_mode) = match resolve_scan_arrays(
+            raw, source, scan_number, include_profile, event, scan_mode,
+        ) {
+            Some(arrays) => arrays,
+            None => continue,
+        };
         let n_peaks = mz_vals.len();
 
         // Record byte offset of this <spectrum> element before writing it.
@@ -706,7 +759,7 @@ where
             scan_number,
             level,
             polarity,
-            scan_mode,
+            effective_scan_mode,
             filter.as_deref(),
             is_ms1,
             entry,

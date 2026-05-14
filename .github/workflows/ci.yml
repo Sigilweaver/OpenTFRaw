@@ -1,0 +1,103 @@
+# CI for OpenTFRaw.
+#
+# Jobs:
+#   build    - cargo build + test (all platforms)
+#   validate - download a small public Thermo RAW file, convert to mzML,
+#              and run scripts/validate_mzml.py to check structural conformance.
+
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+  # Small LTQ FT file (~15 MB) from PRIDE PXD054004, used for the mzML
+  # validation job.  URL is stable because PRIDE uses year/month archive paths.
+  PRIDE_RAW_URL: >-
+    https://ftp.pride.ebi.ac.uk/pride/data/archive/2025/05/PXD054004/20171113_Map_NS1_1to139_4deg_50uM_001.raw
+  PRIDE_RAW_NAME: test.raw
+
+jobs:
+  # --------------------------------------------------------------------------
+  build:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build library and examples
+        run: cargo build --examples
+
+      - name: Run unit tests
+        run: cargo test
+
+  # --------------------------------------------------------------------------
+  validate-mzml:
+    name: mzML structural validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-cargo-
+
+      - name: Build to_mzml example (release)
+        run: cargo build --release --example to_mzml
+
+      - name: Download test RAW file
+        run: |
+          wget -q --user-agent="OpenTFRaw-CI/1.0" \
+               -O "$PRIDE_RAW_NAME" "$PRIDE_RAW_URL"
+          echo "Downloaded $(du -sh $PRIDE_RAW_NAME | cut -f1) RAW file"
+
+      - name: Convert RAW to mzML (centroid)
+        run: |
+          ./target/release/examples/to_mzml "$PRIDE_RAW_NAME" test_centroid.mzML
+          echo "Centroid mzML: $(wc -l < test_centroid.mzML) lines"
+
+      - name: Convert RAW to indexed mzML (centroid)
+        run: |
+          ./target/release/examples/to_mzml --indexed "$PRIDE_RAW_NAME" test_indexed.mzML
+          echo "Indexed mzML: $(wc -l < test_indexed.mzML) lines"
+
+      - name: Convert RAW to mzML (profile)
+        run: |
+          ./target/release/examples/to_mzml --include-profile "$PRIDE_RAW_NAME" test_profile.mzML
+          echo "Profile mzML: $(wc -l < test_profile.mzML) lines"
+
+      - name: Validate mzML structural conformance
+        run: |
+          python3 scripts/validate_mzml.py \
+            test_centroid.mzML \
+            test_indexed.mzML \
+            test_profile.mzML

@@ -275,7 +275,7 @@ impl RawFile {
             .file_name()
             .and_then(|s| s.to_str())
             .ok_or_else(|| PyValueError::new_err("non-UTF8 file name"))?;
-        tfraw::write_mzml(&self.reader, &mut *src, &mut out, raw_filename)
+        tfraw::write_mzml(&self.reader, &mut *src, &mut out, raw_filename, false)
             .map_err(to_py_err)?;
         Ok(())
     }
