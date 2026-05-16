@@ -32,8 +32,8 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - warp-ubuntu-latest-x64-4x
-          - warp-macos-latest-arm64-6x
+          - ubuntu-latest
+          - macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -57,7 +57,7 @@ jobs:
 
   validate-mzml:
     name: mzML structural validation
-    runs-on: warp-ubuntu-latest-x64-4x
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
