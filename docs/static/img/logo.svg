@@ -1,0 +1,38 @@
+<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <!-- Mask to create negative space around nodes -->
+        <mask id="nodeClearance">
+            <rect width="32" height="32" fill="white"/>
+            <!-- Cut out larger circles around each node -->
+            <circle cx="3" cy="10" r="2.3" fill="black"/>
+            <circle cx="3" cy="22" r="2.3" fill="black"/>
+            <circle cx="16" cy="16" r="3.4" fill="black"/>
+            <circle cx="29" cy="6" r="2.3" fill="black"/>
+            <circle cx="29" cy="16" r="2.3" fill="black"/>
+            <circle cx="29" cy="26" r="2.3" fill="black"/>
+        </mask>
+    </defs>
+    
+    <!-- Input flows to join (with mask applied for clearance) -->
+    <g mask="url(#nodeClearance)">
+        <path d="M5 10 L7 10 C10 10, 10 16, 14 16" stroke="#a78bfa" stroke-width="1.5" fill="none"/>
+        <path d="M5 22 L7 22 C10 22, 10 16, 14 16" stroke="#a78bfa" stroke-width="1.5" fill="none"/>
+        
+        <!-- Join to outputs -->
+        <path d="M18 16 C22 16, 22 6, 25 6 L27 6" stroke="#a78bfa" stroke-width="1.5" fill="none"/>
+        <path d="M18 16 L27 16" stroke="#a78bfa" stroke-width="1.5" fill="none"/>
+        <path d="M18 16 C22 16, 22 26, 25 26 L27 26" stroke="#a78bfa" stroke-width="1.5" fill="none"/>
+    </g>
+    
+    <!-- Input nodes (left edge - larger) -->
+    <circle cx="3" cy="10" r="2" fill="#a78bfa"/>
+    <circle cx="3" cy="22" r="2" fill="#a78bfa"/>
+    
+    <!-- Join node (center - larger) -->
+    <circle cx="16" cy="16" r="3" fill="#a78bfa"/>
+    
+    <!-- Output nodes (right edge - larger) -->
+    <circle cx="29" cy="6" r="2" fill="#a78bfa"/>
+    <circle cx="29" cy="16" r="2" fill="#a78bfa"/>
+    <circle cx="29" cy="26" r="2" fill="#a78bfa"/>
+</svg>

@@ -1,7 +1,8 @@
-# opentfraw — Python bindings
+# opentfraw -- Python bindings
 
-Pure-Rust parser for Thermo Fisher `.raw` mass spectrometry files, with
-a minimal NumPy-friendly Python API.
+Python bindings for the [OpenTFRaw](https://github.com/Sigilweaver/OpenTFRaw)
+Rust crate. Reads Thermo Fisher `.raw` mass spectrometry files via a
+NumPy-friendly API.
 
 ## Install (from source)
 

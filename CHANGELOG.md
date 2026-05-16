@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Pure-Rust parser for the Thermo Fisher RAW mass spectrometry file
-  format, with zero external dependencies on vendor libraries.
+- Rust parser for the Thermo Fisher RAW mass spectrometry file
+  format, no native or system dependencies.
 - Reader API for top-level structures: `FileHeader`, `AuditTag`,
   `SeqRow`, `InjectionData`, `ASInfo`, `RawFileInfo`, `InstID`,
   `RunHeader`, `SampleInfo`.
@@ -27,12 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Fusion Lumos, Orbitrap Exploris 480, TSQ Vantage, TSQ Quantiva,
   TSQ Altis).
 - Optional Python bindings (`opentfraw-py`, not published to crates.io).
-- Format specification under `docs/format/`.
+- Format specification under `docs/docs/format/`.
 
 ### Out of scope
 
 - Methods file (`MethodFile`) deep parse beyond byte-level layout.
-- Vendor binary parsers (CommonCore DLLs); OpenTFRaw is a pure-Rust
-  alternative.
 
 [0.1.0]: https://github.com/Sigilweaver/OpenTFRaw/releases/tag/v0.1.0
