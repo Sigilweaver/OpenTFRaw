@@ -97,7 +97,7 @@ pub fn build_filter(
     // Scan type
     match p.scan_type() {
         Some(ScanType::Full) => out.push_str("Full"),
-        Some(ScanType::Zoom) => out.push_str("Z"),
+        Some(ScanType::Zoom) => out.push('Z'),
         Some(ScanType::Sim) => out.push_str("SIM"),
         Some(ScanType::Srm) => out.push_str("SRM"),
         Some(ScanType::Crm) => out.push_str("CRM"),
@@ -134,18 +134,12 @@ pub fn build_filter(
         // n_reactions = 2 in the body, where only the first reaction has a
         // valid non-zero precursor m/z.  The preamble activation byte is
         // never EThcD (12) for these instruments.
-        let n_valid_precursors = reactions
-            .iter()
-            .filter(|r| r.precursor_mz > 0.0)
-            .count();
+        let n_valid_precursors = reactions.iter().filter(|r| r.precursor_mz > 0.0).count();
         let is_tribrid_ethcd = n == 2
             && reactions.len() >= 2
             && n_valid_precursors == 1
             && matches!(analyzer, Some(Analyzer::FTMS))
-            && matches!(
-                act,
-                Some(Activation::CID) | Some(Activation::HCD)
-            );
+            && matches!(act, Some(Activation::CID) | Some(Activation::HCD));
 
         if is_tribrid_ethcd {
             // Eclipse / Fusion Lumos EThcD: one valid precursor, two-clause filter.
@@ -194,7 +188,7 @@ pub fn build_filter(
                         let astr = activation_str(analyzer, a);
                         out.push_str(astr);
                         let energy = if is_last {
-                            activation_energy.or_else(|| {
+                            activation_energy.or({
                                 if rx.energy > 0.0 {
                                     Some(rx.energy)
                                 } else {

@@ -92,14 +92,14 @@ impl Sha1 {
 
     fn compress(&mut self) {
         let mut w = [0u32; 80];
-        for i in 0..16 {
-            w[i] = u32::from_be_bytes(self.buf[i * 4..i * 4 + 4].try_into().unwrap());
+        for (i, word) in w.iter_mut().enumerate().take(16) {
+            *word = u32::from_be_bytes(self.buf[i * 4..i * 4 + 4].try_into().unwrap());
         }
         for i in 16..80 {
             w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
         }
         let [mut a, mut b, mut c, mut d, mut e] = self.state;
-        for i in 0..80 {
+        for (i, &wi) in w.iter().enumerate() {
             let (f, k) = match i {
                 0..=19 => ((b & c) | (!b & d), 0x5A827999u32),
                 20..=39 => (b ^ c ^ d, 0x6ED9EBA1),
@@ -111,7 +111,7 @@ impl Sha1 {
                 .wrapping_add(f)
                 .wrapping_add(e)
                 .wrapping_add(k)
-                .wrapping_add(w[i]);
+                .wrapping_add(wi);
             e = d;
             d = c;
             c = b.rotate_left(30);
@@ -146,7 +146,7 @@ const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 
 fn base64_encode(data: &[u8]) -> String {
     let n = data.len();
-    let mut out = Vec::with_capacity(((n + 2) / 3) * 4);
+    let mut out = Vec::with_capacity(n.div_ceil(3) * 4);
     let mut i = 0;
     while i + 2 < n {
         let b = ((data[i] as u32) << 16) | ((data[i + 1] as u32) << 8) | (data[i + 2] as u32);
@@ -169,8 +169,8 @@ fn base64_encode(data: &[u8]) -> String {
         out.push(b'=');
         out.push(b'=');
     }
-    // SAFETY: all bytes written are 7-bit ASCII.
-    unsafe { String::from_utf8_unchecked(out) }
+    // SAFETY: all bytes written are 7-bit ASCII, which is valid UTF-8.
+    String::from_utf8(out).expect("base64 output is ASCII")
 }
 
 // ─── Encode f64 and f32 arrays to base64 ────────────────────────────────────
@@ -348,7 +348,7 @@ fn resolve_scan_arrays<R: Read + Seek>(
     }
     // Default path: fast centroid-only read.
     let peaks = raw.read_peaks_only(source, scan_number).ok()?;
-    let mz: Vec<f64> = peaks.iter().map(|p| p.mz as f64).collect();
+    let mz: Vec<f64> = peaks.iter().map(|p| p.mz).collect();
     let int: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
     Some((mz, int, nominal_scan_mode))
 }
@@ -536,7 +536,12 @@ where
         };
 
         let (mz_vals, int_vals, effective_scan_mode) = match resolve_scan_arrays(
-            raw, source, scan_number, include_profile, event, scan_mode,
+            raw,
+            source,
+            scan_number,
+            include_profile,
+            event,
+            scan_mode,
         ) {
             Some(arrays) => arrays,
             None => continue,
@@ -609,7 +614,10 @@ where
         cw,
         r#"             xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.2_idx.xsd">"#
     )?;
-    writeln!(cw, r#"  <mzML xmlns="http://psi.hupo.org/ms/mzml" version="1.1.0">"#)?;
+    writeln!(
+        cw,
+        r#"  <mzML xmlns="http://psi.hupo.org/ms/mzml" version="1.1.0">"#
+    )?;
 
     // ── cvList ─────────────────────────────────────────────────────────────
     writeln!(cw, r#"  <cvList count="2">"#)?;
@@ -743,7 +751,12 @@ where
         };
 
         let (mz_vals, int_vals, effective_scan_mode) = match resolve_scan_arrays(
-            raw, source, scan_number, include_profile, event, scan_mode,
+            raw,
+            source,
+            scan_number,
+            include_profile,
+            event,
+            scan_mode,
         ) {
             Some(arrays) => arrays,
             None => continue,
@@ -785,8 +798,7 @@ where
         writeln!(
             cw,
             r#"      <offset idRef="controllerType=0 controllerNumber=1 scan={}">{}</offset>"#,
-            scan_number,
-            offset
+            scan_number, offset
         )?;
     }
     writeln!(cw, r#"    </index>"#)?;
@@ -971,52 +983,52 @@ fn write_spectrum<W: Write>(
     if !is_ms1 {
         // For SRM scans, Q1 is the precursor; isolation window is ±0.35 Da.
         // For other MS2+: resolve from params or event.reactions.
-        let (target_mz, sel_mz, iso_width, charge, act_energy, act_energy_is_nce) = if srm_q1.is_some() {
-            (srm_q1, srm_q1, Some(0.7f64), None::<i32>, srm_ce, false)
-        } else {
-            let reaction = event.and_then(|e| e.reactions.first());
-            // Build target_mz from the best available source. Each source is
-            // filtered to exclude 0.0 (absent/unknown) before trying the next:
-            //   1. isolation_target_mz() — "MS2 Isolation Offset:" or "Target M/Z:" in scan params
-            //   2. monoisotopic_mz()     — "Monoisotopic M/Z:" in scan params (v66 DDA)
-            //   3. reaction.precursor_mz — scan-event body (tribrid / older formats)
-            // Applying filter() per-source ensures a 0.0 from source 1 does NOT
-            // prevent source 2 from being tried (the bug that caused isolation
-            // window target to be absent for Q Exactive HF DDA MS2 scans).
-            let tm = params
-                .as_ref()
-                .and_then(|p| p.isolation_target_mz())
-                .filter(|&mz| mz > 0.0)
-                .or_else(|| {
-                    params
-                        .as_ref()
-                        .and_then(|p| p.monoisotopic_mz())
-                        .filter(|&mz| mz > 0.0)
-                })
-                .or_else(|| reaction.map(|r| r.precursor_mz).filter(|&mz| mz > 0.0));
-            let sm = params
-                .as_ref()
-                .and_then(|p| p.monoisotopic_mz())
-                .filter(|&mz| mz > 0.0)
-                .or(tm);
-            let iw = params.as_ref().and_then(|p| p.isolation_width_mz());
-            let ch = params
-                .as_ref()
-                .and_then(|p| p.charge_state())
-                .filter(|&z| z > 0);
-            let ae_from_params = params
-                .as_ref()
-                .and_then(|p| p.activation_energy())
-                .filter(|&e| e > 0.0);
-            let ae_is_nce = ae_from_params.is_some()
-                && params
+        let (target_mz, sel_mz, iso_width, charge, act_energy, act_energy_is_nce) =
+            if srm_q1.is_some() {
+                (srm_q1, srm_q1, Some(0.7f64), None::<i32>, srm_ce, false)
+            } else {
+                let reaction = event.and_then(|e| e.reactions.first());
+                // Build target_mz from the best available source. Each source is
+                // filtered to exclude 0.0 (absent/unknown) before trying the next:
+                //   1. isolation_target_mz() — "MS2 Isolation Offset:" or "Target M/Z:" in scan params
+                //   2. monoisotopic_mz()     — "Monoisotopic M/Z:" in scan params (v66 DDA)
+                //   3. reaction.precursor_mz — scan-event body (tribrid / older formats)
+                // Applying filter() per-source ensures a 0.0 from source 1 does NOT
+                // prevent source 2 from being tried (the bug that caused isolation
+                // window target to be absent for Q Exactive HF DDA MS2 scans).
+                let tm = params
                     .as_ref()
-                    .map(|p| p.activation_energy_is_nce())
-                    .unwrap_or(false);
-            let ae = ae_from_params
-                .or_else(|| reaction.map(|r| r.energy).filter(|&e| e > 0.0));
-            (tm, sm, iw, ch, ae, ae_is_nce)
-        };
+                    .and_then(|p| p.isolation_target_mz())
+                    .filter(|&mz| mz > 0.0)
+                    .or_else(|| {
+                        params
+                            .as_ref()
+                            .and_then(|p| p.monoisotopic_mz())
+                            .filter(|&mz| mz > 0.0)
+                    })
+                    .or_else(|| reaction.map(|r| r.precursor_mz).filter(|&mz| mz > 0.0));
+                let sm = params
+                    .as_ref()
+                    .and_then(|p| p.monoisotopic_mz())
+                    .filter(|&mz| mz > 0.0)
+                    .or(tm);
+                let iw = params.as_ref().and_then(|p| p.isolation_width_mz());
+                let ch = params
+                    .as_ref()
+                    .and_then(|p| p.charge_state())
+                    .filter(|&z| z > 0);
+                let ae_from_params = params
+                    .as_ref()
+                    .and_then(|p| p.activation_energy())
+                    .filter(|&e| e > 0.0);
+                let ae_is_nce = ae_from_params.is_some()
+                    && params
+                        .as_ref()
+                        .map(|p| p.activation_energy_is_nce())
+                        .unwrap_or(false);
+                let ae = ae_from_params.or_else(|| reaction.map(|r| r.energy).filter(|&e| e > 0.0));
+                (tm, sm, iw, ch, ae, ae_is_nce)
+            };
 
         // Always emit a <precursorList> for MSn spectra; mzML requires it.
         // For DIA scans the precursor m/z is 0/unknown, but the activation

@@ -7,7 +7,9 @@ use crate::generic_data::{GenericDataHeader, GenericRecord, GenericValue};
 use crate::header::FileHeader;
 use crate::raw_file_info::RawFileInfo;
 use crate::run_header::RunHeader;
-use crate::scan_data::{read_flat_peaks, read_scan_srm_v66, search_v63_transition, Peak, ScanDataPacket};
+use crate::scan_data::{
+    read_flat_peaks, read_scan_srm_v66, search_v63_transition, Peak, ScanDataPacket,
+};
 use crate::scan_event::{ScanEvent, ScanEventPreamble};
 use crate::scan_index::ScanIndexEntry;
 use crate::seq_row::SeqRow;
@@ -580,9 +582,7 @@ impl RawFileReader {
                     let mut event_q3_hi: HashMap<u16, f64> = HashMap::new();
                     for entry in &scan_index {
                         if entry.high_mz > 50.0 && entry.high_mz < 2000.0 {
-                            event_q3_hi
-                                .entry(entry.scan_event)
-                                .or_insert(entry.high_mz);
+                            event_q3_hi.entry(entry.scan_event).or_insert(entry.high_mz);
                         }
                     }
                     let data = &metadata_window;
@@ -594,9 +594,8 @@ impl RawFileReader {
                             if (hi - q3_hi_target).abs() < 0.002 {
                                 let lo = f64::from_le_bytes(data[i - 8..i].try_into().unwrap());
                                 if hi > lo && (hi - lo) < 0.1 {
-                                    let q1 = f64::from_le_bytes(
-                                        data[i - 16..i - 8].try_into().unwrap(),
-                                    );
+                                    let q1 =
+                                        f64::from_le_bytes(data[i - 16..i - 8].try_into().unwrap());
                                     if q1 > 50.0 && q1 < 3000.0 {
                                         q1_map.insert(event, q1);
                                         continue 'outer_v66;
@@ -652,9 +651,7 @@ impl RawFileReader {
                             _ => continue,
                         };
                         // Use the first peak's mz as Q3_center anchor.
-                        if let Some((q1, q3w, ce)) =
-                            search_v63_transition(data, peaks[0].mz)
-                        {
+                        if let Some((q1, q3w, ce)) = search_v63_transition(data, peaks[0].mz) {
                             q1_map.insert(ev, q1);
                             ce_map.insert(ev, ce);
                             let half = (q3w / 2.0) as f32;
@@ -1137,8 +1134,10 @@ impl<'a> ScanParams<'a> {
     /// Monoisotopic precursor m/z (0 = not determined).
     ///
     /// Tries multiple label variants for compatibility across instrument families:
-    /// - `"Monoisotopic M/Z:"` — most common (Q Exactive, Orbitrap Fusion)
-    /// - `"MS2 Isolation M/Z:"` — some older LTQ firmware
+    ///
+    /// - `"Monoisotopic M/Z:"` - most common (Q Exactive, Orbitrap Fusion)
+    /// - `"MS2 Isolation M/Z:"` - some older LTQ firmware
+    ///
     /// Returns `None` when the value is absent or zero (not determined).
     pub fn monoisotopic_mz(&self) -> Option<f64> {
         let v = self

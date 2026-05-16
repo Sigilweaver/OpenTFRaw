@@ -2,9 +2,18 @@
 name = "opentfraw"
 version = "0.1.0"
 edition = "2021"
-description = "Pure Rust parser for Thermo Fisher RAW mass spectrometry files"
+rust-version = "1.75"
+description = "Pure-Rust parser for Thermo Fisher RAW mass spectrometry files."
+authors = ["Nathan Riley <git@nathanriley.com>"]
 license = "Apache-2.0"
+repository = "https://github.com/Sigilweaver/OpenTFRaw"
+homepage = "https://github.com/Sigilweaver/OpenTFRaw"
 readme = "README.md"
+keywords = ["mass-spectrometry", "thermo", "raw", "proteomics", "orbitrap"]
+categories = ["parser-implementations", "science"]
+
+[lints.rust]
+unsafe_code = "forbid"
 
 [dependencies]
 thiserror = "2"

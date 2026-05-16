@@ -1,6 +1,6 @@
-use std::io::{Read, Seek};
-use crate::reader::BinaryReader;
 use crate::error::Result;
+use crate::reader::BinaryReader;
+use std::io::{Read, Seek};
 
 /// Summary information about the acquisition, embedded in RunHeader.
 #[derive(Debug)]
@@ -56,8 +56,8 @@ impl SampleInfo {
         r.skip(56)?;
 
         // Tags
-        let tag1 = r.read_utf16_fixed(88)?;  // 44 chars
-        let tag2 = r.read_utf16_fixed(40)?;  // 20 chars
+        let tag1 = r.read_utf16_fixed(88)?; // 44 chars
+        let tag2 = r.read_utf16_fixed(40)?; // 20 chars
         let tag3 = r.read_utf16_fixed(320)?; // 160 chars
 
         Ok(Self {

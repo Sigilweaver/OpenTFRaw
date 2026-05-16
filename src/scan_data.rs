@@ -410,7 +410,7 @@ pub fn search_v63_transition(data: &[u8], q3_center_target: f64) -> Option<(f64,
         }
         // Candidate Q3_center at position j. Q1 is 8 bytes before.
         let q1 = f64::from_le_bytes(data[j - 8..j].try_into().ok()?);
-        if !q1.is_finite() || q1 < 50.0 || q1 > 3000.0 {
+        if !q1.is_finite() || !(50.0..=3000.0).contains(&q1) {
             continue;
         }
         // Q3_width is 8 bytes after Q3_center.
@@ -418,7 +418,7 @@ pub fn search_v63_transition(data: &[u8], q3_center_target: f64) -> Option<(f64,
             continue;
         }
         let q3w = f64::from_le_bytes(data[j + 8..j + 16].try_into().ok()?);
-        if !q3w.is_finite() || q3w < 0.01 || q3w > 10.0 {
+        if !q3w.is_finite() || !(0.01..=10.0).contains(&q3w) {
             continue;
         }
         // CE is 24 bytes after Q3_center.
@@ -426,7 +426,7 @@ pub fn search_v63_transition(data: &[u8], q3_center_target: f64) -> Option<(f64,
             continue;
         }
         let ce = f64::from_le_bytes(data[j + 24..j + 32].try_into().ok()?);
-        if !ce.is_finite() || ce < 0.1 || ce > 300.0 {
+        if !ce.is_finite() || !(0.1..=300.0).contains(&ce) {
             continue;
         }
         return Some((q1, q3w, ce));

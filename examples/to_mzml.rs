@@ -68,8 +68,12 @@ fn main() {
         match result {
             Ok(()) => {
                 let mut flags = Vec::new();
-                if indexed { flags.push("indexed"); }
-                if include_profile { flags.push("with profile"); }
+                if indexed {
+                    flags.push("indexed");
+                }
+                if include_profile {
+                    flags.push("with profile");
+                }
                 let suffix = if flags.is_empty() {
                     String::new()
                 } else {

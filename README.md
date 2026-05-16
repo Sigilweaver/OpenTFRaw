@@ -1,5 +1,8 @@
 # OpenTFRaw
 
+[![CI](https://github.com/Sigilweaver/OpenTFRaw/actions/workflows/ci.yml/badge.svg)](https://github.com/Sigilweaver/OpenTFRaw/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+
 Pure-Rust parser for Thermo Fisher RAW mass-spectrometry files, reverse-engineered without the vendor SDK.
 
 Reads format versions 8, 47, 57, 60, 62, 63, 64, and 66 -- covering every Thermo instrument
@@ -116,7 +119,7 @@ examples/
 python/               PyO3 Python bindings (opentfraw wheel)
 scripts/
   fetch_corpus.py     pulls PRIDE corpus (see CORPUS.md)
-SPEC.md               binary format specification
+docs/format/          binary format specification (per-section markdown)
 CORPUS.md             validation corpus methodology + provenance
 CREDITS.md            prior art and third-party acknowledgements
 ```
@@ -141,7 +144,7 @@ and Windows without the .NET runtime.
 
 ## Related
 
-- [SPEC.md](SPEC.md) -- binary format specification
+- [docs/format/](docs/format/) -- binary format specification (per-section)
 - [CORPUS.md](CORPUS.md) -- validation corpus methodology
 - [CREDITS.md](CREDITS.md) -- prior art and acknowledgements
 

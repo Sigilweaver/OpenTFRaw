@@ -1,4 +1,4 @@
-/// Shared type aliases and enumerations used throughout the parser.
+//! Shared type aliases and enumerations used throughout the parser.
 
 /// Analyzer type from ScanEventPreamble byte 40.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
