@@ -7,9 +7,7 @@
 # Corpus sample files — pulled on demand via scripts/fetch_corpus.py,
 # not redistributed through this repo (multi-GB PRIDE datasets)
 /samples/
-/corpus/*.raw
-/corpus/*.RAW
-/corpus/manifest.json
+/corpus/
 
 # Reverse-engineering scratch: hexdump analysers, ad-hoc probes, and
 # early validation harnesses — kept out of the public repo

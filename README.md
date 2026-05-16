@@ -61,4 +61,4 @@ Apache-2.0. See [LICENSE](LICENSE).
 
 The format specification was developed by binary analysis of public
 mass-spectrometry datasets (PRIDE accessions). See
-[CORPUS.md](CORPUS.md) and [CREDITS.md](CREDITS.md).
+[CORPUS.md](CORPUS.md) and [ATTRIBUTION.md](ATTRIBUTION.md).

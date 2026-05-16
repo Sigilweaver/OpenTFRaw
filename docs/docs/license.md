@@ -22,4 +22,4 @@ for the full text.
 The format specification published here was developed by binary
 analysis of public mass-spectrometry datasets (PRIDE accessions).
 Prior open-source work is acknowledged in
-[`CREDITS.md`](https://github.com/Sigilweaver/OpenTFRaw/blob/main/CREDITS.md).
+[`ATTRIBUTION.md`](https://github.com/Sigilweaver/OpenTFRaw/blob/main/ATTRIBUTION.md).

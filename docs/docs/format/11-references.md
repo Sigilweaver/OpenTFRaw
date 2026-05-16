@@ -12,9 +12,9 @@ _References_
 
 ### 35.2 Key Observations
 
-- All existing open-source readers (except unfinnigan) depend on Thermo's
-  proprietary RawFileReader .NET DLL — this specification aims to enable
-  truly independent implementations.
+- Most existing open-source readers (apart from unfinnigan) wrap Thermo's
+  RawFileReader .NET library; this specification documents the on-disk
+  format directly so independent implementations are easier to build.
 - The file format has remained stable at version 66 since ~2015, covering all
   current instruments from Orbitrap Fusion through Orbitrap Astral.
 - The format is backwards-compatible: version 66 files retain defunct 32-bit

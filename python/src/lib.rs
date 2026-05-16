@@ -281,7 +281,7 @@ impl RawFile {
     }
 }
 
-/// OpenTFRaw — pure-Rust Thermo `.raw` file parser.
+/// OpenTFRaw — Rust Thermo `.raw` file parser.
 #[pymodule]
 fn opentfraw(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RawFile>()?;
