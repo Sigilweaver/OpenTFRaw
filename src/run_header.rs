@@ -3,7 +3,7 @@ use crate::reader::BinaryReader;
 use crate::sample_info::SampleInfo;
 use std::io::{Read, Seek};
 
-/// Run header — the secondary index structure with pointers to all data streams.
+/// Run header - the secondary index structure with pointers to all data streams.
 #[derive(Debug)]
 pub struct RunHeader {
     pub sample_info: SampleInfo,

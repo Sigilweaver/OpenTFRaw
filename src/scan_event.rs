@@ -19,7 +19,7 @@ pub struct FractionCollector {
     pub high_mz: f64,
 }
 
-/// Scan event preamble — byte array encoding scan parameters.
+/// Scan event preamble - byte array encoding scan parameters.
 #[derive(Debug)]
 pub struct ScanEventPreamble {
     pub bytes: Vec<u8>,

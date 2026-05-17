@@ -31,7 +31,7 @@ pub enum ScanDataFormat {
     /// TSQ Quantiva / Altis (file version 64+).
     ///
     /// Layout per record:
-    /// - bytes 0–3: `u32 n_peaks`
+    /// - bytes 0-3: `u32 n_peaks`
     /// - bytes 32..32+8·n: m/z window table (2 × f32 per channel)
     /// - bytes 32+8·n..: peak triplets `(u32 channel, f32 mz, f32 intensity)`
     FlatV66,

@@ -6,7 +6,7 @@ _References_
 
 ### 35.1 Prior Art
 
-1. **unfinnigan** (Gene Selkov, 2010–2012): Perl/Python reverse-engineering
+1. **unfinnigan** (Gene Selkov, 2010-2012): Perl/Python reverse-engineering
    project. The most comprehensive prior binary format analysis. Supports
    versions 57, 62, 63, 64, 66. Source: https://github.com/prvst/unfinnigan
 

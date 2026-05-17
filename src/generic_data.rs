@@ -112,7 +112,7 @@ impl GenericDataHeader {
 
     /// Sum of fixed byte sizes contributed by each descriptor. For variable
     /// types (String/WideString) the descriptor's `length` field is used as
-    /// the storage allocation — which is the fixed on-disk size per record.
+    /// the storage allocation - which is the fixed on-disk size per record.
     pub(crate) fn fixed_record_size(&self) -> usize {
         self.fields
             .iter()

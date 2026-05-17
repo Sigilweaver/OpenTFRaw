@@ -98,7 +98,7 @@ impl ScanDataPacket {
     }
 
     /// Read only the centroided peak list, skipping the (potentially large)
-    /// profile data. This is 2–10× faster than [`Self::read`] for high-
+    /// profile data. This is 2-10× faster than [`Self::read`] for high-
     /// resolution Orbitrap scans where profile_size can be tens of thousands
     /// of 4-byte words.
     pub(crate) fn read_peaks_only<R: Read + Seek>(r: &mut BinaryReader<R>) -> Result<Vec<Peak>> {
@@ -109,7 +109,7 @@ impl ScanDataPacket {
             r.skip((header.profile_size as usize) * 4)?;
         }
 
-        // Centroid peak list — same as full read path.
+        // Centroid peak list - same as full read path.
         let wide_mz = header.layout & 0x10000 != 0;
         let peaks = if header.peak_list_size > 0 {
             let count = r.read_u32()?;
@@ -313,8 +313,8 @@ pub fn read_flat_peaks<R: Read + Seek>(
 /// the stream (not cumulative end), and `record_size` is the number of bytes per record.
 ///
 /// Record layout:
-/// - bytes 0–3: u32 `n_peaks` (number of active SRM transitions in this window)
-/// - bytes 4–31: other header fields (skipped)
+/// - bytes 0-3: u32 `n_peaks` (number of active SRM transitions in this window)
+/// - bytes 4-31: other header fields (skipped)
 /// - bytes 32..32+n_peaks*8: m/z window table, one (lo_mz: f32, hi_mz: f32) pair per peak
 /// - bytes 32+n_peaks*8..: peak data, one (channel_idx: u32, mz: f32, intensity: f32) per peak
 pub fn read_scan_srm_v66<R: Read + Seek>(
@@ -333,7 +333,7 @@ pub fn read_scan_srm_v66<R: Read + Seek>(
         return Ok(Vec::new());
     }
 
-    // Skip remaining header: bytes 4–31 (28 bytes)
+    // Skip remaining header: bytes 4-31 (28 bytes)
     r.skip(28)?;
 
     // Skip m/z window table: n_peaks × 8 bytes (lo_mz f32 + hi_mz f32 per channel)
@@ -370,7 +370,7 @@ pub fn read_scan_srm_v66_windows<R: Read + Seek>(
         return Ok(Vec::new());
     }
 
-    // Skip remaining header: bytes 4–31 (28 bytes)
+    // Skip remaining header: bytes 4-31 (28 bytes)
     r.skip(28)?;
 
     // Read m/z window table: n_peaks × 8 bytes (lo_mz f32, hi_mz f32)

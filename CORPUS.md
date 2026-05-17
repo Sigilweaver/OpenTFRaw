@@ -137,8 +137,8 @@ multi-controller selection path (reader.rs `select_ms_run_header`) for these:
 | Orbitrap Fusion Lumos     | 2                  | 2016-03        |
 | LTQ Orbitrap (PXD069348)  | 3                  | 2014-02        |
 
-The selection heuristic — `ntrailer > 0` (v64+) or `nsegs > 0 && first_scan
-<= last_scan` (v63) — correctly identifies the MS controller in every case.
+The selection heuristic - `ntrailer > 0` (v64+) or `nsegs > 0 && first_scan
+<= last_scan` (v63) - correctly identifies the MS controller in every case.
 
 ## Limitations
 

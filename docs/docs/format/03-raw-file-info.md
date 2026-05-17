@@ -37,13 +37,13 @@ the bulk of the file's content.
 |--------|------|------|-------|-------------|
 | 0x00 | 4 | UInt32 | method_file_present | 1 if embedded method file exists |
 | 0x04 | 2 | UInt16 | year | Acquisition year |
-| 0x06 | 2 | UInt16 | month | Month (1–12) |
+| 0x06 | 2 | UInt16 | month | Month (1-12) |
 | 0x08 | 2 | UInt16 | day_of_week | Day of week (0=Sunday) |
-| 0x0A | 2 | UInt16 | day | Day of month (1–31) |
-| 0x0C | 2 | UInt16 | hour | Hour (0–23) |
-| 0x0E | 2 | UInt16 | minute | Minute (0–59) |
-| 0x10 | 2 | UInt16 | second | Second (0–59) |
-| 0x12 | 2 | UInt16 | millisecond | Millisecond (0–999) |
+| 0x0A | 2 | UInt16 | day | Day of month (1-31) |
+| 0x0C | 2 | UInt16 | hour | Hour (0-23) |
+| 0x0E | 2 | UInt16 | minute | Minute (0-59) |
+| 0x10 | 2 | UInt16 | second | Second (0-59) |
+| 0x12 | 2 | UInt16 | millisecond | Millisecond (0-999) |
 
 **Common size**: 20 bytes
 
@@ -70,7 +70,7 @@ the bulk of the file's content.
 
 **Total preamble size (v66)**: 20 + 4 + 4 + 8 + 8 + 4 + 760 + 8 + 8 + 8 + 8 + 8 + 1008 = **1856 bytes**
 
-### 10.3 Version 57–63 (32-bit addresses)
+### 10.3 Version 57-63 (32-bit addresses)
 
 In versions prior to 64, addresses are 32-bit and the preamble is smaller (804
 bytes total including the 20-byte common part):

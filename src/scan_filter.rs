@@ -1,4 +1,4 @@
-/// Scan filter string builder — reproduces Thermo's canonical scan filter
+/// Scan filter string builder - reproduces Thermo's canonical scan filter
 /// syntax for interoperability with downstream tools.
 ///
 /// A Thermo scan filter is a single-line textual summary of a scan's
@@ -41,11 +41,11 @@ pub fn activation_str(analyzer: Option<Analyzer>, act: Activation) -> &'static s
 
 /// Build the canonical Thermo scan filter string for a single scan event.
 ///
-/// - `event` — the scan event record (provides analyzer, polarity, activation, etc.)
-/// - `index_entry` — provides the authoritative m/z scan window
-/// - `precursor_mz` — final-stage precursor m/z from scan_params `Monoisotopic M/Z:`
-/// - `activation_energy` — primary activation energy (eV or NCE %) from scan_params
-/// - `supplemental_energy` — supplemental HCD energy for EThcD scans; `None` for all other types
+/// - `event` - the scan event record (provides analyzer, polarity, activation, etc.)
+/// - `index_entry` - provides the authoritative m/z scan window
+/// - `precursor_mz` - final-stage precursor m/z from scan_params `Monoisotopic M/Z:`
+/// - `activation_energy` - primary activation energy (eV or NCE %) from scan_params
+/// - `supplemental_energy` - supplemental HCD energy for EThcD scans; `None` for all other types
 ///
 /// For MS2+ scans the function first attempts to build the full precursor chain
 /// from `event.reactions` (populated for both pre-v66 and v66 files). If reactions

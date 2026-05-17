@@ -17,15 +17,15 @@ typically near the instrument log. It is found by scanning forward from
 
 ### 25.1 Stream Layout at `scan_params_addr`
 
-Records begin **directly** at `scan_params_addr` — there is no preamble u32 or
+Records begin **directly** at `scan_params_addr` - there is no preamble u32 or
 any other header at this offset. The file may contain a few trailing bytes
-(typically 4–8) after the last record; these are not part of any scan.
+(typically 4-8) after the last record; these are not part of any scan.
 
 | Byte offset | Description |
 |-------------|-------------|
 | 0 | First byte of Record[0] (first scan) |
 | record_size | First byte of Record[1] |
-| … | … |
+| ... | ... |
 | (num_scans − 1) × record_size | First byte of Record[num_scans − 1] |
 | num_scans × record_size | Optional trailing bytes (instrument-dependent) |
 
@@ -104,7 +104,7 @@ A single field descriptor within a GenericDataHeader.
 
 | Code | Type | Size | Description |
 |------|------|------|-------------|
-| 0x0 | — | 0 | Gap/section separator (no data) |
+| 0x0 | - | 0 | Gap/section separator (no data) |
 | 0x1 | Int8 | 1 | Signed byte |
 | 0x2 | UInt8 | 1 | Boolean (true/false) |
 | 0x3 | UInt8 | 1 | Boolean (yes/no) |
@@ -128,7 +128,7 @@ GenericDataHeader. The fields are read sequentially in the order defined by the
 header's descriptor array.
 
 Each field's type and size are determined by the corresponding
-GenericDataDescriptor. Type 0x0 (gap) produces no data — it is a label-only
+GenericDataDescriptor. Type 0x0 (gap) produces no data - it is a label-only
 separator.
 
 ---

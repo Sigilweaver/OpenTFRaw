@@ -80,7 +80,7 @@ Version 66 has a significantly restructured ScanEvent layout:
 A byte array encoding the scan type, analyzer, polarity, ionization mode, and
 other scan parameters. Version-dependent size.
 
-### 22.1 Common Fields (All Versions, bytes 0–40)
+### 22.1 Common Fields (All Versions, bytes 0-40)
 
 | Byte | Field | Values |
 |------|-------|--------|
@@ -96,11 +96,11 @@ other scan parameters. Version-dependent size.
 | 9 | unknown_byte[9] | |
 | 10 | **dependent** | 0=Primary (MS1), 1=Dependent (MS2+) |
 | 11 | **ionization** | 0=EI, 1=CI, 2=FABI, 3=ESI, 4=APCI, 5=NSI, 6=TSI, 7=FDI, 8=MALDI, 9=GDI |
-| 12–23 | unknown_byte[12–23] | |
+| 12-23 | unknown_byte[12-23] | |
 | 24 | **activation** | 1=HCD, 4=CID |
-| 25–31 | unknown_byte[25–31] | |
+| 25-31 | unknown_byte[25-31] | |
 | 32 | wideband | 0=Off, 1=On |
-| 33–39 | unknown_byte[33–39] | |
+| 33-39 | unknown_byte[33-39] | |
 | 40 | **analyzer** | 0=ITMS, 1=TQMS, 2=SQMS, 3=TOFMS, 4=FTMS, 5=Sector |
 
 ### 22.2 Size by Version

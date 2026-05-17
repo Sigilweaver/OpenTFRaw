@@ -27,12 +27,12 @@ All multi-byte values are **little-endian**. Text is encoded as either
 |---------|-----|---------------|-------|
 | 8 | Pre-2000 | 32-bit | Earliest known, minimal structure |
 | 47 | ~2003 | 32-bit | |
-| 57 | ~2006–2008 | 32-bit | LCQ, LTQ, LTQ-FT |
+| 57 | ~2006-2008 | 32-bit | LCQ, LTQ, LTQ-FT |
 | 60 | ~2009 | 32-bit | |
-| 62 | ~2010–2012 | 32-bit | Orbitrap (early), Q Exactive |
+| 62 | ~2010-2012 | 32-bit | Orbitrap (early), Q Exactive |
 | 63 | ~2013 | 32-bit | |
-| 64 | ~2014–2015 | 64-bit | Transition version, 64-bit addresses |
-| 66 | ~2015–present | 64-bit | **Current version**, Orbitrap Fusion/Lumos/Eclipse/Exploris/Astral |
+| 64 | ~2014-2015 | 64-bit | Transition version, 64-bit addresses |
+| 66 | ~2015-present | 64-bit | **Current version**, Orbitrap Fusion/Lumos/Eclipse/Exploris/Astral |
 
 Version 66 is produced by all current instruments and is the primary target of
 this specification. Earlier versions are documented where they differ.
@@ -88,7 +88,7 @@ Files prior to v64 use 32-bit addresses throughout. v64+ files contain **both**
 the defunct 32-bit fields (for backward compatibility, always set to 0) and the
 new 64-bit address fields.
 
-| Feature | v57–v63 | v64–v66 |
+| Feature | v57-v63 | v64-v66 |
 |---------|---------|---------|
 | RawFileInfoPreamble.data_addr | UInt32 | UInt64 (32-bit copy is 0) |
 | RawFileInfoPreamble.run_header_addr | UInt32 | UInt64 (32-bit copy is 0) |
@@ -101,9 +101,9 @@ new 64-bit address fields.
 | Version | Preamble Bytes |
 |---------|---------------|
 | v8 | 41 |
-| v57–v60 | 80 |
+| v57-v60 | 80 |
 | v62 | 120 |
-| v63–v64 | 128 |
+| v63-v64 | 128 |
 | v66 | 136 |
 
 ### 33.3 ScanEvent Restructuring (v66)
@@ -140,7 +140,7 @@ layout for all scan types (see §21).
 - **Profile data**: ITMS scans are M/z domain (positive step); FTMS scans are frequency domain
 - **Conversion**: nparam == 4 (LTQ-FT formula: `A + B/f + C/f²`) for LTQ-FT; nparam == 7 for LTQ Orbitrap
 - **Typical activation**: CID (code 4) for ion trap, HCD for Orbitrap
-- **Versions**: v57–v66 depending on era
+- **Versions**: v57-v66 depending on era
 
 ### 34.3 Q Exactive Family (Q Exactive, Q Exactive HF, Q Exactive HF-X, Q Exactive Plus)
 
@@ -149,7 +149,7 @@ layout for all scan types (see §21).
 - **Conversion**: nparam == 5 (Orbitrap formula)
 - **Typical ionization**: NSI or ESI
 - **Typical activation**: HCD
-- **Version**: v64–v66
+- **Version**: v64-v66
 
 ### 34.4 LTQ (Ion Trap Only)
 
@@ -158,7 +158,7 @@ layout for all scan types (see §21).
 - **No frequency conversion needed**
 - **Typical activation**: CID
 - **Typical ionization**: ESI, NSI, or EI
-- **Versions**: v57–v66
+- **Versions**: v57-v66
 
 ### 34.5 Controller Count by Instrument
 

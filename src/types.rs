@@ -88,9 +88,9 @@ pub enum Activation {
     MPID,
     /// Electron transfer dissociation (code 3).
     ETD,
-    /// Higher-energy collisional dissociation — Q Exactive style (code 1).
+    /// Higher-energy collisional dissociation - Q Exactive style (code 1).
     HCD,
-    /// Collision-induced dissociation / beam-type HCD — Fusion/Exploris style (code 4).
+    /// Collision-induced dissociation / beam-type HCD - Fusion/Exploris style (code 4).
     /// Renders as "cid" on ITMS analyzers, "hcd" on FTMS analyzers.
     CID,
     /// Electron-capture dissociation (code 5).
@@ -106,7 +106,7 @@ pub enum Activation {
     /// Surface-induced dissociation (code 10).
     SID,
     /// ETD with supplemental HCD (code 12).
-    /// Filter string: `@etd<e>@hcd<se>` — two activation clauses.
+    /// Filter string: `@etd<e>@hcd<se>` - two activation clauses.
     EThcD,
 }
 

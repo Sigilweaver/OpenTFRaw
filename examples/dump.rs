@@ -214,7 +214,7 @@ fn main() {
                 let idx_entry = &raw.scan_index[i as usize];
 
                 if raw.flat_peaks {
-                    // Flat-peak (TSQ/SRM) format — use unified router
+                    // Flat-peak (TSQ/SRM) format - use unified router
                     match raw.read_scan_peaks(&mut file, scan_num) {
                         Ok(peaks) => {
                             let n_peaks = peaks.len();

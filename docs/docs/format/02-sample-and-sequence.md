@@ -29,7 +29,7 @@ the Xcalibur sequence table. Immediately follows the FileHeader.
 | 16 | PascalStringWin32 | unknown_text[c] | Usually empty |
 | 17 | PascalStringWin32 | unknown_text[d] | Usually empty |
 | 18 | UInt32 | unknown_long | |
-| 19–33 | PascalStringWin32 | unknown_text[e–s] | 15 additional text fields (usually empty) |
+| 19-33 | PascalStringWin32 | unknown_text[e-s] | 15 additional text fields (usually empty) |
 
 ### 6.2 Version Differences
 
@@ -37,7 +37,7 @@ the Xcalibur sequence table. Immediately follows the FileHeader.
 |---------|------|
 | v8 | None |
 | v47, v57 | vial + unk_c + unk_d + unknown_long |
-| v60–v66 | vial + unk_c + unk_d + unknown_long + unk_e through unk_s (15 more strings) |
+| v60-v66 | vial + unk_c + unk_d + unknown_long + unk_e through unk_s (15 more strings) |
 
 ---
 

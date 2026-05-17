@@ -129,11 +129,11 @@ a timestamp and operator/system identification tags.
 ### 5.1 Observed Values
 
 - `audit_start.tag[1]`: Almost always `"Xcalibur_System"` (the acquisition software identity)
-- `audit_start.tag[2]`: Varies — seen: `"Orbitrap Elite"`, `"Fusion"`, `"Thermo Scientific"`, `"protein"`, `"admin"`, `"Thermo"`. This carries either the instrument model name or the Windows user account name.
+- `audit_start.tag[2]`: Varies - seen: `"Orbitrap Elite"`, `"Fusion"`, `"Thermo Scientific"`, `"protein"`, `"admin"`, `"Thermo"`. This carries either the instrument model name or the Windows user account name.
 - `audit_end.tag[1]`: Almost always `"Xcalibur_System"`
 - `audit_end.tag[2]`: Almost always `"Xcalibur_System"`
 - `audit_start.time`: Acquisition start time
-- `audit_end.time`: Acquisition end time (may be slightly before start time in some edge cases — possibly clock discrepancies)
+- `audit_end.time`: Acquisition end time (may be slightly before start time in some edge cases - possibly clock discrepancies)
 
 ---
 

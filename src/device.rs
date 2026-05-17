@@ -2,7 +2,7 @@
 //!
 //! Thermo RAW files embed the instrument model as a UTF-16LE string in the
 //! metadata region that precedes the scan data (typically within the first
-//! 8–16 KB of the file, inside the run-header prologue or instrument method
+//! 8-16 KB of the file, inside the run-header prologue or instrument method
 //! block).
 //!
 //! We detect the instrument by scanning that region for canonical model
@@ -21,27 +21,27 @@ use crate::Analyzer;
 /// Coarse instrument-family classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceFamily {
-    /// LCQ Classic/Deca/Advantage/Fleet — 3D ion trap (legacy).
+    /// LCQ Classic/Deca/Advantage/Fleet - 3D ion trap (legacy).
     LcqIonTrap,
-    /// LTQ / LTQ XL / LTQ Velos / LTQ Velos Pro — 2D linear ion trap.
+    /// LTQ / LTQ XL / LTQ Velos / LTQ Velos Pro - 2D linear ion trap.
     LtqIonTrap,
-    /// LTQ FT — ion trap coupled with FTICR (pre-Orbitrap era).
+    /// LTQ FT - ion trap coupled with FTICR (pre-Orbitrap era).
     LtqFt,
-    /// LTQ Orbitrap family — ion trap + Orbitrap hybrids
+    /// LTQ Orbitrap family - ion trap + Orbitrap hybrids
     /// (Classic / XL / Discovery / Velos / Elite).
     LtqOrbitrap,
-    /// Q Exactive family — quadrupole + C-trap + Orbitrap
+    /// Q Exactive family - quadrupole + C-trap + Orbitrap
     /// (Q Exactive / Plus / HF / HF-X / UHMR). No ion trap.
     QOrbitrap,
-    /// Tribrid Orbitrap — quadrupole + linear ion trap + Orbitrap
+    /// Tribrid Orbitrap - quadrupole + linear ion trap + Orbitrap
     /// (Fusion / Fusion Lumos / Eclipse / Ascend).
     Tribrid,
     /// Single-stage Q-Orbitrap with advanced scan modes
     /// (Orbitrap Exploris 120 / 240 / 480).
     ExplorisOrbitrap,
-    /// Orbitrap Astral hybrid — Orbitrap plus asymmetric-track lossless analyzer.
+    /// Orbitrap Astral hybrid - Orbitrap plus asymmetric-track lossless analyzer.
     OrbitrapAstral,
-    /// Triple quadrupole — TSQ Vantage / Quantum / Quantiva / Altis / Endura.
+    /// Triple quadrupole - TSQ Vantage / Quantum / Quantiva / Altis / Endura.
     TripleQuad,
     /// Unknown / undetected.
     Unknown,
@@ -187,12 +187,12 @@ fn contains_word(haystack: &[u8], needle: &[u8]) -> bool {
         let left_ok = start < 2 || !is_word_char_at(start - 2);
         // Right boundary: either at end, or next UTF-16 code unit is not
         // ASCII-alphanumeric. Note: the match may be followed by a space
-        // (e.g. "LCQ Header") — that's still a word boundary on the
+        // (e.g. "LCQ Header") - that's still a word boundary on the
         // needle's right edge, which is what we want.
         //
         // However for "LCQ" we want to REJECT "LCQ Header" because
         // "Header" is a generic section marker, not an instrument qualifier.
-        // The word-boundary test alone accepts "LCQ " — to disambiguate
+        // The word-boundary test alone accepts "LCQ " - to disambiguate
         // we also require: if the needle is a known ambiguous prefix
         // (LCQ/LTQ/TSQ with no model suffix), reject matches where the
         // next token is "Header".
@@ -200,7 +200,7 @@ fn contains_word(haystack: &[u8], needle: &[u8]) -> bool {
         let right_ok = after >= haystack.len() || !is_word_char_at(after);
 
         if left_ok && right_ok {
-            // Guard against "<PREFIX> Header" — a universal section marker.
+            // Guard against "<PREFIX> Header" - a universal section marker.
             const HEADER_SUFFIX: &[u8] = b" \0H\0e\0a\0d\0e\0r\0";
             if haystack.len() >= after + HEADER_SUFFIX.len()
                 && &haystack[after..after + HEADER_SUFFIX.len()] == HEADER_SUFFIX

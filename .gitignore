@@ -4,13 +4,13 @@
 # Roadmap (internal)
 /ROADMAP.md
 
-# Corpus sample files — pulled on demand via scripts/fetch_corpus.py,
+# Corpus sample files - pulled on demand via scripts/fetch_corpus.py,
 # not redistributed through this repo (multi-GB PRIDE datasets)
 /samples/
 /corpus/
 
 # Reverse-engineering scratch: hexdump analysers, ad-hoc probes, and
-# early validation harnesses — kept out of the public repo
+# early validation harnesses - kept out of the public repo
 /analyze_*.py
 /validate_*.py
 /trace_*.py

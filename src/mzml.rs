@@ -2,7 +2,7 @@
 ///
 /// Writes a valid mzML 1.1.0 document to any `Write` sink. Produces one
 /// `<spectrum>` element per scan. Binary arrays (m/z and intensity) are
-/// stored as little-endian raw bytes encoded with standard Base64 — no
+/// stored as little-endian raw bytes encoded with standard Base64 - no
 /// additional compression is applied, keeping this module dependency-free.
 ///
 /// # Usage
@@ -341,7 +341,7 @@ fn resolve_scan_arrays<R: Read + Seek>(
                 .collect();
             return Some((mz, int, Some(crate::ScanMode::Profile)));
         }
-        // No profile data in packet — fall through to centroid.
+        // No profile data in packet - fall through to centroid.
         let mz: Vec<f64> = packet.peaks.iter().map(|p| p.mz).collect();
         let int: Vec<f32> = packet.peaks.iter().map(|p| p.abundance).collect();
         return Some((mz, int, nominal_scan_mode));
@@ -357,11 +357,11 @@ fn resolve_scan_arrays<R: Read + Seek>(
 
 /// Write the contents of `raw` as mzML 1.1.0 to `out`.
 ///
-/// * `source` — an open handle to the original `.raw` file (needed to read
+/// * `source` - an open handle to the original `.raw` file (needed to read
 ///   scan data packets).
-/// * `raw_filename` — the file name used for the `<sourceFile>` element.
+/// * `raw_filename` - the file name used for the `<sourceFile>` element.
 ///   Typically `Path::file_name()`.
-/// * `include_profile` — when `true`, profile-mode scans (Orbitrap MS1,
+/// * `include_profile` - when `true`, profile-mode scans (Orbitrap MS1,
 ///   etc.) export the raw profile signal instead of the centroid peak list.
 ///   Centroid-mode scans are unaffected.
 ///
@@ -925,7 +925,7 @@ fn write_spectrum<W: Write>(
     )?;
     writeln!(out, r#"          <scan>"#)?;
 
-    // Thermo scan filter string — crucial for downstream tools that key off
+    // Thermo scan filter string - crucial for downstream tools that key off
     // the filter (MSFragger, MaxQuant, pyteomics, Skyline, ...).
     if let Some(f) = filter {
         if !f.is_empty() {
@@ -990,9 +990,9 @@ fn write_spectrum<W: Write>(
                 let reaction = event.and_then(|e| e.reactions.first());
                 // Build target_mz from the best available source. Each source is
                 // filtered to exclude 0.0 (absent/unknown) before trying the next:
-                //   1. isolation_target_mz() — "MS2 Isolation Offset:" or "Target M/Z:" in scan params
-                //   2. monoisotopic_mz()     — "Monoisotopic M/Z:" in scan params (v66 DDA)
-                //   3. reaction.precursor_mz — scan-event body (tribrid / older formats)
+                //   1. isolation_target_mz() - "MS2 Isolation Offset:" or "Target M/Z:" in scan params
+                //   2. monoisotopic_mz()     - "Monoisotopic M/Z:" in scan params (v66 DDA)
+                //   3. reaction.precursor_mz - scan-event body (tribrid / older formats)
                 // Applying filter() per-source ensures a 0.0 from source 1 does NOT
                 // prevent source 2 from being tried (the bug that caused isolation
                 // window target to be absent for Q Exactive HF DDA MS2 scans).
@@ -1139,7 +1139,7 @@ fn write_spectrum<W: Write>(
 
         writeln!(out, r#"        <binaryDataArrayList count="{n_arrays}">"#)?;
 
-        // m/z array — f64, no compression
+        // m/z array - f64, no compression
         writeln!(
             out,
             r#"          <binaryDataArray encodedLength="{}">"#,
@@ -1160,7 +1160,7 @@ fn write_spectrum<W: Write>(
         writeln!(out, r#"            <binary>{mz_b64}</binary>"#)?;
         writeln!(out, r#"          </binaryDataArray>"#)?;
 
-        // intensity array — f32, no compression
+        // intensity array - f32, no compression
         writeln!(
             out,
             r#"          <binaryDataArray encodedLength="{}">"#,

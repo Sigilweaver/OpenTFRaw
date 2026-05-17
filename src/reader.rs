@@ -316,8 +316,8 @@ impl RawFileReader {
                 r.seek_to(addr)?;
                 let rh = RunHeader::read(&mut r, version)?;
                 // Heuristic for identifying the MS controller:
-                // 1. For v64+: ntrailer > 0 (scan events present) — catches most instruments.
-                // 2. For all versions: RunHeader.data_addr == preamble.data_addr — the MS
+                // 1. For v64+: ntrailer > 0 (scan events present) - catches most instruments.
+                // 2. For all versions: RunHeader.data_addr == preamble.data_addr - the MS
                 //    controller's scan data begins at the same address the preamble declares.
                 //    This catches TSQ/triple-quad instruments where ntrailer=0 (no scan events).
                 // 3. Pre-v64 fallback: valid scan range with nsegs > 0.
@@ -458,16 +458,16 @@ impl RawFileReader {
             Vec::new()
         };
         // The GDH for scan parameters immediately follows the error-log entries.
-        // Do NOT seek back to error_log_addr — doing so would cause find_forward
+        // Do NOT seek back to error_log_addr - doing so would cause find_forward
         // to scan over the scan_index (which may sit between error_log and
         // scan_trailer in some file layouts), creating a CPU-spinning O(n) search
         // through megabytes of binary scan data.
         let after_error_log = r.position();
 
-        // 10. Scan parameters (trailer extra) — GenericData format in v64+.
+        // 10. Scan parameters (trailer extra) - GenericData format in v64+.
         //     The schema (GDH) is written just after the error-log entries;
         //     the records are written at `scan_params_addr` (tail of file)
-        //     with NO stream preamble — records begin directly at
+        //     with NO stream preamble - records begin directly at
         //     scan_params_addr. Any bytes after the last record are trailing
         //     padding and can be ignored.
         let (scan_parameters_header, scan_parameters) = if version >= 64 {
@@ -490,7 +490,7 @@ impl RawFileReader {
             };
             match GenericDataHeader::find_forward(&mut r, scan_distance, expected_record_size)? {
                 Some(hdr) => {
-                    // Records start directly at scan_params_addr — no stream preamble.
+                    // Records start directly at scan_params_addr - no stream preamble.
                     r.seek_to(run_header.scan_params_addr)?;
                     let mut params = Vec::with_capacity(num_scans as usize);
                     for _ in 0..num_scans {
@@ -504,7 +504,7 @@ impl RawFileReader {
             (GenericDataHeader { fields: Vec::new() }, Vec::new())
         };
 
-        // 11. Instrument log — GenericData format in v64+
+        // 11. Instrument log - GenericData format in v64+
         let (inst_log_header, inst_log) = if version >= 64 {
             r.seek_to(run_header.inst_log_addr)?;
             match GenericDataHeader::try_read(&mut r)? {
@@ -826,7 +826,7 @@ impl RawFileReader {
     /// Read centroided peaks only, skipping profile data.
     ///
     /// For PacketHeader files (Orbitrap / ion-trap), this skips the large
-    /// profile-data section, making it 2–10× faster than
+    /// profile-data section, making it 2-10× faster than
     /// [`Self::read_scan_peaks`] when only centroided m/z and intensity values
     /// are needed (e.g. mzML export, peak area queries).
     ///
@@ -1237,11 +1237,11 @@ impl<'a> ScanParams<'a> {
     /// used as a fallback when no NCE label is present.
     ///
     /// Label priority:
-    /// 1. `"HCD Energy:"` / `"HCD Energy V:"` / `"CE:"` — NCE string form
-    /// 2. `"Normalized Collision Energy:"` — ion-trap CID NCE
-    /// 3. `"HCD Energy (eV):"` — explicit eV label (Q Exactive HF-X, Exploris)
-    /// 4. `"HCD Energy eV:"` — eV variant
-    /// 5. `"Collision Energy (eV):"` — ITMS CID eV
+    /// 1. `"HCD Energy:"` / `"HCD Energy V:"` / `"CE:"` - NCE string form
+    /// 2. `"Normalized Collision Energy:"` - ion-trap CID NCE
+    /// 3. `"HCD Energy (eV):"` - explicit eV label (Q Exactive HF-X, Exploris)
+    /// 4. `"HCD Energy eV:"` - eV variant
+    /// 5. `"Collision Energy (eV):"` - ITMS CID eV
     pub fn activation_energy(&self) -> Option<f64> {
         // NCE labels: preferred because they match the user-set method value.
         // Skip 0.0 (sentinel for "not set").
@@ -1355,7 +1355,7 @@ impl<'a> ScanParams<'a> {
         self.0.get_f64("S-Lens RF Level:")
     }
 
-    /// AGC fill percentage (0.0–1.0), reported on Q Exactive HF family.
+    /// AGC fill percentage (0.0-1.0), reported on Q Exactive HF family.
     pub fn agc_fill(&self) -> Option<f64> {
         self.0.get_f64("AGC Fill:")
     }
@@ -1397,7 +1397,7 @@ impl<'a> ScanParams<'a> {
         self.0.get_f64("Dynamic RT Shift (min):")
     }
 
-    /// Lock mass correction applied (ppm) — tries several label variants.
+    /// Lock mass correction applied (ppm) - tries several label variants.
     pub fn lock_mass_correction_ppm(&self) -> Option<f64> {
         self.0
             .get_f64("LM Correction (ppm):")
@@ -1461,7 +1461,7 @@ impl<'a> ScanParams<'a> {
         self.0.get_string("Multi Inject Info:")
     }
 
-    /// HCD energy string — raw value as stored (may be `"28.00"`, `"28%"`, or `"N/A"`).
+    /// HCD energy string - raw value as stored (may be `"28.00"`, `"28%"`, or `"N/A"`).
     pub fn hcd_energy(&self) -> Option<&str> {
         self.0
             .get_string("HCD Energy:")

@@ -53,14 +53,14 @@ major data streams. It is located at the file offset specified by
 | 34 | UInt32 | unknown_long[5] | |
 | 35 | UInt32 | unknown_long[6] | |
 | 36 | UInt64 | own_addr | Self-address (file offset of this RunHeader) |
-| 37–60 | UInt32 × 24 | unknown_long[7–30] | Reserved/unknown |
+| 37-60 | UInt32 × 24 | unknown_long[7-30] | Reserved/unknown |
 
-### 13.3 Version 57–63 (32-bit addresses)
+### 13.3 Version 57-63 (32-bit addresses)
 
 In pre-v64 versions, the scan index, data, log, and trailer addresses are
 obtained from the **SampleInfo** embedded structure rather than the RunHeader
 proper. The RunHeader file name fields and ntrailer/nparams are the same, but
-the 64-bit address block (fields 27–36) is absent.
+the 64-bit address block (fields 27-36) is absent.
 
 ---
 
@@ -78,10 +78,10 @@ acquisition and (in pre-v64 versions) the stream address pointers.
 | 0x10 | 4 | UInt32 | inst_log_length | Number of instrument log entries |
 | 0x14 | 4 | UInt32 | error_log_length | Number of error log entries |
 | 0x18 | 4 | UInt32 | unknown_long[4] | |
-| 0x1C | 4 | UInt32 | scan_index_addr† | **Defunct in v64+** — use RunHeader |
-| 0x20 | 4 | UInt32 | data_addr† | **Defunct in v64+** — use RunHeader |
-| 0x24 | 4 | UInt32 | inst_log_addr† | **Defunct in v64+** — use RunHeader |
-| 0x28 | 4 | UInt32 | error_log_addr† | **Defunct in v64+** — use RunHeader |
+| 0x1C | 4 | UInt32 | scan_index_addr† | **Defunct in v64+** - use RunHeader |
+| 0x20 | 4 | UInt32 | data_addr† | **Defunct in v64+** - use RunHeader |
+| 0x24 | 4 | UInt32 | inst_log_addr† | **Defunct in v64+** - use RunHeader |
+| 0x28 | 4 | UInt32 | error_log_addr† | **Defunct in v64+** - use RunHeader |
 | 0x2C | 4 | UInt32 | unknown_long[5] | |
 | 0x30 | 8 | Float64 | max_ion_current | Maximum total ion current across all scans |
 | 0x38 | 8 | Float64 | low_mz | Lowest M/z across all scans |
