@@ -1,83 +1,74 @@
-# Publish workflow for OpenTFRaw.
-#
-# Triggered by pushing a version tag (v*).
-# Publishes:
-#   1. The opentfraw Rust crate to crates.io
-#   2. The opentfraw Python wheel (maturin) to PyPI via Trusted Publishing
-#
-# Required secrets:
-#   CARGO_REGISTRY_TOKEN  - crates.io API token (publish-new + publish-update)
-#
-# Required PyPI Trusted Publisher setup (no secret needed):
-#   https://pypi.org/manage/project/opentfraw/settings/publishing/
-#   Publisher: GitHub Actions, Owner: Sigilweaver, Repo: OpenTFRaw,
-#   Workflow: publish.yml, Environment: pypi
-
 name: Publish
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
 
-env:
-  CARGO_TERM_COLOR: always
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  # ── 1. Rust crate ────────────────────────────────────────────────────────────
-  publish-crate:
-    name: Publish crate to crates.io
+  cargo-publish:
+    name: Publish to crates.io
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
-
-      - name: Publish opentfraw
-        run: cargo publish -p opentfraw
+      - run: cargo publish -p opentfraw
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-  # ── 2. Python wheels ─────────────────────────────────────────────────────────
   build-wheels:
-    name: Build wheels (${{ matrix.os }})
+    name: Build wheels (${{ matrix.os }} / ${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            target: x86_64
+          - os: ubuntu-latest
+            target: aarch64
+          - os: macos-latest
+            target: x86_64
+          - os: macos-latest
+            target: aarch64
+          - os: windows-latest
+            target: x86_64
     steps:
       - uses: actions/checkout@v4
-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - uses: PyO3/maturin-action@v1
         with:
-          command: build
-          args: --release --out dist
-          working-directory: python
+          target: ${{ matrix.target }}
+          args: --release --out dist --find-interpreter --manifest-path python/Cargo.toml
           manylinux: auto
-
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}
-          path: python/dist
+          name: wheels-${{ matrix.os }}-${{ matrix.target }}
+          path: dist/*.whl
 
   build-sdist:
     name: Build sdist
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          args: --out dist
-          working-directory: python
-
+          args: --out dist --manifest-path python/Cargo.toml
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-sdist
-          path: python/dist
+          name: sdist
+          path: dist/*.tar.gz
 
-  publish-pypi:
+  pypi-publish:
     name: Publish to PyPI
     needs: [build-wheels, build-sdist]
     runs-on: ubuntu-latest
@@ -87,8 +78,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: wheels-*
-          merge-multiple: true
           path: dist
-
+          merge-multiple: true
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
