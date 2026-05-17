@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `ATTRIBUTION.md` (replaces `CREDITS.md`): tracks third-party notices for
+  bundled data and vendored code.
+- `publish.yml` GitHub Actions workflow: publishes the `opentfraw` crate to
+  crates.io and the Python wheel to PyPI via OIDC Trusted Publishing on
+  every `v*` tag push.
+
+### Changed
+
+- CI migrated from WarpBuild runners to standard GitHub-hosted
+  (`ubuntu-latest`, `macos-latest`, `windows-latest`).
+- Removed the `tools/` vendor SDK tree and `corpus/mzml/` binary corpus
+  from repository history (git history rewritten; total size reduced from
+  ~1.5 GB to ~660 KB).
+- Removed "Pure-Rust" marketing language from `README.md` and related
+  documentation (Python bindings use PyO3/maturin which pulls in a C
+  compiler at build time).
+- Renamed `CREDITS.md` to `ATTRIBUTION.md`.
+
 ## [0.1.0] - 2026-05-16
 
 ### Added

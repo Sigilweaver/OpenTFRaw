@@ -19,10 +19,10 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use numpy::{PyArray1, ToPyArray};
-use tfraw::{MsPower, Polarity, RawFileReader};
 use pyo3::exceptions::{PyIOError, PyIndexError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+use tfraw::{MsPower, Polarity, RawFileReader};
 
 /// Translate an tfraw::Error into a Python exception.
 fn to_py_err(e: tfraw::Error) -> PyErr {
@@ -136,9 +136,10 @@ impl RawFile {
         py: Python<'py>,
         scan_number: u32,
     ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f32>>)> {
-        let mut src = self.source.lock().map_err(|_| {
-            PyIOError::new_err("internal error: source mutex poisoned")
-        })?;
+        let mut src = self
+            .source
+            .lock()
+            .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))?;
         let peaks = self
             .reader
             .read_peaks_only(&mut *src, scan_number)
@@ -171,10 +172,9 @@ impl RawFile {
     /// intensity : numpy.ndarray[float32]
     fn scan<'py>(&self, py: Python<'py>, scan_number: u32) -> PyResult<Bound<'py, PyDict>> {
         let first = self.first_scan();
-        let idx = scan_number
-            .checked_sub(first)
-            .ok_or_else(|| PyIndexError::new_err(format!("scan {scan_number} < first scan {first}")))?
-            as usize;
+        let idx = scan_number.checked_sub(first).ok_or_else(|| {
+            PyIndexError::new_err(format!("scan {scan_number} < first scan {first}"))
+        })? as usize;
         if idx >= self.reader.scan_index.len() {
             return Err(PyIndexError::new_err(format!(
                 "scan {scan_number} out of range"
@@ -264,12 +264,12 @@ impl RawFile {
 
     /// Write the entire file out as mzML 1.1.0 to `out_path`.
     fn to_mzml(&self, out_path: &str) -> PyResult<()> {
-        let out_file =
-            File::create(out_path).map_err(|e| PyIOError::new_err(e.to_string()))?;
+        let out_file = File::create(out_path).map_err(|e| PyIOError::new_err(e.to_string()))?;
         let mut out = std::io::BufWriter::new(out_file);
-        let mut src = self.source.lock().map_err(|_| {
-            PyIOError::new_err("internal error: source mutex poisoned")
-        })?;
+        let mut src = self
+            .source
+            .lock()
+            .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))?;
         let raw_filename = self
             .path
             .file_name()
