@@ -8,7 +8,6 @@
 //! Build with:
 //!
 //! ```bash
-//! cd python
 //! maturin develop --release
 //! python -c "import opentfraw; print(opentfraw.__doc__)"
 //! ```
@@ -22,10 +21,10 @@ use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyIOError, PyIndexError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use tfraw::{MsPower, Polarity, RawFileReader};
+use ::opentfraw::{MsPower, Polarity, RawFileReader};
 
-/// Translate an tfraw::Error into a Python exception.
-fn to_py_err(e: tfraw::Error) -> PyErr {
+/// Translate an `opentfraw::Error` into a Python exception.
+fn to_py_err(e: ::opentfraw::Error) -> PyErr {
     PyIOError::new_err(format!("{e}"))
 }
 
@@ -275,7 +274,7 @@ impl RawFile {
             .file_name()
             .and_then(|s| s.to_str())
             .ok_or_else(|| PyValueError::new_err("non-UTF8 file name"))?;
-        tfraw::write_mzml(&self.reader, &mut *src, &mut out, raw_filename, false)
+        ::opentfraw::write_mzml(&self.reader, &mut *src, &mut out, raw_filename, false)
             .map_err(to_py_err)?;
         Ok(())
     }

@@ -1,0 +1,21 @@
+[package]
+name = "opentfraw"
+description = "Rust parser for Thermo Fisher RAW mass spectrometry files."
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+thiserror = "2"
+
+[dev-dependencies]

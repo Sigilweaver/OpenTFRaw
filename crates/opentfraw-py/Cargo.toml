@@ -1,0 +1,31 @@
+[package]
+name = "opentfraw-py"
+description = "Python bindings for the OpenTFRaw library."
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[lib]
+name = "opentfraw"
+crate-type = ["cdylib"]
+
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+useless_conversion = "allow"
+unnecessary_cast = "allow"
+type_complexity = "allow"
+
+[dependencies]
+opentfraw.workspace = true
+pyo3 = { workspace = true }
+numpy.workspace = true

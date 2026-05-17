@@ -49,10 +49,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo test
-        run: cargo test --all-targets
+        run: cargo test --workspace --all-targets
 
   validate-mzml:
     name: mzML structural validation
