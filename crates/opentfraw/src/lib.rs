@@ -20,7 +20,9 @@ pub mod seq_row;
 
 pub use device::{DetectedInstrument, DeviceFamily};
 pub use error::{Error, Result};
-pub use mzml::{write_indexed_mzml, write_mzml};
+pub use mzml::{
+    extract_spectrum, iter_spectra, write_indexed_mzml, write_mzml, PrecursorInfo, SpectrumRecord,
+};
 pub use reader::{ControllerInfo, ControllerType, RawFileReader, ScanParams, StatusLogEntry};
 pub use scan_format::ScanDataFormat;
 pub use types::*;
