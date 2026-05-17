@@ -17,9 +17,234 @@ use std::io::{Read, Seek, Write};
 
 use crate::error::Result;
 use crate::scan_event::ScanEvent;
-use crate::scan_index::ScanIndexEntry;
 use crate::types::{Activation, MsPower, Polarity};
 use crate::RawFileReader;
+
+// ─── Structured spectrum record (vendor-neutral, no mzML) ────────────────────
+
+/// Precursor metadata for an MS2+ spectrum.
+///
+/// Built from the per-scan parameter table and/or the scan-event reaction
+/// list. `target_mz` is the isolation-window center; `selected_mz` is the
+/// monoisotopic-resolved precursor (when available). `collision_energy` is
+/// either an absolute eV value or, when `ce_is_nce == true`, a normalized
+/// collision energy.
+#[derive(Debug, Clone, Default)]
+pub struct PrecursorInfo {
+    pub target_mz: Option<f64>,
+    pub selected_mz: Option<f64>,
+    pub isolation_width: Option<f64>,
+    pub charge: Option<i32>,
+    pub collision_energy: Option<f64>,
+    pub ce_is_nce: bool,
+    pub master_scan_number: Option<u32>,
+    pub activation: Option<Activation>,
+    /// Analyzer used for the precursor scan; needed by mzML CV mapping to
+    /// disambiguate CID vs beam-type CID on FTMS instruments.
+    pub analyzer: Option<crate::Analyzer>,
+}
+
+/// One fully-decoded spectrum with all metadata needed to emit mzML or
+/// populate an in-memory record set.
+///
+/// Returned by [`extract_spectrum`] / [`iter_spectra`]. The mzML writer in
+/// this crate is implemented on top of these records; downstream crates that
+/// want to ingest Thermo data into their own column store should use
+/// `extract_spectrum` directly to avoid the XML-then-parse round trip.
+#[derive(Debug, Clone)]
+pub struct SpectrumRecord {
+    pub index: usize,
+    pub scan_number: u32,
+    pub ms_level: u32,
+    pub is_ms1: bool,
+    pub polarity: Option<Polarity>,
+    /// Effective scan mode after `include_profile` resolution.
+    pub scan_mode: Option<crate::ScanMode>,
+    pub filter: Option<String>,
+    /// Retention time in minutes.
+    pub retention_time_min: f64,
+    pub total_ion_current: f64,
+    pub base_peak_mz: f64,
+    pub base_peak_intensity: f64,
+    pub low_mz: f64,
+    pub high_mz: f64,
+    pub ion_injection_time_ms: Option<f64>,
+    pub precursor: Option<PrecursorInfo>,
+    pub mz: Vec<f64>,
+    pub intensity: Vec<f32>,
+}
+
+/// Extract a single spectrum's record from `raw` at scan-index `idx`
+/// (zero-based offset from the first scan).
+///
+/// Returns `None` if the scan's peak arrays cannot be read (matches the
+/// silent-skip behaviour of [`write_mzml`]). `include_profile` controls
+/// whether profile-mode scans return the raw profile signal or the
+/// centroided peak list, matching [`write_mzml`].
+pub fn extract_spectrum<R: Read + Seek>(
+    raw: &RawFileReader,
+    source: &mut R,
+    idx: u32,
+    include_profile: bool,
+) -> Option<SpectrumRecord> {
+    if idx >= raw.num_scans {
+        return None;
+    }
+    let first_scan = raw.run_header.sample_info.first_scan_number;
+    let scan_number = first_scan + idx;
+    let entry = &raw.scan_index[idx as usize];
+    let event = raw.scan_events.get(idx as usize);
+    let params = raw.scan_params(scan_number);
+
+    let is_srm = raw.flat_peaks;
+    let level = if is_srm {
+        2
+    } else {
+        event
+            .and_then(|e| e.preamble.ms_power())
+            .map(ms_level)
+            .unwrap_or(1)
+    };
+    let polarity = if is_srm {
+        Some(Polarity::Positive)
+    } else {
+        event.and_then(|e| e.preamble.polarity())
+    };
+    let scan_mode = if is_srm {
+        Some(crate::ScanMode::Centroid)
+    } else {
+        event.and_then(|e| e.preamble.scan_mode())
+    };
+    let filter = raw.scan_filter(scan_number);
+    let is_ms1 = !is_srm && level == 1;
+    let srm_q1 = if is_srm {
+        raw.srm_q1_by_event.get(&entry.scan_event).copied()
+    } else {
+        None
+    };
+    let srm_ce = if is_srm {
+        raw.srm_ce_by_event.get(&entry.scan_event).copied()
+    } else {
+        None
+    };
+
+    let (mz, intensity, effective_scan_mode) =
+        resolve_scan_arrays(raw, source, scan_number, include_profile, event, scan_mode)?;
+
+    let precursor = if !is_ms1 {
+        let info = if let Some(q1) = srm_q1 {
+            PrecursorInfo {
+                target_mz: Some(q1),
+                selected_mz: Some(q1),
+                isolation_width: Some(0.7),
+                charge: None,
+                collision_energy: srm_ce,
+                ce_is_nce: false,
+                master_scan_number: None,
+                activation: event.and_then(|e| e.preamble.activation()),
+                analyzer: event.and_then(|e| e.preamble.analyzer()),
+            }
+        } else {
+            let reaction = event.and_then(|e| e.reactions.first());
+            let tm = params
+                .as_ref()
+                .and_then(|p| p.isolation_target_mz())
+                .filter(|&mz| mz > 0.0)
+                .or_else(|| {
+                    params
+                        .as_ref()
+                        .and_then(|p| p.monoisotopic_mz())
+                        .filter(|&mz| mz > 0.0)
+                })
+                .or_else(|| reaction.map(|r| r.precursor_mz).filter(|&mz| mz > 0.0));
+            let sm = params
+                .as_ref()
+                .and_then(|p| p.monoisotopic_mz())
+                .filter(|&mz| mz > 0.0)
+                .or(tm);
+            let iw = params.as_ref().and_then(|p| p.isolation_width_mz());
+            let ch = params
+                .as_ref()
+                .and_then(|p| p.charge_state())
+                .filter(|&z| z > 0);
+            let ae_from_params = params
+                .as_ref()
+                .and_then(|p| p.activation_energy())
+                .filter(|&e| e > 0.0);
+            let ae_is_nce = ae_from_params.is_some()
+                && params
+                    .as_ref()
+                    .map(|p| p.activation_energy_is_nce())
+                    .unwrap_or(false);
+            let ae = ae_from_params.or_else(|| reaction.map(|r| r.energy).filter(|&e| e > 0.0));
+            let master = params
+                .as_ref()
+                .and_then(|p| p.master_scan_number())
+                .filter(|&n| n > 0)
+                .map(|n| n as u32);
+            PrecursorInfo {
+                target_mz: tm,
+                selected_mz: sm,
+                isolation_width: iw,
+                charge: ch,
+                collision_energy: ae,
+                ce_is_nce: ae_is_nce,
+                master_scan_number: master,
+                activation: event.and_then(|e| e.preamble.activation()),
+                analyzer: event.and_then(|e| e.preamble.analyzer()),
+            }
+        };
+        Some(info)
+    } else {
+        None
+    };
+
+    let ion_injection_time_ms = params.as_ref().and_then(|p| p.ion_injection_time_ms());
+
+    Some(SpectrumRecord {
+        index: idx as usize,
+        scan_number,
+        ms_level: level,
+        is_ms1,
+        polarity,
+        scan_mode: effective_scan_mode,
+        filter,
+        retention_time_min: entry.start_time,
+        total_ion_current: entry.total_current,
+        base_peak_mz: entry.base_mz,
+        base_peak_intensity: entry.base_intensity,
+        low_mz: entry.low_mz,
+        high_mz: entry.high_mz,
+        ion_injection_time_ms,
+        precursor,
+        mz,
+        intensity,
+    })
+}
+
+/// Iterate every scan in `raw` as a [`SpectrumRecord`].
+///
+/// Skipped scans (those for which the peak arrays cannot be decoded) are
+/// dropped silently, matching [`write_mzml`]. The returned iterator borrows
+/// both `raw` and `source` for its lifetime.
+pub fn iter_spectra<'a, R: Read + Seek>(
+    raw: &'a RawFileReader,
+    source: &'a mut R,
+    include_profile: bool,
+) -> impl Iterator<Item = SpectrumRecord> + 'a {
+    let n = raw.num_scans;
+    let mut idx: u32 = 0;
+    std::iter::from_fn(move || {
+        while idx < n {
+            let cur = idx;
+            idx += 1;
+            if let Some(rec) = extract_spectrum(raw, source, cur, include_profile) {
+                return Some(rec);
+            }
+        }
+        None
+    })
+}
 
 // ─── Byte-counting Write wrapper ─────────────────────────────────────────────
 
@@ -378,7 +603,6 @@ where
     R: Read + Seek,
     W: Write,
 {
-    let first_scan = raw.run_header.sample_info.first_scan_number;
     let n_spectra = raw.num_scans as usize;
 
     let (inst_acc, inst_name) = instrument_cv(raw);
@@ -489,83 +713,9 @@ where
 
     // ── spectra ────────────────────────────────────────────────────────────
     for idx in 0..raw.num_scans {
-        let scan_number = first_scan + idx;
-        let entry = &raw.scan_index[idx as usize];
-        // `scan_events` is one-entry-per-scan, parallel to `scan_index`.
-        // The `entry.scan_event` field is a scan-event-class identifier, not
-        // an index into this array.
-        let event = raw.scan_events.get(idx as usize);
-        let params = raw.scan_params(scan_number);
-
-        // SRM (flat-peak) files have no scan events; derive ms_level and scan mode directly.
-        let is_srm = raw.flat_peaks;
-        let level = if is_srm {
-            2
-        } else {
-            event
-                .and_then(|e| e.preamble.ms_power())
-                .map(ms_level)
-                .unwrap_or(1)
-        };
-        // SRM files have no scan events; default to positive polarity (the vast majority of SRM
-        // experiments are positive-mode). Other formats read polarity from the scan event preamble.
-        let polarity = if is_srm {
-            Some(crate::types::Polarity::Positive)
-        } else {
-            event.and_then(|e| e.preamble.polarity())
-        };
-        // SRM peaks are always centroid; fall back to scan event preamble for other formats.
-        let scan_mode = if is_srm {
-            Some(crate::ScanMode::Centroid)
-        } else {
-            event.and_then(|e| e.preamble.scan_mode())
-        };
-        let filter = raw.scan_filter(scan_number);
-        let is_ms1 = !is_srm && level == 1;
-        // Q1 precursor mass for SRM scans (looked up by scan event class).
-        let srm_q1 = if is_srm {
-            raw.srm_q1_by_event.get(&entry.scan_event).copied()
-        } else {
-            None
-        };
-        // Collision energy for v63 SRM scans (from transition table; empty for v66).
-        let srm_ce = if is_srm {
-            raw.srm_ce_by_event.get(&entry.scan_event).copied()
-        } else {
-            None
-        };
-
-        let (mz_vals, int_vals, effective_scan_mode) = match resolve_scan_arrays(
-            raw,
-            source,
-            scan_number,
-            include_profile,
-            event,
-            scan_mode,
-        ) {
-            Some(arrays) => arrays,
-            None => continue,
-        };
-        let n_peaks = mz_vals.len();
-
-        write_spectrum(
-            out,
-            idx as usize,
-            scan_number,
-            level,
-            polarity,
-            effective_scan_mode,
-            filter.as_deref(),
-            is_ms1,
-            entry,
-            event,
-            params,
-            srm_q1,
-            srm_ce,
-            &mz_vals,
-            &int_vals,
-            n_peaks,
-        )?;
+        if let Some(rec) = extract_spectrum(raw, source, idx, include_profile) {
+            write_spectrum(out, &rec)?;
+        }
     }
 
     writeln!(out, r#"    </spectrumList>"#)?;
@@ -596,7 +746,6 @@ where
     R: Read + Seek,
     W: Write,
 {
-    let first_scan = raw.run_header.sample_info.first_scan_number;
     let n_spectra = raw.num_scans as usize;
     let (inst_acc, inst_name) = instrument_cv(raw);
 
@@ -713,77 +862,12 @@ where
     // ── spectra (record byte offset before each <spectrum>) ────────────────
     let mut spectrum_offsets: Vec<(u32, u64)> = Vec::with_capacity(n_spectra);
     for idx in 0..raw.num_scans {
-        let scan_number = first_scan + idx;
-        let entry = &raw.scan_index[idx as usize];
-        let event = raw.scan_events.get(idx as usize);
-        let params = raw.scan_params(scan_number);
-
-        let is_srm = raw.flat_peaks;
-        let level = if is_srm {
-            2
-        } else {
-            event
-                .and_then(|e| e.preamble.ms_power())
-                .map(ms_level)
-                .unwrap_or(1)
-        };
-        let polarity = if is_srm {
-            Some(crate::types::Polarity::Positive)
-        } else {
-            event.and_then(|e| e.preamble.polarity())
-        };
-        let scan_mode = if is_srm {
-            Some(crate::ScanMode::Centroid)
-        } else {
-            event.and_then(|e| e.preamble.scan_mode())
-        };
-        let filter = raw.scan_filter(scan_number);
-        let is_ms1 = !is_srm && level == 1;
-        let srm_q1 = if is_srm {
-            raw.srm_q1_by_event.get(&entry.scan_event).copied()
-        } else {
-            None
-        };
-        let srm_ce = if is_srm {
-            raw.srm_ce_by_event.get(&entry.scan_event).copied()
-        } else {
-            None
-        };
-
-        let (mz_vals, int_vals, effective_scan_mode) = match resolve_scan_arrays(
-            raw,
-            source,
-            scan_number,
-            include_profile,
-            event,
-            scan_mode,
-        ) {
-            Some(arrays) => arrays,
+        let rec = match extract_spectrum(raw, source, idx, include_profile) {
+            Some(r) => r,
             None => continue,
         };
-        let n_peaks = mz_vals.len();
-
-        // Record byte offset of this <spectrum> element before writing it.
-        spectrum_offsets.push((scan_number, cw.pos));
-
-        write_spectrum(
-            &mut cw,
-            idx as usize,
-            scan_number,
-            level,
-            polarity,
-            effective_scan_mode,
-            filter.as_deref(),
-            is_ms1,
-            entry,
-            event,
-            params,
-            srm_q1,
-            srm_ce,
-            &mz_vals,
-            &int_vals,
-            n_peaks,
-        )?;
+        spectrum_offsets.push((rec.scan_number, cw.pos));
+        write_spectrum(&mut cw, &rec)?;
     }
 
     writeln!(cw, r#"    </spectrumList>"#)?;
@@ -820,41 +904,25 @@ where
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn write_spectrum<W: Write>(
-    out: &mut W,
-    index: usize,
-    scan_number: u32,
-    level: u32,
-    polarity: Option<Polarity>,
-    scan_mode: Option<crate::ScanMode>,
-    filter: Option<&str>,
-    is_ms1: bool,
-    entry: &ScanIndexEntry,
-    event: Option<&ScanEvent>,
-    params: Option<crate::ScanParams<'_>>,
-    srm_q1: Option<f64>,
-    srm_ce: Option<f64>,
-    mz_vals: &[f64],
-    int_vals: &[f32],
-    n_peaks: usize,
-) -> Result<()> {
-    let spectrum_type_acc = if is_ms1 {
+fn write_spectrum<W: Write>(out: &mut W, rec: &SpectrumRecord) -> Result<()> {
+    let spectrum_type_acc = if rec.is_ms1 {
         ("MS:1000579", "MS1 spectrum")
     } else {
         ("MS:1000580", "MSn spectrum")
     };
+    let n_peaks = rec.mz.len();
 
     writeln!(
         out,
         r#"      <spectrum id="controllerType=0 controllerNumber=1 scan={scan}" index="{idx}" defaultArrayLength="{n}">"#,
-        scan = scan_number,
-        idx = index,
+        scan = rec.scan_number,
+        idx = rec.index,
         n = n_peaks
     )?;
     writeln!(
         out,
-        r#"        <cvParam cvRef="MS" accession="MS:1000511" name="ms level" value="{level}"/>"#
+        r#"        <cvParam cvRef="MS" accession="MS:1000511" name="ms level" value="{level}"/>"#,
+        level = rec.ms_level
     )?;
     writeln!(
         out,
@@ -866,7 +934,7 @@ fn write_spectrum<W: Write>(
     // process spectra missing this tag, so we emit it unconditionally, falling
     // back to "profile" (the MS1 default on Orbitrap) when the preamble byte
     // is missing.
-    match scan_mode {
+    match rec.scan_mode {
         Some(crate::ScanMode::Centroid) => writeln!(
             out,
             r#"        <cvParam cvRef="MS" accession="MS:1000127" name="centroid spectrum" value=""/>"#
@@ -878,7 +946,7 @@ fn write_spectrum<W: Write>(
     }
 
     // Polarity
-    match polarity {
+    match rec.polarity {
         Some(Polarity::Positive) => writeln!(
             out,
             r#"        <cvParam cvRef="MS" accession="MS:1000130" name="positive scan" value=""/>"#
@@ -894,27 +962,27 @@ fn write_spectrum<W: Write>(
     writeln!(
         out,
         r#"        <cvParam cvRef="MS" accession="MS:1000285" name="total ion current" value="{:.6}"/>"#,
-        entry.total_current
+        rec.total_ion_current
     )?;
     writeln!(
         out,
         r#"        <cvParam cvRef="MS" accession="MS:1000504" name="base peak m/z" value="{:.6}"/>"#,
-        entry.base_mz
+        rec.base_peak_mz
     )?;
     writeln!(
         out,
         r#"        <cvParam cvRef="MS" accession="MS:1000505" name="base peak intensity" value="{:.6}"/>"#,
-        entry.base_intensity
+        rec.base_peak_intensity
     )?;
     writeln!(
         out,
         r#"        <cvParam cvRef="MS" accession="MS:1000528" name="lowest observed m/z" value="{:.6}"/>"#,
-        entry.low_mz
+        rec.low_mz
     )?;
     writeln!(
         out,
         r#"        <cvParam cvRef="MS" accession="MS:1000527" name="highest observed m/z" value="{:.6}"/>"#,
-        entry.high_mz
+        rec.high_mz
     )?;
 
     // Scan list (retention time)
@@ -927,7 +995,7 @@ fn write_spectrum<W: Write>(
 
     // Thermo scan filter string - crucial for downstream tools that key off
     // the filter (MSFragger, MaxQuant, pyteomics, Skyline, ...).
-    if let Some(f) = filter {
+    if let Some(f) = rec.filter.as_deref() {
         if !f.is_empty() {
             writeln!(
                 out,
@@ -940,18 +1008,16 @@ fn write_spectrum<W: Write>(
     writeln!(
         out,
         r#"            <cvParam cvRef="MS" accession="MS:1000016" name="scan start time" value="{:.6}" unitCvRef="UO" unitAccession="UO:0000031" unitName="minute"/>"#,
-        entry.start_time
+        rec.retention_time_min
     )?;
 
-    // Ion injection time from params
-    if let Some(ref p) = params {
-        if let Some(it) = p.ion_injection_time_ms() {
-            writeln!(
-                out,
-                r#"            <cvParam cvRef="MS" accession="MS:1000927" name="ion injection time" value="{:.6}" unitCvRef="UO" unitAccession="UO:0000028" unitName="millisecond"/>"#,
-                it
-            )?;
-        }
+    // Ion injection time
+    if let Some(it) = rec.ion_injection_time_ms {
+        writeln!(
+            out,
+            r#"            <cvParam cvRef="MS" accession="MS:1000927" name="ion injection time" value="{:.6}" unitCvRef="UO" unitAccession="UO:0000028" unitName="millisecond"/>"#,
+            it
+        )?;
     }
 
     writeln!(out, r#"            <scanWindowList count="1">"#)?;
@@ -959,12 +1025,12 @@ fn write_spectrum<W: Write>(
     writeln!(
         out,
         r#"                <cvParam cvRef="MS" accession="MS:1000501" name="scan window lower limit" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
-        entry.low_mz
+        rec.low_mz
     )?;
     writeln!(
         out,
         r#"                <cvParam cvRef="MS" accession="MS:1000500" name="scan window upper limit" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
-        entry.high_mz
+        rec.high_mz
     )?;
     writeln!(out, r#"              </scanWindow>"#)?;
     writeln!(out, r#"            </scanWindowList>"#)?;
@@ -972,74 +1038,15 @@ fn write_spectrum<W: Write>(
     writeln!(out, r#"        </scanList>"#)?;
 
     // Precursor info for MS2+
-    //
-    // For SRM (flat-peak) scans: Q1 is stored in the method transition table
-    // and retrieved via srm_q1. The isolation window is ±0.35 Da (TSQ default).
-    //
-    // For other MS2+ scans: in v66 RAW files, scan-event reactions are empty and
-    // the precursor info lives entirely in the per-scan parameter table. Older
-    // formats populate `event.reactions[0]`. We emit a <precursor> block whenever
-    // we have enough data from either source.
-    if !is_ms1 {
-        // For SRM scans, Q1 is the precursor; isolation window is ±0.35 Da.
-        // For other MS2+: resolve from params or event.reactions.
-        let (target_mz, sel_mz, iso_width, charge, act_energy, act_energy_is_nce) =
-            if srm_q1.is_some() {
-                (srm_q1, srm_q1, Some(0.7f64), None::<i32>, srm_ce, false)
-            } else {
-                let reaction = event.and_then(|e| e.reactions.first());
-                // Build target_mz from the best available source. Each source is
-                // filtered to exclude 0.0 (absent/unknown) before trying the next:
-                //   1. isolation_target_mz() - "MS2 Isolation Offset:" or "Target M/Z:" in scan params
-                //   2. monoisotopic_mz()     - "Monoisotopic M/Z:" in scan params (v66 DDA)
-                //   3. reaction.precursor_mz - scan-event body (tribrid / older formats)
-                // Applying filter() per-source ensures a 0.0 from source 1 does NOT
-                // prevent source 2 from being tried (the bug that caused isolation
-                // window target to be absent for Q Exactive HF DDA MS2 scans).
-                let tm = params
-                    .as_ref()
-                    .and_then(|p| p.isolation_target_mz())
-                    .filter(|&mz| mz > 0.0)
-                    .or_else(|| {
-                        params
-                            .as_ref()
-                            .and_then(|p| p.monoisotopic_mz())
-                            .filter(|&mz| mz > 0.0)
-                    })
-                    .or_else(|| reaction.map(|r| r.precursor_mz).filter(|&mz| mz > 0.0));
-                let sm = params
-                    .as_ref()
-                    .and_then(|p| p.monoisotopic_mz())
-                    .filter(|&mz| mz > 0.0)
-                    .or(tm);
-                let iw = params.as_ref().and_then(|p| p.isolation_width_mz());
-                let ch = params
-                    .as_ref()
-                    .and_then(|p| p.charge_state())
-                    .filter(|&z| z > 0);
-                let ae_from_params = params
-                    .as_ref()
-                    .and_then(|p| p.activation_energy())
-                    .filter(|&e| e > 0.0);
-                let ae_is_nce = ae_from_params.is_some()
-                    && params
-                        .as_ref()
-                        .map(|p| p.activation_energy_is_nce())
-                        .unwrap_or(false);
-                let ae = ae_from_params.or_else(|| reaction.map(|r| r.energy).filter(|&e| e > 0.0));
-                (tm, sm, iw, ch, ae, ae_is_nce)
-            };
-
+    if let Some(pre) = rec.precursor.as_ref() {
         // Always emit a <precursorList> for MSn spectra; mzML requires it.
         // For DIA scans the precursor m/z is 0/unknown, but the activation
         // method and (when available) isolation window are still recorded.
         writeln!(out, r#"        <precursorList count="1">"#)?;
 
         // Link to the precursor (MS1) scan when known.
-        let master_ref = params
-            .as_ref()
-            .and_then(|p| p.master_scan_number())
-            .filter(|&n| n > 0)
+        let master_ref = pre
+            .master_scan_number
             .map(|n| format!("controllerType=0 controllerNumber=1 scan={n}"));
         if let Some(ref mref) = master_ref {
             writeln!(out, r#"          <precursor spectrumRef="{mref}">"#)?;
@@ -1049,16 +1056,16 @@ fn write_spectrum<W: Write>(
 
         // Isolation window (center + lower/upper offsets). Omit entirely
         // when no window information is available (e.g. all-ions DIA).
-        if target_mz.is_some() || iso_width.is_some() {
+        if pre.target_mz.is_some() || pre.isolation_width.is_some() {
             writeln!(out, r#"            <isolationWindow>"#)?;
-            if let Some(mz) = target_mz {
+            if let Some(mz) = pre.target_mz {
                 writeln!(
                     out,
                     r#"              <cvParam cvRef="MS" accession="MS:1000827" name="isolation window target m/z" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
                     mz
                 )?;
             }
-            if let Some(w) = iso_width {
+            if let Some(w) = pre.isolation_width {
                 // Thermo reports a total isolation width; mzML splits it into
                 // symmetric lower/upper offsets around the target.
                 let half = w / 2.0;
@@ -1077,7 +1084,7 @@ fn write_spectrum<W: Write>(
         }
 
         // Selected ion.
-        if let Some(mz) = sel_mz {
+        if let Some(mz) = pre.selected_mz {
             writeln!(out, r#"            <selectedIonList count="1">"#)?;
             writeln!(out, r#"              <selectedIon>"#)?;
             writeln!(
@@ -1085,7 +1092,7 @@ fn write_spectrum<W: Write>(
                 r#"                <cvParam cvRef="MS" accession="MS:1000744" name="selected ion m/z" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
                 mz
             )?;
-            if let Some(z) = charge {
+            if let Some(z) = pre.charge {
                 writeln!(
                     out,
                     r#"                <cvParam cvRef="MS" accession="MS:1000041" name="charge state" value="{z}"/>"#
@@ -1097,9 +1104,8 @@ fn write_spectrum<W: Write>(
 
         // Activation.
         writeln!(out, r#"            <activation>"#)?;
-        if let Some(act) = event.and_then(|e| e.preamble.activation()) {
-            let analyzer = event.and_then(|e| e.preamble.analyzer());
-            let (acc, name) = activation_cv(act, analyzer);
+        if let Some(act) = pre.activation {
+            let (acc, name) = activation_cv(act, pre.analyzer);
             writeln!(
                 out,
                 r#"              <cvParam cvRef="MS" accession="{acc}" name="{name}" value=""/>"#
@@ -1110,8 +1116,8 @@ fn write_spectrum<W: Write>(
                 r#"              <cvParam cvRef="MS" accession="MS:1000133" name="collision-induced dissociation" value=""/>"#
             )?;
         }
-        if let Some(e) = act_energy {
-            if act_energy_is_nce {
+        if let Some(e) = pre.collision_energy {
+            if pre.ce_is_nce {
                 writeln!(
                     out,
                     r#"              <cvParam cvRef="MS" accession="MS:1002013" name="normalized collision energy" value="{:.2}"/>"#,
@@ -1134,8 +1140,8 @@ fn write_spectrum<W: Write>(
     // Binary arrays
     let n_arrays: usize = if n_peaks > 0 { 2 } else { 0 };
     if n_arrays > 0 {
-        let mz_b64 = encode_f64_array(mz_vals);
-        let int_b64 = encode_f32_array(int_vals);
+        let mz_b64 = encode_f64_array(&rec.mz);
+        let int_b64 = encode_f32_array(&rec.intensity);
 
         writeln!(out, r#"        <binaryDataArrayList count="{n_arrays}">"#)?;
 
