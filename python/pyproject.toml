@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "opentfraw"
 version = "1.0.1"
 description = "Rust parser for Thermo Fisher RAW mass spectrometry files"
-readme = "README.md"
+readme = "../README.md"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Nathan Riley", email = "git@nathanriley.com" }]
 requires-python = ">=3.8"
