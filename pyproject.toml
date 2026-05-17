@@ -1,0 +1,36 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "opentfraw"
+description = "Rust parser for Thermo Fisher RAW mass spectrometry files"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Nathan Riley", email = "git@nathanriley.com" }]
+requires-python = ">=3.8"
+dynamic = ["version"]
+dependencies = ["numpy>=1.20"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "License :: OSI Approved :: Apache Software License",
+]
+
+[project.urls]
+Homepage = "https://github.com/Sigilweaver/OpenTFRaw"
+Documentation = "https://sigilweaver.app/opentfraw/docs"
+Source = "https://github.com/Sigilweaver/OpenTFRaw"
+Changelog = "https://github.com/Sigilweaver/OpenTFRaw/blob/main/CHANGELOG.md"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "opentfraw"
+manifest-path = "crates/opentfraw-py/Cargo.toml"
+include = [
+    { path = "LICENSE", format = "sdist" },
+    { path = "README.md", format = "sdist" },
+    { path = "CHANGELOG.md", format = "sdist" },
+    { path = "README.md", format = "wheel" },
+]
