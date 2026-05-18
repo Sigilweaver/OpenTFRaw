@@ -516,6 +516,7 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
             software_name: SOFTWARE_NAME.into(),
             software_version: SOFTWARE_VERSION.into(),
             start_timestamp: None,
+            mobility_array_kind: None,
         }
     }
 
