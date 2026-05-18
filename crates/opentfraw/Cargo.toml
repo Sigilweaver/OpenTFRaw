@@ -17,5 +17,6 @@ unsafe_code = "forbid"
 
 [dependencies]
 thiserror = "2"
+mass-spec-core = { workspace = true }
 
 [dev-dependencies]
