@@ -1,5 +1,5 @@
 //! Conformance harness: every spectrum produced by `OpenTfRawSource`
-//! must satisfy the invariants in `mass-spec-core`.
+//! must satisfy the invariants in `openproteo-core`.
 //!
 //! Looks for a small Thermo `.raw` fixture in
 //! `corpus/thermo/PXD068962_Q_Exactive_UHMR_insource-CID.raw`
@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
 
-use mass_spec_core::conformance::assert_source_invariants;
+use openproteo_core::conformance::assert_source_invariants;
 use opentfraw::{mzml::OpenTfRawSource, RawFileReader};
 
 fn fixture() -> Option<PathBuf> {

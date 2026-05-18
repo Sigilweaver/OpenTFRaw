@@ -306,15 +306,15 @@ fn resolve_scan_arrays<R: Read + Seek>(
 
 // ─── Adapter / canonical writer wrappers ─────────────────────────────────────
 //
-// The mzML emission machinery itself lives in `mass_spec_core`. Here we
+// The mzML emission machinery itself lives in `openproteo_core`. Here we
 // define a `SpectrumSource` adapter that pulls Thermo scans through
 // `extract_spectrum` and converts each opentfraw `SpectrumRecord` into the
-// vendor-neutral `mass_spec_core::SpectrumRecord` the canonical writer
+// vendor-neutral `openproteo_core::SpectrumRecord` the canonical writer
 // consumes. This keeps opentfraw's public mzML API stable and byte-identical
 // to the pre-migration output, while sharing the writer with the other
 // vendors.
 
-use mass_spec_core as msc;
+use openproteo_core as msc;
 
 const SOFTWARE_NAME: &str = "opentfraw";
 // Pinned for byte-identical output across crate version bumps. The mzML
@@ -480,7 +480,7 @@ fn to_msc_record(rec: SpectrumRecord) -> msc::SpectrumRecord {
 /// `SpectrumSource` adapter over a Thermo RAW reader.
 ///
 /// Use this when you want to feed Thermo data into any
-/// `mass_spec_core`-shaped consumer (the canonical mzML writer, a column
+/// `openproteo_core`-shaped consumer (the canonical mzML writer, a column
 /// store ingester, future Arrow bridge, ...). For the common case of "I just
 /// want mzML out", call [`write_mzml`] or [`write_indexed_mzml`] directly.
 pub struct OpenTfRawSource<'a, R: Read + Seek> {
