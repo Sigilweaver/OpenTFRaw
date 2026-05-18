@@ -245,188 +245,97 @@ pub fn iter_spectra<'a, R: Read + Seek>(
         None
     })
 }
+// ─── Helpers used by extract_spectrum ───────────────────────────────────────
 
-// ─── Byte-counting Write wrapper ─────────────────────────────────────────────
-
-struct CountingWriter<'a, W: Write> {
-    inner: &'a mut W,
-    pos: u64,
-    sha1: Sha1,
-    hashing: bool,
-}
-
-impl<'a, W: Write> CountingWriter<'a, W> {
-    fn new(inner: &'a mut W) -> Self {
-        Self {
-            inner,
-            pos: 0,
-            sha1: Sha1::new(),
-            hashing: true,
-        }
+fn ms_level(power: MsPower) -> u32 {
+    match power {
+        MsPower::Undefined => 1,
+        MsPower::Ms1 => 1,
+        MsPower::Ms2 => 2,
+        MsPower::Ms3 => 3,
+        MsPower::Ms4 => 4,
+        MsPower::Ms5 => 5,
+        MsPower::Ms6 => 6,
+        MsPower::Ms7 => 7,
+        MsPower::Ms8 => 8,
     }
 }
 
-impl<W: Write> Write for CountingWriter<'_, W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let n = self.inner.write(buf)?;
-        self.pos += n as u64;
-        if self.hashing {
-            self.sha1.update(&buf[..n]);
+/// Resolve the m/z and intensity arrays for a single scan.
+///
+/// When `include_profile=true` AND the scan packet contains profile data, the
+/// profile signal is decoded and returned as the primary arrays (with
+/// `effective_scan_mode = Some(ScanMode::Profile)`). Otherwise the centroid
+/// peak list is used.
+///
+/// Returns `None` when the scan cannot be read (caller should skip it).
+fn resolve_scan_arrays<R: Read + Seek>(
+    raw: &RawFileReader,
+    source: &mut R,
+    scan_number: u32,
+    include_profile: bool,
+    event: Option<&ScanEvent>,
+    nominal_scan_mode: Option<crate::ScanMode>,
+) -> Option<(Vec<f64>, Vec<f32>, Option<crate::ScanMode>)> {
+    if include_profile && !raw.flat_peaks {
+        let packet = raw.read_scan(source, scan_number).ok()?;
+        if let Some(profile) = packet.profile {
+            let coeffs = event.map(|e| e.coefficients.as_slice()).unwrap_or(&[]);
+            let pairs = profile.to_mz_intensity(coeffs);
+            let mz: Vec<f64> = pairs
+                .iter()
+                .filter(|(m, _)| *m > 0.0)
+                .map(|(m, _)| *m)
+                .collect();
+            let int: Vec<f32> = pairs
+                .iter()
+                .filter(|(m, _)| *m > 0.0)
+                .map(|(_, i)| *i as f32)
+                .collect();
+            return Some((mz, int, Some(crate::ScanMode::Profile)));
         }
-        Ok(n)
+        let mz: Vec<f64> = packet.peaks.iter().map(|p| p.mz).collect();
+        let int: Vec<f32> = packet.peaks.iter().map(|p| p.abundance).collect();
+        return Some((mz, int, nominal_scan_mode));
     }
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush()
-    }
+    let peaks = raw.read_peaks_only(source, scan_number).ok()?;
+    let mz: Vec<f64> = peaks.iter().map(|p| p.mz).collect();
+    let int: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
+    Some((mz, int, nominal_scan_mode))
 }
 
-// ─── Minimal SHA-1 (RFC 3174) ─────────────────────────────────────────────────
+// ─── Adapter / canonical writer wrappers ─────────────────────────────────────
+//
+// The mzML emission machinery itself lives in `mass_spec_core`. Here we
+// define a `SpectrumSource` adapter that pulls Thermo scans through
+// `extract_spectrum` and converts each opentfraw `SpectrumRecord` into the
+// vendor-neutral `mass_spec_core::SpectrumRecord` the canonical writer
+// consumes. This keeps opentfraw's public mzML API stable and byte-identical
+// to the pre-migration output, while sharing the writer with the other
+// vendors.
 
-struct Sha1 {
-    state: [u32; 5],
-    count: u64,
-    buf: [u8; 64],
-    buf_len: usize,
+use mass_spec_core as msc;
+
+const SOFTWARE_NAME: &str = "opentfraw";
+// Pinned for byte-identical output across crate version bumps. The mzML
+// `<software version=...>` is informational; downstream tools do not key off
+// it. If you change this, also update the conformance baseline.
+const SOFTWARE_VERSION: &str = "0.1.0";
+
+/// PSI-MS CV term for the source file format (Thermo RAW).
+fn source_file_format_cv() -> msc::CvTerm {
+    msc::CvTerm::new("MS:1000563", "Thermo RAW format")
 }
 
-impl Sha1 {
-    fn new() -> Self {
-        Self {
-            state: [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0],
-            count: 0,
-            buf: [0u8; 64],
-            buf_len: 0,
-        }
-    }
-
-    fn update(&mut self, data: &[u8]) {
-        let mut off = 0;
-        while off < data.len() {
-            let space = 64 - self.buf_len;
-            let take = space.min(data.len() - off);
-            self.buf[self.buf_len..self.buf_len + take].copy_from_slice(&data[off..off + take]);
-            self.buf_len += take;
-            self.count += take as u64;
-            off += take;
-            if self.buf_len == 64 {
-                self.compress();
-                self.buf_len = 0;
-            }
-        }
-    }
-
-    fn compress(&mut self) {
-        let mut w = [0u32; 80];
-        for (i, word) in w.iter_mut().enumerate().take(16) {
-            *word = u32::from_be_bytes(self.buf[i * 4..i * 4 + 4].try_into().unwrap());
-        }
-        for i in 16..80 {
-            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
-        }
-        let [mut a, mut b, mut c, mut d, mut e] = self.state;
-        for (i, &wi) in w.iter().enumerate() {
-            let (f, k) = match i {
-                0..=19 => ((b & c) | (!b & d), 0x5A827999u32),
-                20..=39 => (b ^ c ^ d, 0x6ED9EBA1),
-                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1BBCDC),
-                _ => (b ^ c ^ d, 0xCA62C1D6),
-            };
-            let temp = a
-                .rotate_left(5)
-                .wrapping_add(f)
-                .wrapping_add(e)
-                .wrapping_add(k)
-                .wrapping_add(wi);
-            e = d;
-            d = c;
-            c = b.rotate_left(30);
-            b = a;
-            a = temp;
-        }
-        self.state[0] = self.state[0].wrapping_add(a);
-        self.state[1] = self.state[1].wrapping_add(b);
-        self.state[2] = self.state[2].wrapping_add(c);
-        self.state[3] = self.state[3].wrapping_add(d);
-        self.state[4] = self.state[4].wrapping_add(e);
-    }
-
-    fn finalize(mut self) -> [u8; 20] {
-        let bit_count = self.count * 8;
-        self.update(&[0x80]);
-        while self.buf_len != 56 {
-            self.update(&[0u8]);
-        }
-        self.update(&bit_count.to_be_bytes());
-        let mut digest = [0u8; 20];
-        for (i, &word) in self.state.iter().enumerate() {
-            digest[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
-        }
-        digest
-    }
+/// PSI-MS CV term for the native ID format used by Thermo.
+fn native_id_format_cv() -> msc::CvTerm {
+    msc::CvTerm::new("MS:1000768", "Thermo nativeID format")
 }
 
-// ─── Base64 (RFC 4648 §4, no line wrapping) ─────────────────────────────────
-
-const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-fn base64_encode(data: &[u8]) -> String {
-    let n = data.len();
-    let mut out = Vec::with_capacity(n.div_ceil(3) * 4);
-    let mut i = 0;
-    while i + 2 < n {
-        let b = ((data[i] as u32) << 16) | ((data[i + 1] as u32) << 8) | (data[i + 2] as u32);
-        out.push(B64[((b >> 18) & 0x3f) as usize]);
-        out.push(B64[((b >> 12) & 0x3f) as usize]);
-        out.push(B64[((b >> 6) & 0x3f) as usize]);
-        out.push(B64[(b & 0x3f) as usize]);
-        i += 3;
-    }
-    if n - i == 2 {
-        let b = ((data[i] as u32) << 16) | ((data[i + 1] as u32) << 8);
-        out.push(B64[((b >> 18) & 0x3f) as usize]);
-        out.push(B64[((b >> 12) & 0x3f) as usize]);
-        out.push(B64[((b >> 6) & 0x3f) as usize]);
-        out.push(b'=');
-    } else if n - i == 1 {
-        let b = (data[i] as u32) << 16;
-        out.push(B64[((b >> 18) & 0x3f) as usize]);
-        out.push(B64[((b >> 12) & 0x3f) as usize]);
-        out.push(b'=');
-        out.push(b'=');
-    }
-    // SAFETY: all bytes written are 7-bit ASCII, which is valid UTF-8.
-    String::from_utf8(out).expect("base64 output is ASCII")
-}
-
-// ─── Encode f64 and f32 arrays to base64 ────────────────────────────────────
-
-fn encode_f64_array(vals: &[f64]) -> String {
-    let bytes: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
-    base64_encode(&bytes)
-}
-
-fn encode_f32_array(vals: &[f32]) -> String {
-    let bytes: Vec<u8> = vals.iter().flat_map(|v| v.to_le_bytes()).collect();
-    base64_encode(&bytes)
-}
-
-// ─── XML helpers ─────────────────────────────────────────────────────────────
-
-fn escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
-// ─── Instrument model → PSI-MS CV accession ─────────────────────────────────
-
-fn instrument_cv(raw: &RawFileReader) -> (&'static str, &'static str) {
-    // Returns (accession, name). Prefer the specific model name when available.
+/// Resolve the instrument CV term for `raw` (lookup mirrors the historical
+/// in-crate writer; expands as new Thermo models appear in the corpus).
+fn instrument_cv(raw: &RawFileReader) -> msc::CvTerm {
     if let Some(model) = raw.instrument_model {
-        // Map known Thermo model names to PSI-MS CV terms where possible.
-        // Accessions from psi-ms.obo (instrument model branch MS:1000031).
         let known: &[(&str, &str, &str)] = &[
             ("Orbitrap Astral", "MS:1003355", "Orbitrap Astral"),
             ("Orbitrap Ascend", "MS:1003028", "Orbitrap Ascend"),
@@ -477,118 +386,171 @@ fn instrument_cv(raw: &RawFileReader) -> (&'static str, &'static str) {
         ];
         for (prefix, acc, name) in known {
             if model.starts_with(prefix) {
-                return (acc, name);
+                return msc::CvTerm::new(acc, *name);
             }
         }
     }
-    ("MS:1000483", "Thermo Fisher Scientific instrument model")
+    msc::CvTerm::new("MS:1000483", "Thermo Fisher Scientific instrument model")
 }
 
-// ─── MS level from MsPower ───────────────────────────────────────────────────
+fn convert_polarity(p: Option<Polarity>) -> Option<msc::Polarity> {
+    p.map(|p| match p {
+        Polarity::Negative => msc::Polarity::Negative,
+        Polarity::Positive => msc::Polarity::Positive,
+    })
+}
 
-fn ms_level(power: MsPower) -> u32 {
-    match power {
-        MsPower::Undefined => 1,
-        MsPower::Ms1 => 1,
-        MsPower::Ms2 => 2,
-        MsPower::Ms3 => 3,
-        MsPower::Ms4 => 4,
-        MsPower::Ms5 => 5,
-        MsPower::Ms6 => 6,
-        MsPower::Ms7 => 7,
-        MsPower::Ms8 => 8,
+fn convert_scan_mode(m: Option<crate::ScanMode>) -> Option<msc::ScanMode> {
+    m.map(|m| match m {
+        crate::ScanMode::Centroid => msc::ScanMode::Centroid,
+        crate::ScanMode::Profile => msc::ScanMode::Profile,
+    })
+}
+
+fn convert_analyzer(a: Option<crate::Analyzer>) -> Option<msc::Analyzer> {
+    a.map(|a| match a {
+        crate::Analyzer::ITMS => msc::Analyzer::ITMS,
+        crate::Analyzer::TQMS => msc::Analyzer::TQMS,
+        crate::Analyzer::SQMS => msc::Analyzer::SQMS,
+        crate::Analyzer::TOFMS => msc::Analyzer::TOFMS,
+        crate::Analyzer::FTMS => msc::Analyzer::FTMS,
+        crate::Analyzer::Sector => msc::Analyzer::Sector,
+    })
+}
+
+fn convert_activation(a: Option<Activation>) -> Option<msc::Activation> {
+    a.map(|a| match a {
+        Activation::HCD => msc::Activation::HCD,
+        Activation::MPID => msc::Activation::MPID,
+        Activation::ETD => msc::Activation::ETD,
+        Activation::CID => msc::Activation::CID,
+        Activation::ECD => msc::Activation::ECD,
+        Activation::IRMPD => msc::Activation::IRMPD,
+        Activation::PD => msc::Activation::PD,
+        Activation::PQD => msc::Activation::PQD,
+        Activation::UVPD => msc::Activation::UVPD,
+        Activation::SID => msc::Activation::SID,
+        Activation::EThcD => msc::Activation::EThcD,
+    })
+}
+
+/// Thermo native ID string for `scan_number`.
+fn native_id_for(scan_number: u32) -> String {
+    format!("controllerType=0 controllerNumber=1 scan={scan_number}")
+}
+
+fn to_msc_record(rec: SpectrumRecord) -> msc::SpectrumRecord {
+    let precursor = rec.precursor.map(|p| msc::PrecursorInfo {
+        target_mz: p.target_mz,
+        selected_mz: p.selected_mz,
+        isolation_width: p.isolation_width,
+        charge: p.charge,
+        intensity: None,
+        collision_energy: p.collision_energy,
+        ce_is_nce: p.ce_is_nce,
+        precursor_native_id: p.master_scan_number.map(native_id_for),
+        activation: convert_activation(p.activation),
+        analyzer: convert_analyzer(p.analyzer),
+    });
+    msc::SpectrumRecord {
+        index: rec.index,
+        scan_number: rec.scan_number,
+        native_id: native_id_for(rec.scan_number),
+        ms_level: rec.ms_level,
+        polarity: convert_polarity(rec.polarity),
+        scan_mode: convert_scan_mode(rec.scan_mode),
+        analyzer: None, // Per-spectrum analyzer is rarely useful here; the
+        // precursor's analyzer is what matters for CID/HCD CV resolution.
+        filter: rec.filter,
+        retention_time_sec: rec.retention_time_min * 60.0,
+        total_ion_current: Some(rec.total_ion_current),
+        base_peak_mz: Some(rec.base_peak_mz),
+        base_peak_intensity: Some(rec.base_peak_intensity),
+        low_mz: Some(rec.low_mz),
+        high_mz: Some(rec.high_mz),
+        ion_injection_time_ms: rec.ion_injection_time_ms,
+        inv_mobility: None,
+        precursor,
+        mz: rec.mz,
+        intensity: rec.intensity,
+        inv_mobility_per_peak: None,
     }
 }
 
-// ─── Activation method → CV accession ────────────────────────────────────────
-
-fn activation_cv(
-    act: Activation,
-    analyzer: Option<crate::Analyzer>,
-) -> (&'static str, &'static str) {
-    match act {
-        Activation::HCD => ("MS:1000422", "beam-type collision-induced dissociation"),
-        Activation::ETD | Activation::EThcD => ("MS:1000598", "electron transfer dissociation"),
-        // On FTMS instruments (Orbitrap, FT-ICR) byte=4 is beam-type CID (HCD),
-        // not ion-trap CID. Mirror the same logic as the scan-filter builder.
-        Activation::CID => match analyzer {
-            Some(crate::Analyzer::FTMS) => {
-                ("MS:1000422", "beam-type collision-induced dissociation")
-            }
-            _ => ("MS:1000133", "collision-induced dissociation"),
-        },
-        Activation::MPID => (
-            "MS:1002481",
-            "supplemental beam-type collision-induced dissociation",
-        ),
-        Activation::ECD => ("MS:1000250", "electron capture dissociation"),
-        Activation::IRMPD => ("MS:1000262", "infrared multiphoton dissociation"),
-        Activation::PD => ("MS:1001880", "in-source collision-induced dissociation"),
-        Activation::PQD => ("MS:1000599", "pulsed q dissociation"),
-        Activation::UVPD => ("MS:1003246", "ultraviolet photodissociation"),
-        Activation::SID => ("MS:1000422", "beam-type collision-induced dissociation"),
-    }
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/// Resolve the m/z and intensity arrays for a single scan.
+/// `SpectrumSource` adapter over a Thermo RAW reader.
 ///
-/// When `include_profile=true` AND the scan packet contains profile data, the
-/// profile signal is decoded and returned as the primary arrays (with
-/// `effective_scan_mode = Some(ScanMode::Profile)`). Otherwise the centroid
-/// peak list is used.
-///
-/// Returns `None` when the scan cannot be read (caller should skip it).
-fn resolve_scan_arrays<R: Read + Seek>(
-    raw: &RawFileReader,
-    source: &mut R,
-    scan_number: u32,
+/// Use this when you want to feed Thermo data into any
+/// `mass_spec_core`-shaped consumer (the canonical mzML writer, a column
+/// store ingester, future Arrow bridge, ...). For the common case of "I just
+/// want mzML out", call [`write_mzml`] or [`write_indexed_mzml`] directly.
+pub struct OpenTfRawSource<'a, R: Read + Seek> {
+    raw: &'a RawFileReader,
+    source: &'a mut R,
+    raw_filename: &'a str,
     include_profile: bool,
-    event: Option<&ScanEvent>,
-    nominal_scan_mode: Option<crate::ScanMode>,
-) -> Option<(Vec<f64>, Vec<f32>, Option<crate::ScanMode>)> {
-    if include_profile && !raw.flat_peaks {
-        let packet = raw.read_scan(source, scan_number).ok()?;
-        if let Some(profile) = packet.profile {
-            let coeffs = event.map(|e| e.coefficients.as_slice()).unwrap_or(&[]);
-            let pairs = profile.to_mz_intensity(coeffs);
-            // Filter out zero or negative m/z bins (can appear at edges of chunks).
-            let mz: Vec<f64> = pairs
-                .iter()
-                .filter(|(m, _)| *m > 0.0)
-                .map(|(m, _)| *m)
-                .collect();
-            let int: Vec<f32> = pairs
-                .iter()
-                .filter(|(m, _)| *m > 0.0)
-                .map(|(_, i)| *i as f32)
-                .collect();
-            return Some((mz, int, Some(crate::ScanMode::Profile)));
-        }
-        // No profile data in packet - fall through to centroid.
-        let mz: Vec<f64> = packet.peaks.iter().map(|p| p.mz).collect();
-        let int: Vec<f32> = packet.peaks.iter().map(|p| p.abundance).collect();
-        return Some((mz, int, nominal_scan_mode));
-    }
-    // Default path: fast centroid-only read.
-    let peaks = raw.read_peaks_only(source, scan_number).ok()?;
-    let mz: Vec<f64> = peaks.iter().map(|p| p.mz).collect();
-    let int: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
-    Some((mz, int, nominal_scan_mode))
 }
 
-// ─── Main entry point ─────────────────────────────────────────────────────────
+impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
+    pub fn new(
+        raw: &'a RawFileReader,
+        source: &'a mut R,
+        raw_filename: &'a str,
+        include_profile: bool,
+    ) -> Self {
+        Self {
+            raw,
+            source,
+            raw_filename,
+            include_profile,
+        }
+    }
+}
+
+impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
+    fn run_metadata(&self) -> msc::RunMetadata {
+        msc::RunMetadata {
+            source_file_name: self.raw_filename.to_string(),
+            source_file_format: source_file_format_cv(),
+            native_id_format: native_id_format_cv(),
+            instrument: instrument_cv(self.raw),
+            software_name: SOFTWARE_NAME.into(),
+            software_version: SOFTWARE_VERSION.into(),
+            start_timestamp: None,
+        }
+    }
+
+    fn iter_spectra<'s>(&'s mut self) -> Box<dyn Iterator<Item = msc::SpectrumRecord> + 's> {
+        let n = self.raw.num_scans;
+        let raw = self.raw;
+        let source = &mut *self.source;
+        let include_profile = self.include_profile;
+        let mut idx: u32 = 0;
+        Box::new(std::iter::from_fn(move || {
+            while idx < n {
+                let cur = idx;
+                idx += 1;
+                if let Some(rec) = extract_spectrum(raw, source, cur, include_profile) {
+                    return Some(to_msc_record(rec));
+                }
+            }
+            None
+        }))
+    }
+
+    fn spectrum_count_hint(&self) -> Option<usize> {
+        Some(self.raw.num_scans as usize)
+    }
+}
+
+// ─── Public mzML entry points (unchanged signatures) ─────────────────────────
 
 /// Write the contents of `raw` as mzML 1.1.0 to `out`.
 ///
 /// * `source` - an open handle to the original `.raw` file (needed to read
 ///   scan data packets).
 /// * `raw_filename` - the file name used for the `<sourceFile>` element.
-///   Typically `Path::file_name()`.
-/// * `include_profile` - when `true`, profile-mode scans (Orbitrap MS1,
-///   etc.) export the raw profile signal instead of the centroid peak list.
-///   Centroid-mode scans are unaffected.
+/// * `include_profile` - when `true`, profile-mode scans export the raw
+///   profile signal instead of the centroid peak list.
 ///
 /// All spectra are written; no filtering is applied. Scans for which peak
 /// data cannot be read are skipped silently.
@@ -603,124 +565,8 @@ where
     R: Read + Seek,
     W: Write,
 {
-    let n_spectra = raw.num_scans as usize;
-
-    let (inst_acc, inst_name) = instrument_cv(raw);
-
-    // ── XML declaration + root ─────────────────────────────────────────────
-    writeln!(out, r#"<?xml version="1.0" encoding="utf-8"?>"#)?;
-    writeln!(out, r#"<mzML xmlns="http://psi.hupo.org/ms/mzml""#)?;
-    writeln!(
-        out,
-        r#"      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance""#
-    )?;
-    writeln!(
-        out,
-        r#"      xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.2_idx.xsd""#
-    )?;
-    writeln!(out, r#"      version="1.1.0">"#)?;
-
-    // ── cvList ─────────────────────────────────────────────────────────────
-    writeln!(out, r#"  <cvList count="2">"#)?;
-    writeln!(
-        out,
-        r#"    <cv id="MS" fullName="Proteomics Standards Initiative Mass Spectrometry Ontology" version="4.1.100" URI="https://raw.githubusercontent.com/HUPO-PSI/psi-ms-CV/master/psi-ms.obo"/>"#
-    )?;
-    writeln!(
-        out,
-        r#"    <cv id="UO" fullName="Unit Ontology" version="09:04:2014" URI="https://raw.githubusercontent.com/bio-ontology-research-group/unit-ontology/master/unit.obo"/>"#
-    )?;
-    writeln!(out, r#"  </cvList>"#)?;
-
-    // ── fileDescription ────────────────────────────────────────────────────
-    writeln!(out, r#"  <fileDescription>"#)?;
-    writeln!(out, r#"    <fileContent>"#)?;
-    writeln!(
-        out,
-        r#"      <cvParam cvRef="MS" accession="MS:1000579" name="MS1 spectrum" value=""/>"#
-    )?;
-    writeln!(
-        out,
-        r#"      <cvParam cvRef="MS" accession="MS:1000580" name="MSn spectrum" value=""/>"#
-    )?;
-    writeln!(out, r#"    </fileContent>"#)?;
-    writeln!(out, r#"    <sourceFileList count="1">"#)?;
-    writeln!(
-        out,
-        r#"      <sourceFile id="sf1" name="{}" location="">"#,
-        escape(raw_filename)
-    )?;
-    writeln!(
-        out,
-        r#"        <cvParam cvRef="MS" accession="MS:1000563" name="Thermo RAW format" value=""/>"#
-    )?;
-    writeln!(
-        out,
-        r#"        <cvParam cvRef="MS" accession="MS:1000768" name="Thermo nativeID format" value=""/>"#
-    )?;
-    writeln!(out, r#"      </sourceFile>"#)?;
-    writeln!(out, r#"    </sourceFileList>"#)?;
-    writeln!(out, r#"  </fileDescription>"#)?;
-
-    // ── softwareList ───────────────────────────────────────────────────────
-    writeln!(out, r#"  <softwareList count="1">"#)?;
-    writeln!(out, r#"    <software id="opentfraw" version="0.1.0">"#)?;
-    writeln!(
-        out,
-        r#"      <cvParam cvRef="MS" accession="MS:1000799" name="custom unreleased software tool" value="opentfraw"/>"#
-    )?;
-    writeln!(out, r#"    </software>"#)?;
-    writeln!(out, r#"  </softwareList>"#)?;
-
-    // ── instrumentConfigurationList ────────────────────────────────────────
-    writeln!(out, r#"  <instrumentConfigurationList count="1">"#)?;
-    writeln!(out, r#"    <instrumentConfiguration id="IC1">"#)?;
-    writeln!(
-        out,
-        r#"      <cvParam cvRef="MS" accession="{}" name="{}" value=""/>"#,
-        inst_acc,
-        escape(inst_name)
-    )?;
-    writeln!(out, r#"    </instrumentConfiguration>"#)?;
-    writeln!(out, r#"  </instrumentConfigurationList>"#)?;
-
-    // ── dataProcessingList ─────────────────────────────────────────────────
-    writeln!(out, r#"  <dataProcessingList count="1">"#)?;
-    writeln!(out, r#"    <dataProcessing id="dp1">"#)?;
-    writeln!(
-        out,
-        r#"      <processingMethod order="0" softwareRef="opentfraw">"#
-    )?;
-    writeln!(
-        out,
-        r#"        <cvParam cvRef="MS" accession="MS:1000544" name="Conversion to mzML" value=""/>"#
-    )?;
-    writeln!(out, r#"      </processingMethod>"#)?;
-    writeln!(out, r#"    </dataProcessing>"#)?;
-    writeln!(out, r#"  </dataProcessingList>"#)?;
-
-    // ── run ────────────────────────────────────────────────────────────────
-    writeln!(
-        out,
-        r#"  <run id="{}" defaultInstrumentConfigurationRef="IC1" defaultSourceFileRef="sf1">"#,
-        escape(raw_filename)
-    )?;
-    writeln!(
-        out,
-        r#"    <spectrumList count="{}" defaultDataProcessingRef="dp1">"#,
-        n_spectra
-    )?;
-
-    // ── spectra ────────────────────────────────────────────────────────────
-    for idx in 0..raw.num_scans {
-        if let Some(rec) = extract_spectrum(raw, source, idx, include_profile) {
-            write_spectrum(out, &rec)?;
-        }
-    }
-
-    writeln!(out, r#"    </spectrumList>"#)?;
-    writeln!(out, r#"  </run>"#)?;
-    writeln!(out, r#"</mzML>"#)?;
+    let mut src = OpenTfRawSource::new(raw, source, raw_filename, include_profile);
+    msc::write_mzml(&mut src, out)?;
     Ok(())
 }
 
@@ -728,13 +574,9 @@ where
 ///
 /// Indexed mzML adds a `<indexList>` element after all spectra with the byte
 /// offset of each `<spectrum>` element, enabling random-access parsing by
-/// tools such as pyteomics and pymzml without a full file scan.
-///
-/// The `<fileChecksum>` element contains the SHA-1 hash of the file content
-/// up to and including `</indexList>`, computed on the fly.
-///
-/// Pass `include_profile=true` to export raw profile signal for profile-mode
-/// scans instead of centroid peaks.
+/// tools such as pyteomics and pymzml without a full file scan. The
+/// `<fileChecksum>` element contains the SHA-1 hash of the file content up
+/// to and including `</indexList>`.
 pub fn write_indexed_mzml<R, W>(
     raw: &RawFileReader,
     source: &mut R,
@@ -746,465 +588,7 @@ where
     R: Read + Seek,
     W: Write,
 {
-    let n_spectra = raw.num_scans as usize;
-    let (inst_acc, inst_name) = instrument_cv(raw);
-
-    // CountingWriter tracks byte offsets and feeds bytes into SHA-1 while hashing=true.
-    let mut cw = CountingWriter::new(out);
-
-    // ── XML declaration + root (indexedmzML wrapper) ───────────────────────
-    writeln!(cw, r#"<?xml version="1.0" encoding="utf-8"?>"#)?;
-    writeln!(cw, r#"<indexedmzML xmlns="http://psi.hupo.org/ms/mzml""#)?;
-    writeln!(
-        cw,
-        r#"             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance""#
-    )?;
-    writeln!(
-        cw,
-        r#"             xsi:schemaLocation="http://psi.hupo.org/ms/mzml http://psidev.info/files/ms/mzML/xsd/mzML1.1.2_idx.xsd">"#
-    )?;
-    writeln!(
-        cw,
-        r#"  <mzML xmlns="http://psi.hupo.org/ms/mzml" version="1.1.0">"#
-    )?;
-
-    // ── cvList ─────────────────────────────────────────────────────────────
-    writeln!(cw, r#"  <cvList count="2">"#)?;
-    writeln!(
-        cw,
-        r#"    <cv id="MS" fullName="Proteomics Standards Initiative Mass Spectrometry Ontology" version="4.1.100" URI="https://raw.githubusercontent.com/HUPO-PSI/psi-ms-CV/master/psi-ms.obo"/>"#
-    )?;
-    writeln!(
-        cw,
-        r#"    <cv id="UO" fullName="Unit Ontology" version="09:04:2014" URI="https://raw.githubusercontent.com/bio-ontology-research-group/unit-ontology/master/unit.obo"/>"#
-    )?;
-    writeln!(cw, r#"  </cvList>"#)?;
-
-    // ── fileDescription ────────────────────────────────────────────────────
-    writeln!(cw, r#"  <fileDescription>"#)?;
-    writeln!(cw, r#"    <fileContent>"#)?;
-    writeln!(
-        cw,
-        r#"      <cvParam cvRef="MS" accession="MS:1000579" name="MS1 spectrum" value=""/>"#
-    )?;
-    writeln!(
-        cw,
-        r#"      <cvParam cvRef="MS" accession="MS:1000580" name="MSn spectrum" value=""/>"#
-    )?;
-    writeln!(cw, r#"    </fileContent>"#)?;
-    writeln!(cw, r#"    <sourceFileList count="1">"#)?;
-    writeln!(
-        cw,
-        r#"      <sourceFile id="sf1" name="{}" location="">"#,
-        escape(raw_filename)
-    )?;
-    writeln!(
-        cw,
-        r#"        <cvParam cvRef="MS" accession="MS:1000563" name="Thermo RAW format" value=""/>"#
-    )?;
-    writeln!(
-        cw,
-        r#"        <cvParam cvRef="MS" accession="MS:1000768" name="Thermo nativeID format" value=""/>"#
-    )?;
-    writeln!(cw, r#"      </sourceFile>"#)?;
-    writeln!(cw, r#"    </sourceFileList>"#)?;
-    writeln!(cw, r#"  </fileDescription>"#)?;
-
-    // ── softwareList ───────────────────────────────────────────────────────
-    writeln!(cw, r#"  <softwareList count="1">"#)?;
-    writeln!(cw, r#"    <software id="opentfraw" version="0.1.0">"#)?;
-    writeln!(
-        cw,
-        r#"      <cvParam cvRef="MS" accession="MS:1000799" name="custom unreleased software tool" value="opentfraw"/>"#
-    )?;
-    writeln!(cw, r#"    </software>"#)?;
-    writeln!(cw, r#"  </softwareList>"#)?;
-
-    // ── instrumentConfigurationList ────────────────────────────────────────
-    writeln!(cw, r#"  <instrumentConfigurationList count="1">"#)?;
-    writeln!(cw, r#"    <instrumentConfiguration id="IC1">"#)?;
-    writeln!(
-        cw,
-        r#"      <cvParam cvRef="MS" accession="{}" name="{}" value=""/>"#,
-        inst_acc,
-        escape(inst_name)
-    )?;
-    writeln!(cw, r#"    </instrumentConfiguration>"#)?;
-    writeln!(cw, r#"  </instrumentConfigurationList>"#)?;
-
-    // ── dataProcessingList ─────────────────────────────────────────────────
-    writeln!(cw, r#"  <dataProcessingList count="1">"#)?;
-    writeln!(cw, r#"    <dataProcessing id="dp1">"#)?;
-    writeln!(
-        cw,
-        r#"      <processingMethod order="0" softwareRef="opentfraw">"#
-    )?;
-    writeln!(
-        cw,
-        r#"        <cvParam cvRef="MS" accession="MS:1000544" name="Conversion to mzML" value=""/>"#
-    )?;
-    writeln!(cw, r#"      </processingMethod>"#)?;
-    writeln!(cw, r#"    </dataProcessing>"#)?;
-    writeln!(cw, r#"  </dataProcessingList>"#)?;
-
-    // ── run ────────────────────────────────────────────────────────────────
-    writeln!(
-        cw,
-        r#"  <run id="{}" defaultInstrumentConfigurationRef="IC1" defaultSourceFileRef="sf1">"#,
-        escape(raw_filename)
-    )?;
-    writeln!(
-        cw,
-        r#"    <spectrumList count="{}" defaultDataProcessingRef="dp1">"#,
-        n_spectra
-    )?;
-
-    // ── spectra (record byte offset before each <spectrum>) ────────────────
-    let mut spectrum_offsets: Vec<(u32, u64)> = Vec::with_capacity(n_spectra);
-    for idx in 0..raw.num_scans {
-        let rec = match extract_spectrum(raw, source, idx, include_profile) {
-            Some(r) => r,
-            None => continue,
-        };
-        spectrum_offsets.push((rec.scan_number, cw.pos));
-        write_spectrum(&mut cw, &rec)?;
-    }
-
-    writeln!(cw, r#"    </spectrumList>"#)?;
-    writeln!(cw, r#"  </run>"#)?;
-    writeln!(cw, r#"  </mzML>"#)?;
-
-    // ── indexList ──────────────────────────────────────────────────────────
-    let index_list_offset = cw.pos;
-    writeln!(cw, r#"  <indexList count="1">"#)?;
-    writeln!(cw, r#"    <index name="spectrum">"#)?;
-    for (scan_number, offset) in &spectrum_offsets {
-        writeln!(
-            cw,
-            r#"      <offset idRef="controllerType=0 controllerNumber=1 scan={}">{}</offset>"#,
-            scan_number, offset
-        )?;
-    }
-    writeln!(cw, r#"    </index>"#)?;
-    writeln!(cw, r#"  </indexList>"#)?;
-
-    // Stop hashing; compute SHA-1 of everything through </indexList>.
-    cw.hashing = false;
-    let finished_sha1 = std::mem::replace(&mut cw.sha1, Sha1::new());
-    let digest = finished_sha1.finalize();
-    let hex: String = digest.iter().map(|b| format!("{:02x}", b)).collect();
-
-    writeln!(
-        cw,
-        r#"  <indexListOffset>{}</indexListOffset>"#,
-        index_list_offset
-    )?;
-    writeln!(cw, r#"  <fileChecksum>{}</fileChecksum>"#, hex)?;
-    writeln!(cw, r#"</indexedmzML>"#)?;
+    let mut src = OpenTfRawSource::new(raw, source, raw_filename, include_profile);
+    msc::write_indexed_mzml(&mut src, out)?;
     Ok(())
-}
-
-fn write_spectrum<W: Write>(out: &mut W, rec: &SpectrumRecord) -> Result<()> {
-    let spectrum_type_acc = if rec.is_ms1 {
-        ("MS:1000579", "MS1 spectrum")
-    } else {
-        ("MS:1000580", "MSn spectrum")
-    };
-    let n_peaks = rec.mz.len();
-
-    writeln!(
-        out,
-        r#"      <spectrum id="controllerType=0 controllerNumber=1 scan={scan}" index="{idx}" defaultArrayLength="{n}">"#,
-        scan = rec.scan_number,
-        idx = rec.index,
-        n = n_peaks
-    )?;
-    writeln!(
-        out,
-        r#"        <cvParam cvRef="MS" accession="MS:1000511" name="ms level" value="{level}"/>"#,
-        level = rec.ms_level
-    )?;
-    writeln!(
-        out,
-        r#"        <cvParam cvRef="MS" accession="{}" name="{}" value=""/>"#,
-        spectrum_type_acc.0, spectrum_type_acc.1
-    )?;
-
-    // Centroid vs profile. Many downstream tools (e.g. MSFragger) refuse to
-    // process spectra missing this tag, so we emit it unconditionally, falling
-    // back to "profile" (the MS1 default on Orbitrap) when the preamble byte
-    // is missing.
-    match rec.scan_mode {
-        Some(crate::ScanMode::Centroid) => writeln!(
-            out,
-            r#"        <cvParam cvRef="MS" accession="MS:1000127" name="centroid spectrum" value=""/>"#
-        )?,
-        _ => writeln!(
-            out,
-            r#"        <cvParam cvRef="MS" accession="MS:1000128" name="profile spectrum" value=""/>"#
-        )?,
-    }
-
-    // Polarity
-    match rec.polarity {
-        Some(Polarity::Positive) => writeln!(
-            out,
-            r#"        <cvParam cvRef="MS" accession="MS:1000130" name="positive scan" value=""/>"#
-        )?,
-        Some(Polarity::Negative) => writeln!(
-            out,
-            r#"        <cvParam cvRef="MS" accession="MS:1000129" name="negative scan" value=""/>"#
-        )?,
-        _ => {}
-    }
-
-    // Scan-level statistics
-    writeln!(
-        out,
-        r#"        <cvParam cvRef="MS" accession="MS:1000285" name="total ion current" value="{:.6}"/>"#,
-        rec.total_ion_current
-    )?;
-    writeln!(
-        out,
-        r#"        <cvParam cvRef="MS" accession="MS:1000504" name="base peak m/z" value="{:.6}"/>"#,
-        rec.base_peak_mz
-    )?;
-    writeln!(
-        out,
-        r#"        <cvParam cvRef="MS" accession="MS:1000505" name="base peak intensity" value="{:.6}"/>"#,
-        rec.base_peak_intensity
-    )?;
-    writeln!(
-        out,
-        r#"        <cvParam cvRef="MS" accession="MS:1000528" name="lowest observed m/z" value="{:.6}"/>"#,
-        rec.low_mz
-    )?;
-    writeln!(
-        out,
-        r#"        <cvParam cvRef="MS" accession="MS:1000527" name="highest observed m/z" value="{:.6}"/>"#,
-        rec.high_mz
-    )?;
-
-    // Scan list (retention time)
-    writeln!(out, r#"        <scanList count="1">"#)?;
-    writeln!(
-        out,
-        r#"          <cvParam cvRef="MS" accession="MS:1000795" name="no combination" value=""/>"#
-    )?;
-    writeln!(out, r#"          <scan>"#)?;
-
-    // Thermo scan filter string - crucial for downstream tools that key off
-    // the filter (MSFragger, MaxQuant, pyteomics, Skyline, ...).
-    if let Some(f) = rec.filter.as_deref() {
-        if !f.is_empty() {
-            writeln!(
-                out,
-                r#"            <cvParam cvRef="MS" accession="MS:1000512" name="filter string" value="{}"/>"#,
-                escape(f)
-            )?;
-        }
-    }
-
-    writeln!(
-        out,
-        r#"            <cvParam cvRef="MS" accession="MS:1000016" name="scan start time" value="{:.6}" unitCvRef="UO" unitAccession="UO:0000031" unitName="minute"/>"#,
-        rec.retention_time_min
-    )?;
-
-    // Ion injection time
-    if let Some(it) = rec.ion_injection_time_ms {
-        writeln!(
-            out,
-            r#"            <cvParam cvRef="MS" accession="MS:1000927" name="ion injection time" value="{:.6}" unitCvRef="UO" unitAccession="UO:0000028" unitName="millisecond"/>"#,
-            it
-        )?;
-    }
-
-    writeln!(out, r#"            <scanWindowList count="1">"#)?;
-    writeln!(out, r#"              <scanWindow>"#)?;
-    writeln!(
-        out,
-        r#"                <cvParam cvRef="MS" accession="MS:1000501" name="scan window lower limit" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
-        rec.low_mz
-    )?;
-    writeln!(
-        out,
-        r#"                <cvParam cvRef="MS" accession="MS:1000500" name="scan window upper limit" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
-        rec.high_mz
-    )?;
-    writeln!(out, r#"              </scanWindow>"#)?;
-    writeln!(out, r#"            </scanWindowList>"#)?;
-    writeln!(out, r#"          </scan>"#)?;
-    writeln!(out, r#"        </scanList>"#)?;
-
-    // Precursor info for MS2+
-    if let Some(pre) = rec.precursor.as_ref() {
-        // Always emit a <precursorList> for MSn spectra; mzML requires it.
-        // For DIA scans the precursor m/z is 0/unknown, but the activation
-        // method and (when available) isolation window are still recorded.
-        writeln!(out, r#"        <precursorList count="1">"#)?;
-
-        // Link to the precursor (MS1) scan when known.
-        let master_ref = pre
-            .master_scan_number
-            .map(|n| format!("controllerType=0 controllerNumber=1 scan={n}"));
-        if let Some(ref mref) = master_ref {
-            writeln!(out, r#"          <precursor spectrumRef="{mref}">"#)?;
-        } else {
-            writeln!(out, r#"          <precursor>"#)?;
-        }
-
-        // Isolation window (center + lower/upper offsets). Omit entirely
-        // when no window information is available (e.g. all-ions DIA).
-        if pre.target_mz.is_some() || pre.isolation_width.is_some() {
-            writeln!(out, r#"            <isolationWindow>"#)?;
-            if let Some(mz) = pre.target_mz {
-                writeln!(
-                    out,
-                    r#"              <cvParam cvRef="MS" accession="MS:1000827" name="isolation window target m/z" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
-                    mz
-                )?;
-            }
-            if let Some(w) = pre.isolation_width {
-                // Thermo reports a total isolation width; mzML splits it into
-                // symmetric lower/upper offsets around the target.
-                let half = w / 2.0;
-                writeln!(
-                    out,
-                    r#"              <cvParam cvRef="MS" accession="MS:1000828" name="isolation window lower offset" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
-                    half
-                )?;
-                writeln!(
-                    out,
-                    r#"              <cvParam cvRef="MS" accession="MS:1000829" name="isolation window upper offset" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
-                    half
-                )?;
-            }
-            writeln!(out, r#"            </isolationWindow>"#)?;
-        }
-
-        // Selected ion.
-        if let Some(mz) = pre.selected_mz {
-            writeln!(out, r#"            <selectedIonList count="1">"#)?;
-            writeln!(out, r#"              <selectedIon>"#)?;
-            writeln!(
-                out,
-                r#"                <cvParam cvRef="MS" accession="MS:1000744" name="selected ion m/z" value="{:.6}" unitCvRef="MS" unitAccession="MS:1000040" unitName="m/z"/>"#,
-                mz
-            )?;
-            if let Some(z) = pre.charge {
-                writeln!(
-                    out,
-                    r#"                <cvParam cvRef="MS" accession="MS:1000041" name="charge state" value="{z}"/>"#
-                )?;
-            }
-            writeln!(out, r#"              </selectedIon>"#)?;
-            writeln!(out, r#"            </selectedIonList>"#)?;
-        }
-
-        // Activation.
-        writeln!(out, r#"            <activation>"#)?;
-        if let Some(act) = pre.activation {
-            let (acc, name) = activation_cv(act, pre.analyzer);
-            writeln!(
-                out,
-                r#"              <cvParam cvRef="MS" accession="{acc}" name="{name}" value=""/>"#
-            )?;
-        } else {
-            writeln!(
-                out,
-                r#"              <cvParam cvRef="MS" accession="MS:1000133" name="collision-induced dissociation" value=""/>"#
-            )?;
-        }
-        if let Some(e) = pre.collision_energy {
-            if pre.ce_is_nce {
-                writeln!(
-                    out,
-                    r#"              <cvParam cvRef="MS" accession="MS:1002013" name="normalized collision energy" value="{:.2}"/>"#,
-                    e
-                )?;
-            } else {
-                writeln!(
-                    out,
-                    r#"              <cvParam cvRef="MS" accession="MS:1000045" name="collision energy" value="{:.2}" unitCvRef="UO" unitAccession="UO:0000266" unitName="electronvolt"/>"#,
-                    e
-                )?;
-            }
-        }
-        writeln!(out, r#"            </activation>"#)?;
-
-        writeln!(out, r#"          </precursor>"#)?;
-        writeln!(out, r#"        </precursorList>"#)?;
-    }
-
-    // Binary arrays
-    let n_arrays: usize = if n_peaks > 0 { 2 } else { 0 };
-    if n_arrays > 0 {
-        let mz_b64 = encode_f64_array(&rec.mz);
-        let int_b64 = encode_f32_array(&rec.intensity);
-
-        writeln!(out, r#"        <binaryDataArrayList count="{n_arrays}">"#)?;
-
-        // m/z array - f64, no compression
-        writeln!(
-            out,
-            r#"          <binaryDataArray encodedLength="{}">"#,
-            mz_b64.len()
-        )?;
-        writeln!(
-            out,
-            r#"            <cvParam cvRef="MS" accession="MS:1000514" name="m/z array" value=""/>"#
-        )?;
-        writeln!(
-            out,
-            r#"            <cvParam cvRef="MS" accession="MS:1000523" name="64-bit float" value=""/>"#
-        )?;
-        writeln!(
-            out,
-            r#"            <cvParam cvRef="MS" accession="MS:1000576" name="no compression" value=""/>"#
-        )?;
-        writeln!(out, r#"            <binary>{mz_b64}</binary>"#)?;
-        writeln!(out, r#"          </binaryDataArray>"#)?;
-
-        // intensity array - f32, no compression
-        writeln!(
-            out,
-            r#"          <binaryDataArray encodedLength="{}">"#,
-            int_b64.len()
-        )?;
-        writeln!(
-            out,
-            r#"            <cvParam cvRef="MS" accession="MS:1000515" name="intensity array" value=""/>"#
-        )?;
-        writeln!(
-            out,
-            r#"            <cvParam cvRef="MS" accession="MS:1000521" name="32-bit float" value=""/>"#
-        )?;
-        writeln!(
-            out,
-            r#"            <cvParam cvRef="MS" accession="MS:1000576" name="no compression" value=""/>"#
-        )?;
-        writeln!(out, r#"            <binary>{int_b64}</binary>"#)?;
-        writeln!(out, r#"          </binaryDataArray>"#)?;
-
-        writeln!(out, r#"        </binaryDataArrayList>"#)?;
-    }
-
-    writeln!(out, r#"      </spectrum>"#)?;
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn base64_rfc_vectors() {
-        assert_eq!(base64_encode(b""), "");
-        assert_eq!(base64_encode(b"f"), "Zg==");
-        assert_eq!(base64_encode(b"fo"), "Zm8=");
-        assert_eq!(base64_encode(b"foo"), "Zm9v");
-        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
-        assert_eq!(base64_encode(b"Man"), "TWFu");
-    }
 }
