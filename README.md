@@ -6,6 +6,11 @@
 [![docs.rs](https://img.shields.io/docsrs/opentfraw)](https://docs.rs/opentfraw)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
+> Part of the [OpenProteo](https://sigilweaver.app/openproteo/docs/)
+> stack for proteomics raw-file access. Sibling readers:
+> [OpenWRaw](https://github.com/Sigilweaver/OpenWRaw) (Waters),
+> [OpenTimsTDF](https://github.com/Sigilweaver/OpenTDF) (Bruker).
+
 Rust and Python reader for Thermo Fisher `.raw` mass spectrometry files,
 covering format versions 8 through 66 (LCQ Classic through Orbitrap
 Astral and modern TSQ).

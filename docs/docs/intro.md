@@ -5,6 +5,16 @@ slug: /
 
 # OpenTFRaw
 
+:::info Part of the OpenProteo stack
+
+OpenTFRaw is one of the vendor readers in
+[OpenProteo](https://sigilweaver.app/openproteo/docs/), a Rust- and
+Python-native stack for proteomics raw-file access. Sibling readers:
+[OpenWRaw](https://sigilweaver.app/openwraw/docs/) (Waters `.raw/`),
+[OpenTimsTDF](https://sigilweaver.app/opentdf/docs/) (Bruker `.d/`).
+
+:::
+
 OpenTFRaw is a Rust library that reads Thermo Fisher `.raw`
 mass-spectrometry files - the binary format produced by Thermo
 instruments from the LCQ Classic (mid-1990s) through the Orbitrap
