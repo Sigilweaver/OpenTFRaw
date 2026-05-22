@@ -61,7 +61,7 @@ const config: Config = {
       respectPrefersColorScheme: true,
     },
     navbar: {
-      title: 'OpenTFRaw',
+      title: 'Sigilweaver',
       logo: {
         alt: 'Sigilweaver logo',
         src: 'img/logo.svg',
@@ -74,7 +74,6 @@ const config: Config = {
           label: 'OpenTFRaw',
           position: 'left',
           items: [
-            { label: 'All Docs', href: 'https://sigilweaver.app/docs/' },
             { label: 'OpenProteo', href: 'https://sigilweaver.app/openproteo/docs/' },
             { label: 'OpenTimsTDF (Bruker)', href: 'https://sigilweaver.app/opentimstdf/docs/' },
             { label: 'OpenWRaw (Waters)', href: 'https://sigilweaver.app/openwraw/docs/' },
