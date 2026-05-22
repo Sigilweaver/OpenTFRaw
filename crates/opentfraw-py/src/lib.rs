@@ -17,11 +17,11 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use ::opentfraw::{MsPower, Polarity, RawFileReader};
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyIOError, PyIndexError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use ::opentfraw::{MsPower, Polarity, RawFileReader};
 
 /// Translate an `opentfraw::Error` into a Python exception.
 fn to_py_err(e: ::opentfraw::Error) -> PyErr {
