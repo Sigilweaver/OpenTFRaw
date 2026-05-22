@@ -69,6 +69,6 @@ OpenTFRaw is one of three vendor readers in the
 [OpenProteo](https://github.com/Sigilweaver/OpenProteo) stack.
 Sibling readers:
 [OpenWRaw](https://github.com/Sigilweaver/OpenWRaw) (Waters),
-[OpenTimsTDF](https://github.com/Sigilweaver/OpenTDF) (Bruker).
+[OpenTimsTDF](https://github.com/Sigilweaver/OpenTimsTDF) (Bruker).
 Shared foundation:
 [openproteo-core](https://github.com/Sigilweaver/OpenProteoCore).
