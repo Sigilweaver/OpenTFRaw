@@ -76,9 +76,15 @@ const config: Config = {
           label: 'Docs',
         },
         {
-          href: 'https://sigilweaver.app/openproteo/docs/',
-          label: 'OpenProteo',
+          type: 'dropdown',
+          label: 'Projects',
           position: 'left',
+          items: [
+            { label: 'All Docs', href: 'https://sigilweaver.app/docs/' },
+            { label: 'OpenProteo', href: 'https://sigilweaver.app/openproteo/docs/' },
+            { label: 'OpenTimsTDF (Bruker)', href: 'https://sigilweaver.app/opentimstdf/docs/' },
+            { label: 'OpenWRaw (Waters)', href: 'https://sigilweaver.app/openwraw/docs/' },
+          ],
         },
         {
           href: 'https://docs.rs/opentfraw',
