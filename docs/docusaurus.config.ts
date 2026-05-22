@@ -70,12 +70,6 @@ const config: Config = {
       },
       items: [
         {
-          type: 'docSidebar',
-          sidebarId: 'docsSidebar',
-          position: 'left',
-          label: 'Docs',
-        },
-        {
           type: 'dropdown',
           label: 'OpenTFRaw',
           position: 'left',
