@@ -11,7 +11,7 @@ OpenTFRaw is one of the vendor readers in
 [OpenProteo](https://sigilweaver.app/openproteo/docs/), a Rust- and
 Python-native stack for proteomics raw-file access. Sibling readers:
 [OpenWRaw](https://sigilweaver.app/openwraw/docs/) (Waters `.raw/`),
-[OpenTimsTDF](https://sigilweaver.app/opentdf/docs/) (Bruker `.d/`).
+[OpenTimsTDF](https://sigilweaver.app/OpenTimsTDF/docs/) (Bruker `.d/`).
 
 :::
 
