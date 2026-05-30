@@ -9,7 +9,8 @@ rust-version = "1.85"
 authors = ["Nathan Riley <git@nathanriley.com>"]
 license = "Apache-2.0"
 repository = "https://github.com/Sigilweaver/OpenTFRaw"
-homepage = "https://github.com/Sigilweaver/OpenTFRaw"
+homepage = "https://sigilweaver.app/opentfraw/"
+documentation = "https://sigilweaver.app/opentfraw/docs/"
 keywords = ["mass-spectrometry", "thermo", "raw", "proteomics", "orbitrap"]
 categories = ["parser-implementations", "science"]
 
