@@ -590,12 +590,11 @@ impl RawFileReader {
                     'outer_v66: for (&event, &q3_hi_target) in &event_q3_hi {
                         let end = data.len().saturating_sub(8);
                         for i in 16..end {
-                            let hi = f64::from_le_bytes(data[i..i + 8].try_into().unwrap());
+                            let hi = crate::bytes::read_f64_le(data, i)?;
                             if (hi - q3_hi_target).abs() < 0.002 {
-                                let lo = f64::from_le_bytes(data[i - 8..i].try_into().unwrap());
+                                let lo = crate::bytes::read_f64_le(data, i - 8)?;
                                 if hi > lo && (hi - lo) < 0.1 {
-                                    let q1 =
-                                        f64::from_le_bytes(data[i - 16..i - 8].try_into().unwrap());
+                                    let q1 = crate::bytes::read_f64_le(data, i - 16)?;
                                     if q1 > 50.0 && q1 < 3000.0 {
                                         q1_map.insert(event, q1);
                                         continue 'outer_v66;

@@ -215,8 +215,8 @@ impl ScanEvent {
                 if off + 16 > body_size {
                     return None;
                 }
-                let low_mz = f64::from_le_bytes(body[off..off + 8].try_into().unwrap());
-                let high_mz = f64::from_le_bytes(body[off + 8..off + 16].try_into().unwrap());
+                let low_mz = crate::bytes::read_f64_le(&body, off).ok()?;
+                let high_mz = crate::bytes::read_f64_le(&body, off + 8).ok()?;
                 // A valid scan window must be finite, monotonic, and within
                 // physically realistic m/z bounds (instruments top out well
                 // below 1e5 m/z). Accept lo == hi as well because some
@@ -240,8 +240,7 @@ impl ScanEvent {
         let np_off = body_size.saturating_sub(64);
         let mut coefficients = Vec::new();
         if np_off + 4 <= body_size {
-            let nparam_raw =
-                u32::from_le_bytes(body[np_off..np_off + 4].try_into().unwrap()) as usize;
+            let nparam_raw = crate::bytes::read_u32_le(&body, np_off)? as usize;
             // Cap nparam at the number of f64s that actually fit in the remaining body.
             // Without this cap, a garbage nparam (e.g. 0xFFFFFFFF from uninitialised
             // bytes) causes billions of loop iterations just to evaluate the guard.
@@ -249,7 +248,7 @@ impl ScanEvent {
             let nparam = nparam_raw.min(max_nparam);
             for i in 0..nparam {
                 let off = np_off + 4 + i * 8;
-                coefficients.push(f64::from_le_bytes(body[off..off + 8].try_into().unwrap()));
+                coefficients.push(crate::bytes::read_f64_le(&body, off)?);
             }
         }
 
@@ -267,7 +266,7 @@ impl ScanEvent {
             // body[0..4] and each 32-byte Reaction record begins at body[4].
             // The second reaction (if any) is typically a zero-mz supplemental step.
             let np = if body_size >= 4 {
-                u32::from_le_bytes(body[0..4].try_into().unwrap()) as usize
+                crate::bytes::read_u32_le(&body, 0)? as usize
             } else {
                 0
             };
@@ -282,11 +281,11 @@ impl ScanEvent {
                     if off + 32 > body_size {
                         break;
                     }
-                    let mz = f64::from_le_bytes(body[off..off + 8].try_into().unwrap());
-                    let unk = f64::from_le_bytes(body[off + 8..off + 16].try_into().unwrap());
-                    let energy = f64::from_le_bytes(body[off + 16..off + 24].try_into().unwrap());
-                    let ul1 = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
-                    let ul2 = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap());
+                    let mz = crate::bytes::read_f64_le(&body, off)?;
+                    let unk = crate::bytes::read_f64_le(&body, off + 8)?;
+                    let energy = crate::bytes::read_f64_le(&body, off + 16)?;
+                    let ul1 = crate::bytes::read_u32_le(&body, off + 24)?;
+                    let ul2 = crate::bytes::read_u32_le(&body, off + 28)?;
                     if mz.is_finite() && mz >= 0.0 {
                         rxs.push(Reaction {
                             precursor_mz: mz,
@@ -300,7 +299,7 @@ impl ScanEvent {
                 rxs
             }
         } else {
-            let np = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+            let np = crate::bytes::read_u32_le(&body, 4)? as usize;
             // Sanity check: np must fit within the body minus minimum fixed overhead.
             // Each reaction is 32 bytes; require at least 32 bytes of post-reaction
             // data (FC=16, nparam=4, minimum tail) for the body to be plausible.
@@ -314,11 +313,11 @@ impl ScanEvent {
                     if off + 32 > body_size {
                         break;
                     }
-                    let mz = f64::from_le_bytes(body[off..off + 8].try_into().unwrap());
-                    let unk = f64::from_le_bytes(body[off + 8..off + 16].try_into().unwrap());
-                    let energy = f64::from_le_bytes(body[off + 16..off + 24].try_into().unwrap());
-                    let ul1 = u32::from_le_bytes(body[off + 24..off + 28].try_into().unwrap());
-                    let ul2 = u32::from_le_bytes(body[off + 28..off + 32].try_into().unwrap());
+                    let mz = crate::bytes::read_f64_le(&body, off)?;
+                    let unk = crate::bytes::read_f64_le(&body, off + 8)?;
+                    let energy = crate::bytes::read_f64_le(&body, off + 16)?;
+                    let ul1 = crate::bytes::read_u32_le(&body, off + 24)?;
+                    let ul2 = crate::bytes::read_u32_le(&body, off + 28)?;
                     // Accept only reactions with plausible m/z values (0 is valid for
                     // MS1 triggers; accept non-negative finite values).
                     if mz.is_finite() && mz >= 0.0 {

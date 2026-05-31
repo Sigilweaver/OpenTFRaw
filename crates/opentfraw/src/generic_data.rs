@@ -154,7 +154,7 @@ impl GenericDataHeader {
         for pass in 0..2 {
             let mut offset = 0usize;
             while offset + 4 <= buf.len() {
-                let n = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap());
+                let n = crate::bytes::read_u32_le(&buf, offset)?;
                 if (2..=500).contains(&n) {
                     let mut cursor = BinaryReader::new(Cursor::new(&buf[offset..]));
                     if let Some(hdr) = Self::try_read(&mut cursor)? {
