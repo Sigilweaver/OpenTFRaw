@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+title: "OpenTFRaw: A pure-Rust reader for Thermo Fisher .raw mass-spectrometry files"
+message: >
+  If you use OpenTFRaw in your research, please cite it using the metadata
+  below. Citation is encouraged and appreciated but not legally required.
+type: software
+authors:
+  - family-names: Riley
+    given-names: Nathan
+    orcid: "https://orcid.org/0009-0004-1579-7312"
+    website: "https://github.com/Sigilweaver"
+repository-code: "https://github.com/Sigilweaver/OpenTFRaw"
+url: "https://sigilweaver.app"
+abstract: >
+  OpenTFRaw is a standalone, cross-platform reader for Thermo Fisher Scientific
+  .raw mass-spectrometry files, implemented in pure Rust with no dependency on
+  vendor DLLs or .NET. Python bindings built on PyO3 integrate with Polars,
+  PyArrow, and Pandas. The library supports both centroid and profile spectra
+  across the common Thermo instrument families.
+license: "Apache-2.0"
+license-url: "https://github.com/Sigilweaver/OpenTFRaw/blob/main/LICENSE"
+date-released: "2026-05-31"
+version: "1.0.6"
+keywords:
+  - mass spectrometry
+  - proteomics
+  - Thermo Fisher
+  - raw
+  - bioinformatics
+  - Rust
+  - Python
+# Zenodo DOI - filled in after first GitHub-triggered Zenodo release.
+# After Zenodo mints the concept DOI, uncomment and replace the value below:
+# identifiers:
+#   - type: doi
+#     value: "10.5281/zenodo.XXXXXXXX"
+#     description: "Concept DOI (all versions) - Zenodo"
