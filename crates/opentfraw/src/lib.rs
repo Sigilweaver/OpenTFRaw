@@ -1,6 +1,9 @@
+#![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 mod error;
 mod reader;
 mod types;
+
+pub(crate) mod bytes;
 
 pub mod audit_tag;
 pub mod device;
