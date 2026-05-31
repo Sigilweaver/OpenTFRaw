@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/opentfraw", "crates/opentfraw-py"]
 
 [workspace.package]
-version = "1.0.6"
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.85"
 authors = ["Nathan Riley <git@nathanriley.com>"]
