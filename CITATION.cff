@@ -29,9 +29,7 @@ keywords:
   - bioinformatics
   - Rust
   - Python
-# Zenodo DOI - filled in after first GitHub-triggered Zenodo release.
-# After Zenodo mints the concept DOI, uncomment and replace the value below:
-# identifiers:
-#   - type: doi
-#     value: "10.5281/zenodo.XXXXXXXX"
-#     description: "Concept DOI (all versions) - Zenodo"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.20470601"
+    description: "Zenodo DOI"

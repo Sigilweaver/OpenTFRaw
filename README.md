@@ -1,6 +1,7 @@
 # OpenTFRaw
 
 [![CI](https://github.com/Sigilweaver/OpenTFRaw/actions/workflows/ci.yml/badge.svg)](https://github.com/Sigilweaver/OpenTFRaw/actions/workflows/ci.yml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20470601.svg)](https://doi.org/10.5281/zenodo.20470601)
 [![crates.io](https://img.shields.io/crates/v/opentfraw.svg)](https://crates.io/crates/opentfraw)
 [![PyPI](https://img.shields.io/pypi/v/opentfraw.svg)](https://pypi.org/project/opentfraw/)
 [![docs.rs](https://img.shields.io/docsrs/opentfraw)](https://docs.rs/opentfraw)
