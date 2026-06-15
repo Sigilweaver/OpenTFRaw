@@ -148,6 +148,48 @@ impl RawFile {
         Ok((mz.to_pyarray_bound(py), intensity.to_pyarray_bound(py)))
     }
 
+    /// Read the **profile** (raw, non-centroided) spectrum for `scan_number` and
+    /// return `(mz: numpy.float64[:], intensity: numpy.float64[:])`.
+    ///
+    /// The frequency-domain profile bins are converted to m/z using the scan
+    /// event's calibration coefficients. Returns empty arrays for centroid-only
+    /// scans (no profile stored). This decodes the full profile, so it is slower
+    /// than :meth:`peaks`; use it only when the raw profile is needed.
+    fn profile<'py>(
+        &self,
+        py: Python<'py>,
+        scan_number: u32,
+    ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
+        let first = self.first_scan();
+        let idx = scan_number.checked_sub(first).ok_or_else(|| {
+            PyIndexError::new_err(format!("scan {scan_number} < first scan {first}"))
+        })? as usize;
+
+        // Frequency->m/z coefficients live on the scan event (empty for ITMS /
+        // already-m/z-domain scans, in which case to_mz_intensity passes through).
+        let coefficients: Vec<f64> = self
+            .reader
+            .scan_events
+            .get(idx)
+            .map(|e| e.coefficients.clone())
+            .unwrap_or_default();
+
+        let mut src = self
+            .source
+            .lock()
+            .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))?;
+        let packet = self
+            .reader
+            .read_scan(&mut *src, scan_number)
+            .map_err(to_py_err)?;
+
+        let (mz, intensity): (Vec<f64>, Vec<f64>) = match packet.profile {
+            Some(profile) => profile.to_mz_intensity(&coefficients).into_iter().unzip(),
+            None => (Vec::new(), Vec::new()),
+        };
+        Ok((mz.to_pyarray_bound(py), intensity.to_pyarray_bound(py)))
+    }
+
     /// Return a dict of per-scan metadata + peak arrays.
     ///
     /// Keys
