@@ -760,6 +760,27 @@ impl RawFileReader {
         ScanDataPacket::read(&mut r)
     }
 
+    /// Read a single scan packet's centroid peaks and FT label data
+    /// (resolution / noise / baseline), skipping the profile signal for speed.
+    ///
+    /// Only valid for PacketHeader-format files; TSQ/SRM scans carry no FT
+    /// label data.
+    pub fn read_scan_labels<R: Read + Seek>(
+        &self,
+        source: &mut R,
+        scan_number: u32,
+    ) -> Result<ScanDataPacket> {
+        let idx = (scan_number - self.run_header.sample_info.first_scan_number) as usize;
+        if idx >= self.scan_index.len() {
+            return Err(Error::AddressOutOfRange(scan_number as u64));
+        }
+        let entry = &self.scan_index[idx];
+        let abs_offset = self.data_addr + entry.offset;
+        source.seek(SeekFrom::Start(abs_offset))?;
+        let mut r = BinaryReader::new(source);
+        ScanDataPacket::read_skip_profile(&mut r)
+    }
+
     /// Read a single scan as flat peaks (TSQ/SRM format).
     ///
     /// In this format, `entry.offset` is the cumulative end byte offset within
