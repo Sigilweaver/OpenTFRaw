@@ -9,6 +9,19 @@ pub struct Peak {
     pub abundance: f32,
 }
 
+/// A node in the per-scan noise-vs-m/z function carried by FT scans.
+///
+/// Thermo stores noise and baseline as a piecewise-linear function of m/z
+/// (a few dozen nodes), not per peak. Per-peak noise/baseline are recovered
+/// by interpolating this function at each peak's m/z (see
+/// [`ScanDataPacket::noise_at`]).
+#[derive(Debug, Clone, Copy)]
+pub struct NoiseNode {
+    pub mz: f32,
+    pub noise: f32,
+    pub baseline: f32,
+}
+
 /// A contiguous chunk of profile signal data.
 #[derive(Debug)]
 pub struct ProfileChunk {
@@ -46,6 +59,13 @@ pub struct ScanDataPacket {
     pub header: PacketHeader,
     pub profile: Option<Profile>,
     pub peaks: Vec<Peak>,
+    /// Per-peak resolution, aligned 1:1 with `peaks`. Empty when the scan
+    /// carries no FT label data (e.g. ion-trap scans) or its layout did not
+    /// match the expected encoding.
+    pub resolutions: Vec<f32>,
+    /// Nodes of the scan's noise-vs-m/z function. Empty when absent. Use
+    /// [`Self::noise_at`] to evaluate per-peak noise/baseline.
+    pub noise_nodes: Vec<NoiseNode>,
 }
 
 impl ScanDataPacket {
@@ -59,48 +79,44 @@ impl ScanDataPacket {
             None
         };
 
-        // Centroid peak list
-        // Layout bit 16 (0x10000) means m/z is f64 instead of f32
-        let wide_mz = header.layout & 0x10000 != 0;
-        let peaks = if header.peak_list_size > 0 {
-            let count = r.read_u32()?;
-            let mut peaks = Vec::with_capacity(count as usize);
-            for _ in 0..count {
-                let mz = if wide_mz {
-                    r.read_f64()?
-                } else {
-                    r.read_f32()? as f64
-                };
-                let abundance = r.read_f32()?;
-                peaks.push(Peak { mz, abundance });
-            }
-            peaks
-        } else {
-            Vec::new()
-        };
-
-        // Skip descriptor, unknown, and triplet streams
-        if header.descriptor_list_size > 0 {
-            r.skip((header.descriptor_list_size * 4) as usize)?;
-        }
-        if header.unknown_stream_size > 0 {
-            r.skip((header.unknown_stream_size * 4) as usize)?;
-        }
-        if header.triplet_stream_size > 0 {
-            r.skip((header.triplet_stream_size * 4) as usize)?;
-        }
+        let peaks = Self::read_peaks(r, &header)?;
+        let (resolutions, noise_nodes) = Self::read_labels(r, &header, peaks.len())?;
 
         Ok(Self {
             header,
             profile,
             peaks,
+            resolutions,
+            noise_nodes,
         })
     }
 
-    /// Read only the centroided peak list, skipping the (potentially large)
-    /// profile data. This is 2-10× faster than [`Self::read`] for high-
-    /// resolution Orbitrap scans where profile_size can be tens of thousands
-    /// of 4-byte words.
+    /// Read peaks and FT label data while skipping the (potentially large)
+    /// profile signal. This is the fast path when only centroids and their
+    /// labels (resolution / noise / baseline) are needed.
+    pub(crate) fn read_skip_profile<R: Read + Seek>(r: &mut BinaryReader<R>) -> Result<Self> {
+        let header = PacketHeader::read(r)?;
+
+        if header.profile_size > 0 {
+            r.skip((header.profile_size as usize) * 4)?;
+        }
+
+        let peaks = Self::read_peaks(r, &header)?;
+        let (resolutions, noise_nodes) = Self::read_labels(r, &header, peaks.len())?;
+
+        Ok(Self {
+            header,
+            profile: None,
+            peaks,
+            resolutions,
+            noise_nodes,
+        })
+    }
+
+    /// Read only the centroided peak list, skipping the profile data and the
+    /// trailing label streams. This is 2-10× faster than [`Self::read`] for
+    /// high-resolution Orbitrap scans where profile_size can be tens of
+    /// thousands of 4-byte words.
     pub(crate) fn read_peaks_only<R: Read + Seek>(r: &mut BinaryReader<R>) -> Result<Vec<Peak>> {
         let header = PacketHeader::read(r)?;
 
@@ -109,26 +125,114 @@ impl ScanDataPacket {
             r.skip((header.profile_size as usize) * 4)?;
         }
 
-        // Centroid peak list - same as full read path.
+        Self::read_peaks(r, &header)
+    }
+
+    /// Decode the centroid peak list. Assumes the cursor sits at the start of
+    /// the peak list (i.e. profile data has already been read or skipped).
+    fn read_peaks<R: Read + Seek>(
+        r: &mut BinaryReader<R>,
+        header: &PacketHeader,
+    ) -> Result<Vec<Peak>> {
+        // Layout bit 16 (0x10000) means m/z is f64 instead of f32.
         let wide_mz = header.layout & 0x10000 != 0;
-        let peaks = if header.peak_list_size > 0 {
-            let count = r.read_u32()?;
-            let mut peaks = Vec::with_capacity(count as usize);
-            for _ in 0..count {
-                let mz = if wide_mz {
-                    r.read_f64()?
-                } else {
-                    r.read_f32()? as f64
-                };
-                let abundance = r.read_f32()?;
-                peaks.push(Peak { mz, abundance });
+        if header.peak_list_size == 0 {
+            return Ok(Vec::new());
+        }
+        let count = r.read_u32()?;
+        let mut peaks = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            let mz = if wide_mz {
+                r.read_f64()?
+            } else {
+                r.read_f32()? as f64
+            };
+            let abundance = r.read_f32()?;
+            peaks.push(Peak { mz, abundance });
+        }
+        Ok(peaks)
+    }
+
+    /// Decode the per-peak label streams that follow the centroid peak list:
+    /// descriptor (peak index, skipped), unknown (per-peak resolution), and
+    /// triplet (noise-vs-m/z function). Assumes the cursor sits immediately
+    /// after the peak list.
+    fn read_labels<R: Read + Seek>(
+        r: &mut BinaryReader<R>,
+        header: &PacketHeader,
+        n_peaks: usize,
+    ) -> Result<(Vec<f32>, Vec<NoiseNode>)> {
+        // Descriptor stream: one u32 per peak (a peak index), not label data.
+        if header.descriptor_list_size > 0 {
+            r.skip((header.descriptor_list_size * 4) as usize)?;
+        }
+
+        // Unknown stream: for FT scans this is `[count_word, resolution...]`
+        // with one f32 resolution per centroid peak. Decode it only when the
+        // size matches that layout; otherwise skip it so other encodings are
+        // left untouched.
+        let resolutions = if n_peaks > 0 && header.unknown_stream_size as usize == n_peaks + 1 {
+            let _count = r.read_u32()?;
+            let mut res = Vec::with_capacity(n_peaks);
+            for _ in 0..n_peaks {
+                res.push(r.read_f32()?);
             }
-            peaks
+            res
         } else {
+            if header.unknown_stream_size > 0 {
+                r.skip((header.unknown_stream_size * 4) as usize)?;
+            }
             Vec::new()
         };
 
-        Ok(peaks)
+        // Triplet stream: the noise-vs-m/z function as (m/z, noise, baseline)
+        // f32 nodes. Per-peak noise/baseline come from interpolating this at
+        // the peak m/z (see `noise_at`).
+        let node_count = header.triplet_stream_size / 3;
+        let mut noise_nodes = Vec::with_capacity(node_count as usize);
+        for _ in 0..node_count {
+            let mz = r.read_f32()?;
+            let noise = r.read_f32()?;
+            let baseline = r.read_f32()?;
+            noise_nodes.push(NoiseNode {
+                mz,
+                noise,
+                baseline,
+            });
+        }
+        // Skip any trailing words if the stream size is not a multiple of 3.
+        let consumed = node_count * 3;
+        if header.triplet_stream_size > consumed {
+            r.skip(((header.triplet_stream_size - consumed) * 4) as usize)?;
+        }
+
+        Ok((resolutions, noise_nodes))
+    }
+
+    /// Linearly interpolate `(noise, baseline)` at `mz` from the scan's
+    /// noise-vs-m/z function. Returns `None` when the scan carries no noise
+    /// nodes. Queries outside the node range clamp to the nearest endpoint.
+    pub fn noise_at(&self, mz: f64) -> Option<(f32, f32)> {
+        let nodes = &self.noise_nodes;
+        if nodes.is_empty() {
+            return None;
+        }
+        let x = mz as f32;
+        if x <= nodes[0].mz {
+            return Some((nodes[0].noise, nodes[0].baseline));
+        }
+        for w in nodes.windows(2) {
+            let (lo, hi) = (&w[0], &w[1]);
+            if x <= hi.mz {
+                let span = hi.mz - lo.mz;
+                let f = if span > 0.0 { (x - lo.mz) / span } else { 0.0 };
+                let noise = lo.noise + f * (hi.noise - lo.noise);
+                let baseline = lo.baseline + f * (hi.baseline - lo.baseline);
+                return Some((noise, baseline));
+            }
+        }
+        let last = nodes[nodes.len() - 1];
+        Some((last.noise, last.baseline))
     }
 }
 

@@ -148,6 +148,84 @@ impl RawFile {
         Ok((mz.to_pyarray_bound(py), intensity.to_pyarray_bound(py)))
     }
 
+    /// Read per-peak FT label data for `scan_number`.
+    ///
+    /// Returns a dict of equal-length NumPy arrays aligned with the centroid
+    /// peak list:
+    ///
+    /// - ``mz`` : float64
+    /// - ``intensity`` : float32
+    /// - ``resolution`` : float32
+    /// - ``noise`` : float32
+    /// - ``baseline`` : float32
+    /// - ``signal_to_noise`` : float32
+    ///   (``(intensity - baseline) / (noise - baseline)``)
+    ///
+    /// ``resolution`` / ``noise`` / ``baseline`` / ``signal_to_noise`` are
+    /// ``NaN`` for scans that carry no FT label data (e.g. ion-trap scans).
+    /// The profile signal is skipped for speed.
+    fn centroid_labels<'py>(
+        &self,
+        py: Python<'py>,
+        scan_number: u32,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let pkt = {
+            let mut src = self
+                .source
+                .lock()
+                .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))?;
+            self.reader
+                .read_scan_labels(&mut *src, scan_number)
+                .map_err(to_py_err)?
+        };
+
+        let n = pkt.peaks.len();
+        let has_resolution = pkt.resolutions.len() == n;
+        let mut mz = Vec::with_capacity(n);
+        let mut intensity = Vec::with_capacity(n);
+        let mut resolution = Vec::with_capacity(n);
+        let mut noise = Vec::with_capacity(n);
+        let mut baseline = Vec::with_capacity(n);
+        let mut signal_to_noise = Vec::with_capacity(n);
+
+        for (i, p) in pkt.peaks.iter().enumerate() {
+            mz.push(p.mz);
+            intensity.push(p.abundance);
+            resolution.push(if has_resolution {
+                pkt.resolutions[i]
+            } else {
+                f32::NAN
+            });
+            match pkt.noise_at(p.mz) {
+                Some((nz, bl)) => {
+                    noise.push(nz);
+                    baseline.push(bl);
+                    // Matches the vendor reader's per-peak S:N definition.
+                    let denom = nz - bl;
+                    signal_to_noise.push(if denom > 0.0 {
+                        (p.abundance - bl) / denom
+                    } else {
+                        f32::NAN
+                    });
+                }
+                None => {
+                    noise.push(f32::NAN);
+                    baseline.push(f32::NAN);
+                    signal_to_noise.push(f32::NAN);
+                }
+            }
+        }
+
+        let d = PyDict::new_bound(py);
+        d.set_item("mz", mz.to_pyarray_bound(py))?;
+        d.set_item("intensity", intensity.to_pyarray_bound(py))?;
+        d.set_item("resolution", resolution.to_pyarray_bound(py))?;
+        d.set_item("noise", noise.to_pyarray_bound(py))?;
+        d.set_item("baseline", baseline.to_pyarray_bound(py))?;
+        d.set_item("signal_to_noise", signal_to_noise.to_pyarray_bound(py))?;
+        Ok(d)
+    }
+
     /// Return a dict of per-scan metadata + peak arrays.
     ///
     /// Keys
