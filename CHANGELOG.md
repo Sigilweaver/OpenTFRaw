@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `RawFile.scan_parameters(scan_number)` (Python): returns the per-scan generic
+  ("trailer") parameters as a `{label: value}` dict (or `None`), mirroring the
+  vendor reader's trailer-extra information. Keys are the instrument's own
+  labels (e.g. `"HCD Energy V:"`, `"MS2 Isolation Width:"`); values keep their
+  stored type. The Rust core already decoded these (`scan_parameters` /
+  `GenericRecord`); this surfaces them to Python.
+
 ## [1.1.0] - 2026-05-31
 
 ### Added
