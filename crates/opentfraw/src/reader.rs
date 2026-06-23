@@ -770,6 +770,12 @@ impl RawFileReader {
         source: &mut R,
         scan_number: u32,
     ) -> Result<ScanDataPacket> {
+        use crate::scan_format::ScanDataFormat;
+        if self.scan_format != ScanDataFormat::PacketHeader {
+            return Err(Error::UnsupportedOperation(
+                "centroid_labels / read_scan_labels requires a PacketHeader file (Orbitrap/ion-trap); TSQ/SRM files carry no FT label data",
+            ));
+        }
         let idx = (scan_number - self.run_header.sample_info.first_scan_number) as usize;
         if idx >= self.scan_index.len() {
             return Err(Error::AddressOutOfRange(scan_number as u64));
