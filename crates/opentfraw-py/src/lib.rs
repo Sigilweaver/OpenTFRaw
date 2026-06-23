@@ -170,7 +170,7 @@ impl RawFile {
     /// record. Mirrors the vendor reader's trailer-extra information: keys are
     /// the instrument's own labels (e.g. ``"HCD Energy V:"``,
     /// ``"MS2 Isolation Width:"``, ``"Ion Injection Time (ms):"``) and values
-    /// keep their stored type (str / int / float / bool). The core already
+    /// keep their stored type (str / int / float / bool / None for absent entries). The core already
     /// decodes these; this surfaces them to Python.
     fn scan_parameters<'py>(
         &self,
