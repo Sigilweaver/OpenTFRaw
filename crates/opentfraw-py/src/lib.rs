@@ -224,6 +224,13 @@ impl RawFile {
         py: Python<'py>,
         scan_number: u32,
     ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
+        use ::opentfraw::scan_format::ScanDataFormat;
+        if self.reader.scan_format != ScanDataFormat::PacketHeader {
+            return Err(PyValueError::new_err(
+                "profile() is only available for PacketHeader files (Orbitrap/ion-trap); \
+                 this file uses a flat-peak SRM format",
+            ));
+        }
         let first = self.first_scan();
         let idx = scan_number.checked_sub(first).ok_or_else(|| {
             PyIndexError::new_err(format!("scan {scan_number} < first scan {first}"))
