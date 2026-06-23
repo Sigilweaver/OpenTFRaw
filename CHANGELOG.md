@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Per-peak FT label data decoding for PacketHeader scans. The previously
+  skipped descriptor / unknown / triplet streams are now decoded:
+  `ScanDataPacket` gains `resolutions` (per-peak resolution) and
+  `noise_nodes` (the noise-vs-m/z function), plus `noise_at(mz)` to
+  interpolate per-peak noise/baseline. New `RawFileReader::read_scan_labels`
+  reads peaks + labels while skipping the profile signal, and the Python
+  binding exposes `RawFile.centroid_labels(scan_number)` returning
+  `mz`/`intensity`/`resolution`/`noise`/`baseline`/`signal_to_noise` arrays.
 - `RawFile.scan_parameters(scan_number)` (Python): returns the per-scan generic
   ("trailer") parameters as a `{label: value}` dict (or `None`), mirroring the
   vendor reader's trailer-extra information. Keys are the instrument's own
