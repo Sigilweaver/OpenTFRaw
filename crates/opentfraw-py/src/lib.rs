@@ -120,6 +120,7 @@ impl RawFile {
     #[getter]
     fn created(&self) -> Option<f64> {
         let t = self.reader.header.audit_start.time;
+        // Exact sentinel: read_windows_filetime returns Ok(0.0) only when ft == 0.
         if t == 0.0 {
             None
         } else {
