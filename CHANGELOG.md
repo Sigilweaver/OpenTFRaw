@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   labels (e.g. `"HCD Energy V:"`, `"MS2 Isolation Width:"`); values keep their
   stored type. The Rust core already decoded these (`scan_parameters` /
   `GenericRecord`); this surfaces them to Python.
+- `RawFile.created`: file creation (acquisition start) time as a Unix timestamp
+  in seconds, read from the Xcalibur audit tag (a Windows FILETIME). The Rust
+  core already parses this (`header.audit_start.time`); the bindings did not
+  surface it. Note: Thermo records the instrument's local wall-clock there with
+  no timezone, so interpreting the value as UTC reproduces that local wall-clock
+  rather than a true UTC instant.
 
 ## [1.1.0] - 2026-05-31
 
