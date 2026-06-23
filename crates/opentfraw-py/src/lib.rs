@@ -45,6 +45,9 @@ fn to_py_err(e: ::opentfraw::Error) -> PyErr {
 ///     Scan number of the last scan.
 /// instrument_model : str | None
 ///     Detected instrument model name (e.g. `"Orbitrap Fusion Lumos"`).
+/// created : float | None
+///     File creation (acquisition start) time as a Unix timestamp in seconds,
+///     or `None` if absent. See the getter for the timezone caveat.
 ///
 /// Example
 /// -------
@@ -104,6 +107,24 @@ impl RawFile {
     #[getter]
     fn instrument_model(&self) -> Option<String> {
         self.reader.instrument_model.map(|s| s.to_string())
+    }
+
+    /// File creation (acquisition start) time as a Unix timestamp, in seconds,
+    /// or `None` if the file carries no audit timestamp.
+    ///
+    /// Read from the Xcalibur audit tag (a Windows FILETIME). Note: Thermo
+    /// records the instrument's local wall-clock here with no timezone, so
+    /// interpreting the value as UTC reproduces that local wall-clock (e.g.
+    /// `datetime.fromtimestamp(raw.created, timezone.utc)`); it is not a true
+    /// UTC instant.
+    #[getter]
+    fn created(&self) -> Option<f64> {
+        let t = self.reader.header.audit_start.time;
+        if t == 0.0 {
+            None
+        } else {
+            Some(t)
+        }
     }
 
     fn __len__(&self) -> usize {
