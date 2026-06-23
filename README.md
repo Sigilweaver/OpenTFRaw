@@ -62,6 +62,12 @@ raw.to_mzml("run.mzML")
 See the [docs site](https://sigilweaver.app/opentfraw/docs) for the full
 guide, format specification, and API reference.
 
+## Used by
+
+| Project | Description |
+|---------|-------------|
+| [Mascope](https://github.com/karsa-oy/mascope) by [Karsa Oy](https://github.com/karsa-oy) | Mass spectrometry data analysis platform using OpenTFRaw to ingest Thermo `.raw` files. |
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).

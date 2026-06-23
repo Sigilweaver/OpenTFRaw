@@ -7,13 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-06-23
+
 ### Added
 
 - `RawFile.profile(scan_number)` (Python): returns the raw profile spectrum as
   `(mz, intensity)` NumPy arrays, converting the frequency-domain bins via the
   scan event's calibration coefficients. The Rust core already decoded profile
   data (`ScanDataPacket.profile`, `Profile::to_mz_intensity`); this exposes it to
-  Python, which previously surfaced centroids only.
+  Python, which previously surfaced centroids only. (@oskarsari)
 - Per-peak FT label data decoding for PacketHeader scans. The previously
   skipped descriptor / unknown / triplet streams are now decoded:
   `ScanDataPacket` gains `resolutions` (per-peak resolution) and
@@ -22,18 +24,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads peaks + labels while skipping the profile signal, and the Python
   binding exposes `RawFile.centroid_labels(scan_number)` returning
   `mz`/`intensity`/`resolution`/`noise`/`baseline`/`signal_to_noise` arrays.
+  (@oskarsari)
 - `RawFile.scan_parameters(scan_number)` (Python): returns the per-scan generic
   ("trailer") parameters as a `{label: value}` dict (or `None`), mirroring the
   vendor reader's trailer-extra information. Keys are the instrument's own
   labels (e.g. `"HCD Energy V:"`, `"MS2 Isolation Width:"`); values keep their
   stored type. The Rust core already decoded these (`scan_parameters` /
-  `GenericRecord`); this surfaces them to Python.
+  `GenericRecord`); this surfaces them to Python. (@oskarsari)
 - `RawFile.created`: file creation (acquisition start) time as a Unix timestamp
   in seconds, read from the Xcalibur audit tag (a Windows FILETIME). The Rust
   core already parses this (`header.audit_start.time`); the bindings did not
   surface it. Note: Thermo records the instrument's local wall-clock there with
   no timezone, so interpreting the value as UTC reproduces that local wall-clock
-  rather than a true UTC instant.
+  rather than a true UTC instant. (@oskarsari)
+- `Error::UnsupportedOperation` variant for operations that require a specific
+  scan-data format (e.g. `read_scan_labels` on a TSQ/SRM file).
 
 ### Fixed
 
@@ -44,7 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Exploris (body_size 136) and left the profile m/z mis-converted. Dependent
   MS2 scans whose reaction record starts at body offset 4 (Exploris) now have
   their precursor m/z and activation energy recovered. Q Exactive / Fusion
-  decoding is unchanged.
+  decoding is unchanged. (@oskarsari)
+- `profile()` and `centroid_labels()` now return a clear error when called on
+  TSQ/SRM files instead of attempting to parse flat-peak data as a PacketHeader.
 
 ## [1.1.0] - 2026-05-31
 
