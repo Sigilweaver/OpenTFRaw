@@ -25,6 +25,9 @@ pub enum Error {
 
     #[error("invalid generic data type code: {0}")]
     InvalidTypeCode(u32),
+
+    #[error("operation not supported for this scan-data format: {0}")]
+    UnsupportedOperation(&'static str),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
