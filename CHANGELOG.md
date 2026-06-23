@@ -17,6 +17,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads peaks + labels while skipping the profile signal, and the Python
   binding exposes `RawFile.centroid_labels(scan_number)` returning
   `mz`/`intensity`/`resolution`/`noise`/`baseline`/`signal_to_noise` arrays.
+- `RawFile.scan_parameters(scan_number)` (Python): returns the per-scan generic
+  ("trailer") parameters as a `{label: value}` dict (or `None`), mirroring the
+  vendor reader's trailer-extra information. Keys are the instrument's own
+  labels (e.g. `"HCD Energy V:"`, `"MS2 Isolation Width:"`); values keep their
+  stored type. The Rust core already decoded these (`scan_parameters` /
+  `GenericRecord`); this surfaces them to Python.
+- `RawFile.created`: file creation (acquisition start) time as a Unix timestamp
+  in seconds, read from the Xcalibur audit tag (a Windows FILETIME). The Rust
+  core already parses this (`header.audit_start.time`); the bindings did not
+  surface it. Note: Thermo records the instrument's local wall-clock there with
+  no timezone, so interpreting the value as UTC reproduces that local wall-clock
+  rather than a true UTC instant.
+
+### Fixed
+
+- Orbitrap Exploris scan events: the frequency->m/z calibration coefficients
+  and the MS2 precursor m/z are now decoded. The nparam/coefficients block is
+  read immediately after the scan-window FractionCollector (offset 80 for the
+  offset-64 FC family) instead of a fixed `body_size - 64`, which missed it on
+  Exploris (body_size 136) and left the profile m/z mis-converted. Dependent
+  MS2 scans whose reaction record starts at body offset 4 (Exploris) now have
+  their precursor m/z and activation energy recovered. Q Exactive / Fusion
+  decoding is unchanged.
 
 ## [1.1.0] - 2026-05-31
 

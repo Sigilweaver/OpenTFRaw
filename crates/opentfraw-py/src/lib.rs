@@ -17,6 +17,7 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use ::opentfraw::generic_data::GenericValue;
 use ::opentfraw::{MsPower, Polarity, RawFileReader};
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyIOError, PyIndexError, PyValueError};
@@ -26,6 +27,23 @@ use pyo3::types::{PyDict, PyList};
 /// Translate an `opentfraw::Error` into a Python exception.
 fn to_py_err(e: ::opentfraw::Error) -> PyErr {
     PyIOError::new_err(format!("{e}"))
+}
+
+/// Convert a generic (trailer) value to a Python object, preserving its type.
+fn generic_value_to_py(py: Python<'_>, value: &GenericValue) -> PyObject {
+    match value {
+        GenericValue::Gap => py.None(),
+        GenericValue::Int8(x) => (*x).into_py(py),
+        GenericValue::Bool(x) => (*x).into_py(py),
+        GenericValue::UInt8(x) => (*x).into_py(py),
+        GenericValue::Int16(x) => (*x).into_py(py),
+        GenericValue::UInt16(x) => (*x).into_py(py),
+        GenericValue::Int32(x) => (*x).into_py(py),
+        GenericValue::UInt32(x) => (*x).into_py(py),
+        GenericValue::Float32(x) => (*x).into_py(py),
+        GenericValue::Float64(x) => (*x).into_py(py),
+        GenericValue::String(s) => s.into_py(py),
+    }
 }
 
 /// Loaded Thermo RAW file.
@@ -45,6 +63,9 @@ fn to_py_err(e: ::opentfraw::Error) -> PyErr {
 ///     Scan number of the last scan.
 /// instrument_model : str | None
 ///     Detected instrument model name (e.g. `"Orbitrap Fusion Lumos"`).
+/// created : float | None
+///     File creation (acquisition start) time as a Unix timestamp in seconds,
+///     or `None` if absent. See the getter for the timezone caveat.
 ///
 /// Example
 /// -------
@@ -106,6 +127,25 @@ impl RawFile {
         self.reader.instrument_model.map(|s| s.to_string())
     }
 
+    /// File creation (acquisition start) time as a Unix timestamp, in seconds,
+    /// or `None` if the file carries no audit timestamp.
+    ///
+    /// Read from the Xcalibur audit tag (a Windows FILETIME). Note: Thermo
+    /// records the instrument's local wall-clock here with no timezone, so
+    /// interpreting the value as UTC reproduces that local wall-clock (e.g.
+    /// `datetime.fromtimestamp(raw.created, timezone.utc)`); it is not a true
+    /// UTC instant.
+    #[getter]
+    fn created(&self) -> Option<f64> {
+        let t = self.reader.header.audit_start.time;
+        // Exact sentinel: read_windows_filetime returns Ok(0.0) only when ft == 0.
+        if t == 0.0 {
+            None
+        } else {
+            Some(t)
+        }
+    }
+
     fn __len__(&self) -> usize {
         self.num_scans() as usize
     }
@@ -123,6 +163,30 @@ impl RawFile {
     /// `None` if the scan is out of range.
     fn scan_filter(&self, scan_number: u32) -> Option<String> {
         self.reader.scan_filter(scan_number)
+    }
+
+    /// Return the per-scan generic ("trailer") parameters for `scan_number` as
+    /// a ``{label: value}`` dict, or ``None`` if the scan has no parameter
+    /// record. Mirrors the vendor reader's trailer-extra information: keys are
+    /// the instrument's own labels (e.g. ``"HCD Energy V:"``,
+    /// ``"MS2 Isolation Width:"``, ``"Ion Injection Time (ms):"``) and values
+    /// keep their stored type (str / int / float / bool / None for absent entries). The core already
+    /// decodes these; this surfaces them to Python.
+    fn scan_parameters<'py>(
+        &self,
+        py: Python<'py>,
+        scan_number: u32,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        match self.reader.scan_parameters(scan_number) {
+            None => Ok(None),
+            Some(record) => {
+                let d = PyDict::new_bound(py);
+                for (label, value) in &record.values {
+                    d.set_item(label, generic_value_to_py(py, value))?;
+                }
+                Ok(Some(d))
+            }
+        }
     }
 
     /// Read centroided peaks for `scan_number` and return
