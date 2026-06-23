@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `RawFile.scan_parameters(scan_number)` (Python): returns the per-scan generic
+  ("trailer") parameters as a `{label: value}` dict (or `None`), mirroring the
+  vendor reader's trailer-extra information. Keys are the instrument's own
+  labels (e.g. `"HCD Energy V:"`, `"MS2 Isolation Width:"`); values keep their
+  stored type. The Rust core already decoded these (`scan_parameters` /
+  `GenericRecord`); this surfaces them to Python.
+- `RawFile.created`: file creation (acquisition start) time as a Unix timestamp
+  in seconds, read from the Xcalibur audit tag (a Windows FILETIME). The Rust
+  core already parses this (`header.audit_start.time`); the bindings did not
+  surface it. Note: Thermo records the instrument's local wall-clock there with
+  no timezone, so interpreting the value as UTC reproduces that local wall-clock
+  rather than a true UTC instant.
+
 ### Fixed
 
 - Orbitrap Exploris scan events: the frequency->m/z calibration coefficients
