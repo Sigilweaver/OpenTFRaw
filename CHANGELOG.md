@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no timezone, so interpreting the value as UTC reproduces that local wall-clock
   rather than a true UTC instant.
 
+### Fixed
+
+- Orbitrap Exploris scan events: the frequency->m/z calibration coefficients
+  and the MS2 precursor m/z are now decoded. The nparam/coefficients block is
+  read immediately after the scan-window FractionCollector (offset 80 for the
+  offset-64 FC family) instead of a fixed `body_size - 64`, which missed it on
+  Exploris (body_size 136) and left the profile m/z mis-converted. Dependent
+  MS2 scans whose reaction record starts at body offset 4 (Exploris) now have
+  their precursor m/z and activation energy recovered. Q Exactive / Fusion
+  decoding is unchanged.
+
 ## [1.1.0] - 2026-05-31
 
 ### Added

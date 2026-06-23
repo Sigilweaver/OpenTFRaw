@@ -208,36 +208,43 @@ impl ScanEvent {
             legacy_candidates = [64usize, 8, 128, body_size.saturating_sub(80)];
             &legacy_candidates
         };
-        let fraction_collectors = candidates
-            .iter()
-            .copied()
-            .find_map(|off| {
-                if off + 16 > body_size {
-                    return None;
-                }
-                let low_mz = crate::bytes::read_f64_le(&body, off).ok()?;
-                let high_mz = crate::bytes::read_f64_le(&body, off + 8).ok()?;
-                // A valid scan window must be finite, monotonic, and within
-                // physically realistic m/z bounds (instruments top out well
-                // below 1e5 m/z). Accept lo == hi as well because some
-                // SIM / tSIM scans use a single-point window.
-                if low_mz.is_finite()
-                    && high_mz.is_finite()
-                    && low_mz >= 0.1
-                    && low_mz <= high_mz
-                    && high_mz <= 50_000.0
-                {
-                    Some(vec![FractionCollector { low_mz, high_mz }])
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_default();
+        let fc_match = candidates.iter().copied().find_map(|off| {
+            if off + 16 > body_size {
+                return None;
+            }
+            let low_mz = crate::bytes::read_f64_le(&body, off).ok()?;
+            let high_mz = crate::bytes::read_f64_le(&body, off + 8).ok()?;
+            // A valid scan window must be finite, monotonic, and within
+            // physically realistic m/z bounds (instruments top out well
+            // below 1e5 m/z). Accept lo == hi as well because some
+            // SIM / tSIM scans use a single-point window.
+            if low_mz.is_finite()
+                && high_mz.is_finite()
+                && low_mz >= 0.1
+                && low_mz <= high_mz
+                && high_mz <= 50_000.0
+            {
+                Some((off, FractionCollector { low_mz, high_mz }))
+            } else {
+                None
+            }
+        });
+        let (fc_offset, fraction_collectors) = match fc_match {
+            Some((off, fc)) => (Some(off), vec![fc]),
+            None => (None, Vec::new()),
+        };
 
-        // nparam + coefficients live at a fixed offset from the end of the body
-        // (body_size - 64). This is independent of the FC location and is
-        // consistent across all v66 instruments in the corpus.
-        let np_off = body_size.saturating_sub(64);
+        // The nparam + coefficients block immediately follows the scan-window
+        // FractionCollector. On Q Exactive / Exploris / Astral (FC at offset 64)
+        // that is offset 80; the legacy `body_size - 64` only coincides with it
+        // when body_size == 144 (e.g. Q Exactive), so Exploris (body_size 136)
+        // came back with no coefficients and its profile m/z was mis-converted.
+        // Use the FC-relative offset for that family; other layouts keep the
+        // legacy offset.
+        let np_off = match fc_offset {
+            Some(64) => 80,
+            _ => body_size.saturating_sub(64),
+        };
         let mut coefficients = Vec::new();
         if np_off + 4 <= body_size {
             let nparam_raw = crate::bytes::read_u32_le(&body, np_off)? as usize;
@@ -259,7 +266,7 @@ impl ScanEvent {
         // Condition: parse reactions when ms_power >= 2 OR the scan is flagged dependent.
         // (MS1 primary scans with ms_power <= 1 and dependent=false are skipped.)
         let is_ms2_plus = preamble.bytes.get(6).copied().unwrap_or(0) >= 2;
-        let reactions = if (!is_ms2_plus && !preamble.is_dependent()) || body_size < 8 {
+        let mut reactions = if (!is_ms2_plus && !preamble.is_dependent()) || body_size < 8 {
             Vec::new()
         } else if is_tribrid_dep {
             // Tribrid dependent events (Eclipse, Fusion Lumos): n_reactions is stored at
@@ -333,6 +340,28 @@ impl ScanEvent {
                 rxs
             }
         };
+
+        // Exploris v66 dependent scans store the reaction record starting at
+        // body offset 4 (precursor m/z as an f64 at body[4..12]), with no
+        // leading count word, so the offset-8 parse above finds nothing. Fall
+        // back to that layout when an MS2+/dependent, non-tribrid scan yielded
+        // no reaction.
+        if reactions.is_empty()
+            && (is_ms2_plus || preamble.is_dependent())
+            && !is_tribrid_dep
+            && body_size >= 36
+        {
+            let mz = crate::bytes::read_f64_le(&body, 4)?;
+            if mz.is_finite() && mz > 0.0 && mz < 50_000.0 {
+                reactions.push(Reaction {
+                    precursor_mz: mz,
+                    unknown_double: crate::bytes::read_f64_le(&body, 12)?,
+                    energy: crate::bytes::read_f64_le(&body, 20)?,
+                    unknown_long1: crate::bytes::read_u32_le(&body, 28)?,
+                    unknown_long2: crate::bytes::read_u32_le(&body, 32)?,
+                });
+            }
+        }
 
         Ok(Self {
             preamble,
