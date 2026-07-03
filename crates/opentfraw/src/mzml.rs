@@ -20,7 +20,7 @@ use crate::scan_event::ScanEvent;
 use crate::types::{Activation, MsPower, Polarity};
 use crate::RawFileReader;
 
-// ─── Structured spectrum record (vendor-neutral, no mzML) ────────────────────
+// -- Structured spectrum record (vendor-neutral, no mzML) --
 
 /// Precursor metadata for an MS2+ spectrum.
 ///
@@ -245,7 +245,7 @@ pub fn iter_spectra<'a, R: Read + Seek>(
         None
     })
 }
-// ─── Helpers used by extract_spectrum ───────────────────────────────────────
+// -- Helpers used by extract_spectrum --
 
 fn ms_level(power: MsPower) -> u32 {
     match power {
@@ -304,7 +304,7 @@ fn resolve_scan_arrays<R: Read + Seek>(
     Some((mz, int, nominal_scan_mode))
 }
 
-// ─── Adapter / canonical writer wrappers ─────────────────────────────────────
+// -- Adapter / canonical writer wrappers --
 //
 // The mzML emission machinery itself lives in `openproteo_core`. Here we
 // define a `SpectrumSource` adapter that pulls Thermo scans through
@@ -543,7 +543,7 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
     }
 }
 
-// ─── Public mzML entry points (unchanged signatures) ─────────────────────────
+// -- Public mzML entry points (unchanged signatures) --
 
 /// Write the contents of `raw` as mzML 1.1.0 to `out`.
 ///

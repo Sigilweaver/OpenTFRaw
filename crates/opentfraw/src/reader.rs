@@ -232,7 +232,7 @@ pub struct RawFileReader {
     pub srm_ce_by_event: HashMap<u16, f64>,
 }
 
-// ─── Multi-controller metadata ───────────────────────────────────────────────
+// -- Multi-controller metadata --
 
 /// Controller type codes as used in Thermo RAW files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1106,7 +1106,7 @@ fn extract_utf16le_text(buf: &[u8], min_chars: usize) -> Option<String> {
     best
 }
 
-// ─── High-level typed accessor for scan parameters ──────────────────────────
+// -- High-level typed accessor for scan parameters --
 
 /// Typed accessor for a scan's extra parameters (`ScanParams` stream).
 ///
@@ -1495,7 +1495,7 @@ impl<'a> ScanParams<'a> {
     }
 }
 
-// ─── Status log (instrument log) typed accessor ─────────────────────────────
+// -- Status log (instrument log) typed accessor --
 
 /// Typed accessor for a per-scan instrument-status log entry.
 ///
