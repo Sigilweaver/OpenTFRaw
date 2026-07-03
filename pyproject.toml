@@ -34,3 +34,8 @@ include = [
     { path = "CHANGELOG.md", format = "sdist" },
     { path = "README.md", format = "wheel" },
 ]
+
+[dependency-groups]
+dev = [
+    "maturin>=1.14.1",
+]
