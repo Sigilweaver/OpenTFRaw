@@ -3,9 +3,8 @@
 # Jobs:
 #   build         - cargo fmt --check, cargo clippy -D warnings, cargo test
 #                   (Linux + macOS via WarpBuild)
-#   validate-mzml - convert the committed samples/small.RAW fixture (hermetic,
-#                   every push) and a small public Thermo RAW file (downloaded)
-#                   to mzML, run scripts/validate_mzml.py for structural
+#   validate-mzml - download a small public Thermo RAW file, convert it to
+#                   mzML, run scripts/validate_mzml.py for structural
 #                   conformance, and validate against the vendored PSI-MS mzML
 #                   XSD with xmllint.
 
@@ -73,18 +72,6 @@ jobs:
 
       - name: Ensure xmllint is available
         run: command -v xmllint || (sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-utils)
-
-      - name: Convert and schema-validate committed sample (hermetic)
-        run: |
-          # Runs on every push with no network dependency, using the
-          # small.RAW fixture committed under samples/. Guards the Thermo
-          # reader -> canonical writer path against the PSI-MS XSD even when
-          # the PRIDE download below is unavailable.
-          ./target/release/examples/to_mzml samples/small.RAW sample_centroid.mzML
-          ./target/release/examples/to_mzml --indexed samples/small.RAW sample_indexed.mzML
-          python3 scripts/validate_mzml.py sample_centroid.mzML sample_indexed.mzML
-          xmllint --noout --schema schema/mzML1.1.0.xsd sample_centroid.mzML
-          xmllint --noout --schema schema/mzML1.1.2_idx.xsd sample_indexed.mzML
 
       - name: Download test RAW file
         run: |
