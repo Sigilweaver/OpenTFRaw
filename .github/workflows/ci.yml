@@ -4,8 +4,9 @@
 #   build         - cargo fmt --check, cargo clippy -D warnings, cargo test
 #                   (Linux + macOS via WarpBuild)
 #   validate-mzml - download a small public Thermo RAW file, convert to mzML,
-#                   and run scripts/validate_mzml.py to check structural
-#                   conformance.
+#                   run scripts/validate_mzml.py for structural conformance,
+#                   and validate against the vendored PSI-MS mzML XSD with
+#                   xmllint.
 
 name: CI
 
@@ -96,6 +97,20 @@ jobs:
             test_centroid.mzML \
             test_indexed.mzML \
             test_profile.mzML
+
+      - name: Ensure xmllint is available
+        run: command -v xmllint || (sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-utils)
+
+      - name: Validate mzML against PSI-MS XSD
+        run: |
+          # Non-indexed documents (root <mzML>) validate against the base
+          # schema; the indexed document (root <indexedmzML>) validates
+          # against the index wrapper, which includes the base schema.
+          xmllint --noout --schema schema/mzML1.1.0.xsd \
+            test_centroid.mzML \
+            test_profile.mzML
+          xmllint --noout --schema schema/mzML1.1.2_idx.xsd \
+            test_indexed.mzML
 
   docs:
     name: Docs (Docusaurus)
