@@ -16,12 +16,12 @@ raw.to_mzml("run.mzML")
 ```
 
 The output is intentionally minimal: spectrum index, scan headers,
-m/z + intensity arrays (base64 + zlib), and the filter string. It is
-suitable as a bridge into existing mzML-based pipelines but does not
-attempt to reproduce every controlled-vocabulary annotation that
-`ProteoWizard msconvert` would emit.
+m/z + intensity arrays (base64 + zlib), and the filter string. It
+validates against the PSI-MS mzML 1.1 schema and is suitable as a
+bridge into existing mzML-based pipelines. It does not aim to populate
+every optional controlled-vocabulary annotation the schema permits; it
+covers the core scan and peak data plus the vendor metadata OpenTFRaw
+decodes directly from the binary.
 
-For richer mzML, run `msconvert` on a Windows host with the
-`ThermoRawFileParser` tools; OpenTFRaw is designed to give you direct
-access to the binary, not to be a drop-in replacement for that
-toolchain.
+OpenTFRaw's goal is direct, open access to the RAW binary and a
+faithful open-standard mzML rendering of it.

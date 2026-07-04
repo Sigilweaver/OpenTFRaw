@@ -31,6 +31,18 @@ paste vendor SDK headers, sources, decompiled code, or proprietary
 specifications. See the repo's `ATTRIBUTION.md` and `CORPUS.md`
 where present.
 
+**Never use vendor software.** This is a clean-room project. Do not
+run, depend on, or validate against the vendor's own tools, or anything
+that reads the format through the vendor SDK/DLLs - not in CI, not in
+tests, not in local development. ProteoWizard `msconvert` counts as
+vendor software because it reads the raw formats through the vendor
+libraries. Correctness is argued only from open references: the PSI-MS
+mzML schema, published open specifications, roundtrip and
+self-consistency invariants, and independent open-source parsers used
+purely as format checkers. Comparing, benchmarking, or tuning output
+against vendor results is not allowed and would compromise the
+clean-room status of the project.
+
 ## Security
 
 Please report security vulnerabilities privately via GitHub Security
