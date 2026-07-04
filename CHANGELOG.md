@@ -166,10 +166,10 @@ Exploris 480, TSQ Vantage, TSQ Quantiva, TSQ Altis).
 - `examples/dump.rs`: dump the contents of a RAW file as plain text.
 - `examples/to_mzml.rs`: convert a RAW file to mzML (centroid or
   profile; optionally indexed).
-- Validated against ProteoWizard `msconvert` mzML output for a
-  multi-instrument PRIDE corpus (LTQ FT, Q Exactive HF, Orbitrap
-  Fusion Lumos, Orbitrap Exploris 480, TSQ Vantage, TSQ Quantiva,
-  TSQ Altis).
+- Exercised on a multi-instrument PRIDE corpus (LTQ FT, Q Exactive HF,
+  Orbitrap Fusion Lumos, Orbitrap Exploris 480, TSQ Vantage, TSQ
+  Quantiva, TSQ Altis); mzML output checked for structural conformance
+  against the PSI-MS mzML schema.
 - Optional Python bindings (`opentfraw-py`, not published to crates.io).
 - Format specification under `docs/docs/format/`.
 
