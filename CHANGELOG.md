@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-07-06
+
+### Changed
+
+- PyPI package now declares `keywords` (`mass-spectrometry`, `thermo`,
+  `raw`, `proteomics`, `orbitrap`) so the package is findable via PyPI
+  search; previously only the crates.io side had them.
+
 ## [1.2.0] - 2026-06-23
 
 ### Added
