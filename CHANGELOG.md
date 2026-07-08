@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `RawFile.status_log(scan_number)` (Python): returns the per-scan
+  instrument status log as a `{label: value}` dict (or `None`). This is
+  the instrument-state-over-time log (temperatures, voltages, pressures,
+  ion counts, etc.), distinct from the trailer-extra values already
+  surfaced by `scan_parameters()`. The Rust core already decoded these
+  (`inst_log_record` / `GenericRecord`); this exposes them to Python.
+  (@Nabejo)
+
 ## [1.2.1] - 2026-07-06
 
 ### Changed
