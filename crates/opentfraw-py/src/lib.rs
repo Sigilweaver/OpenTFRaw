@@ -66,6 +66,9 @@ fn generic_value_to_py(py: Python<'_>, value: &GenericValue) -> PyObject {
 /// created : float | None
 ///     File creation (acquisition start) time as a Unix timestamp in seconds,
 ///     or `None` if absent. See the getter for the timezone caveat.
+/// sample_info : dict
+///     Sample-sheet / sequence-row metadata for this acquisition. See the
+///     getter for the full set of keys.
 /// computer_name : str
 ///     The acquisition workstation's computer name.
 /// controller_count : int
@@ -153,6 +156,46 @@ impl RawFile {
         }
     }
 
+    /// Sample-sheet / sequence-row metadata for this acquisition, as a dict.
+    ///
+    /// Keys
+    /// ----
+    /// id : str
+    /// comment : str
+    /// vial : str
+    /// injection_volume : float
+    /// sample_weight : float
+    /// sample_volume : float
+    /// istd_amount : float
+    /// dilution_factor : float
+    /// user_labels : list[str]  (the 5 user-defined label fields)
+    /// inst_method : str  (instrument method file name)
+    /// proc_method : str  (processing method file name)
+    /// file_name : str  (original file name at acquisition time)
+    /// path : str  (original file path at acquisition time)
+    ///
+    /// The Rust core already decodes this (`RawFileReader::seq_row`); this
+    /// surfaces it to Python.
+    #[getter]
+    fn sample_info<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let seq_row = &self.reader.seq_row;
+        let d = PyDict::new_bound(py);
+        d.set_item("id", &seq_row.id)?;
+        d.set_item("comment", &seq_row.comment)?;
+        d.set_item("vial", &seq_row.vial)?;
+        d.set_item("injection_volume", seq_row.injection.injection_volume)?;
+        d.set_item("sample_weight", seq_row.injection.sample_weight)?;
+        d.set_item("sample_volume", seq_row.injection.sample_volume)?;
+        d.set_item("istd_amount", seq_row.injection.istd_amount)?;
+        d.set_item("dilution_factor", seq_row.injection.dilution_factor)?;
+        d.set_item("user_labels", &seq_row.user_labels)?;
+        d.set_item("inst_method", &seq_row.inst_method)?;
+        d.set_item("proc_method", &seq_row.proc_method)?;
+        d.set_item("file_name", &seq_row.file_name)?;
+        d.set_item("path", &seq_row.path)?;
+        Ok(d)
+    }
+
     /// The acquisition workstation's computer name.
     #[getter]
     fn computer_name(&self) -> String {
@@ -205,6 +248,23 @@ impl RawFile {
         self.reader.scan_filter(scan_number)
     }
 
+    /// Return the acquisition error log as a list of
+    /// ``{"time": ..., "message": ...}`` dicts, in log order.
+    ///
+    /// ``time`` is the acquisition-relative time in minutes; ``message`` is
+    /// the instrument-reported error text. The Rust core already decodes
+    /// this (`RawFileReader::error_log`); this surfaces it to Python.
+    fn error_log<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let list = PyList::empty_bound(py);
+        for entry in &self.reader.error_log {
+            let d = PyDict::new_bound(py);
+            d.set_item("time", entry.time)?;
+            d.set_item("message", &entry.message)?;
+            list.append(d)?;
+        }
+        Ok(list)
+    }
+
     /// Return the per-scan generic ("trailer") parameters for `scan_number` as
     /// a ``{label: value}`` dict, or ``None`` if the scan has no parameter
     /// record. Mirrors the vendor reader's trailer-extra information: keys are
@@ -218,6 +278,31 @@ impl RawFile {
         scan_number: u32,
     ) -> PyResult<Option<Bound<'py, PyDict>>> {
         match self.reader.scan_parameters(scan_number) {
+            None => Ok(None),
+            Some(record) => {
+                let d = PyDict::new_bound(py);
+                for (label, value) in &record.values {
+                    d.set_item(label, generic_value_to_py(py, value))?;
+                }
+                Ok(Some(d))
+            }
+        }
+    }
+
+    /// Return the per-scan instrument status log for `scan_number` as a
+    /// ``{label: value}`` dict, or ``None`` if the scan has no status-log
+    /// record. This is the instrument-state-over-time log (temperatures,
+    /// voltages, pressures, ion counts, etc.), distinct from the
+    /// trailer-extra values returned by :meth:`scan_parameters`. Values keep
+    /// their stored type (str / int / float / bool / None for absent
+    /// entries). The core already decodes these; this surfaces them to
+    /// Python.
+    fn status_log<'py>(
+        &self,
+        py: Python<'py>,
+        scan_number: u32,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        match self.reader.inst_log_record(scan_number) {
             None => Ok(None),
             Some(record) => {
                 let d = PyDict::new_bound(py);
@@ -490,6 +575,61 @@ impl RawFile {
             list.append(d)?;
         }
         Ok(list)
+    }
+
+    /// Enumerate all controllers in this RAW file as a list of dicts.
+    ///
+    /// Multi-detector acquisition systems write one controller per detector
+    /// (MS, UV, PDA, Analog) alongside the main MS controller; this exposes
+    /// each one. Single-controller files (the common case) return a
+    /// one-element list.
+    ///
+    /// Keys
+    /// ----
+    /// index : int
+    /// is_ms_controller : bool
+    /// controller_type : str  (``"Ms"``, ``"Analog"``, ``"Adc"``, ``"Pda"``,
+    ///     ``"Uv"``, or ``"Other"``)
+    /// first_scan : int
+    /// last_scan : int
+    /// start_time : float  (minutes)
+    /// end_time : float  (minutes)
+    fn controllers<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let mut src = self
+            .source
+            .lock()
+            .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))?;
+        let infos = self.reader.controllers(&mut *src).map_err(to_py_err)?;
+
+        let list = PyList::empty_bound(py);
+        for info in infos {
+            let d = PyDict::new_bound(py);
+            d.set_item("index", info.index)?;
+            d.set_item("is_ms_controller", info.is_ms_controller)?;
+            d.set_item("controller_type", format!("{:?}", info.controller_type))?;
+            d.set_item("first_scan", info.first_scan)?;
+            d.set_item("last_scan", info.last_scan)?;
+            d.set_item("start_time", info.start_time)?;
+            d.set_item("end_time", info.end_time)?;
+            list.append(d)?;
+        }
+        Ok(list)
+    }
+
+    /// Best-effort extraction of the embedded acquisition method text.
+    ///
+    /// Thermo RAW files embed the acquisition method as a UTF-16LE text or
+    /// XML blob in the metadata region. Returns `None` if no suitable text
+    /// block is found or if no method was embedded in the file. This is
+    /// distinct from :attr:`sample_info`'s ``inst_method`` field, which is
+    /// just the method file name (e.g. ``"Standard_HCD.meth"``) rather than
+    /// its embedded contents.
+    fn instrument_method_text(&self) -> PyResult<Option<String>> {
+        let mut src = self
+            .source
+            .lock()
+            .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))?;
+        Ok(self.reader.instrument_method_text(&mut *src))
     }
 
     /// Write the entire file out as mzML 1.1.0 to `out_path`.
