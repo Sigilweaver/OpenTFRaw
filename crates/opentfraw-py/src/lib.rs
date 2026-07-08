@@ -66,6 +66,13 @@ fn generic_value_to_py(py: Python<'_>, value: &GenericValue) -> PyObject {
 /// created : float | None
 ///     File creation (acquisition start) time as a Unix timestamp in seconds,
 ///     or `None` if absent. See the getter for the timezone caveat.
+/// computer_name : str
+///     The acquisition workstation's computer name.
+/// controller_count : int
+///     Number of controllers in the file (MS plus any auxiliary detectors).
+/// acquisition_date : float | None
+///     Acquisition timestamp as a Unix timestamp in seconds, or `None` if
+///     absent. See the getter for how this relates to `created`.
 ///
 /// Example
 /// -------
@@ -144,6 +151,39 @@ impl RawFile {
         } else {
             Some(t)
         }
+    }
+
+    /// The acquisition workstation's computer name.
+    #[getter]
+    fn computer_name(&self) -> String {
+        self.reader.raw_file_info.computer_name.clone()
+    }
+
+    /// Number of controllers in the file (MS plus any auxiliary detectors
+    /// such as UV, PDA, or Analog channels). 1 for the common
+    /// single-controller case; see :meth:`controllers` for full per-controller
+    /// detail.
+    #[getter]
+    fn controller_count(&self) -> u32 {
+        self.reader.raw_file_info.preamble.controller_count
+    }
+
+    /// Acquisition timestamp as a Unix timestamp, in seconds, or `None` if
+    /// absent or out of range.
+    ///
+    /// Decoded from the raw-file-info preamble's year/month/day/hour/minute/
+    /// second/millisecond fields - a different decoded timestamp from
+    /// :attr:`created` (which reads the Xcalibur audit tag/FILETIME). The two
+    /// are expected to agree since they record the same acquisition event,
+    /// but come from independently-decoded fields; if they disagree on a
+    /// given file, treat `created` as the more established source (it mirrors
+    /// what the vendor reader surfaces as the file's creation time). Like
+    /// `created`, this is the instrument's local wall-clock time with no
+    /// timezone, so interpreting the value as UTC reproduces that local
+    /// wall-clock rather than a true UTC instant.
+    #[getter]
+    fn acquisition_date(&self) -> Option<f64> {
+        self.reader.raw_file_info.preamble.acquisition_date()
     }
 
     fn __len__(&self) -> usize {

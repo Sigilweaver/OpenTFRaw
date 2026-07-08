@@ -25,6 +25,21 @@ pub struct RawFileInfoPreamble {
     pub run_header_addr_2: u64,
 }
 
+/// Convert a proleptic Gregorian civil date to days since 1970-01-01.
+///
+/// Howard Hinnant's `days_from_civil` algorithm
+/// (<https://howardhinnant.github.io/date_algorithms.html#days_from_civil>,
+/// public domain calendar arithmetic, independent of any vendor source).
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (if m > 2 { m - 3 } else { m + 9 }) as i64;
+    let doy = (153 * mp + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
 /// RawFileInfo: preamble + label strings + computer name.
 #[derive(Debug)]
 pub struct RawFileInfo {
@@ -53,6 +68,28 @@ impl RawFileInfo {
 }
 
 impl RawFileInfoPreamble {
+    /// Convert the preamble's year/month/day/hour/minute/second/millisecond
+    /// fields to a Unix timestamp in seconds, or `None` if no acquisition
+    /// date is present (`year == 0`) or the date fields are out of range.
+    ///
+    /// Like [`crate::audit_tag::AuditTag::time`], this is the instrument's
+    /// local wall-clock time with no timezone: interpreting the result as
+    /// UTC reproduces the local wall-clock value rather than a true UTC
+    /// instant. This is a different decoded timestamp from that audit-tag
+    /// FILETIME (surfaced separately by the Python bindings as
+    /// `RawFile.created`); the two are expected to agree since they record
+    /// the same acquisition event, but come from independently-decoded
+    /// fields.
+    pub fn acquisition_date(&self) -> Option<f64> {
+        if self.year == 0 || !(1..=12).contains(&self.month) || !(1..=31).contains(&self.day) {
+            return None;
+        }
+        let days = days_from_civil(self.year as i64, self.month as u32, self.day as u32);
+        let secs =
+            days * 86_400 + self.hour as i64 * 3600 + self.minute as i64 * 60 + self.second as i64;
+        Some(secs as f64 + self.millisecond as f64 / 1000.0)
+    }
+
     pub(crate) fn read<R: Read + Seek>(r: &mut BinaryReader<R>, version: u32) -> Result<Self> {
         let method_file_present = r.read_u32()? != 0;
         let year = r.read_u16()?;
@@ -163,5 +200,72 @@ impl RawFileInfoPreamble {
                 run_header_addr_2,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn preamble(
+        year: u16,
+        month: u16,
+        day: u16,
+        hour: u16,
+        minute: u16,
+        second: u16,
+        millisecond: u16,
+    ) -> RawFileInfoPreamble {
+        RawFileInfoPreamble {
+            method_file_present: false,
+            year,
+            month,
+            day_of_week: 0,
+            day,
+            hour,
+            minute,
+            second,
+            millisecond,
+            controller_count: 1,
+            data_addr: 0,
+            run_header_addr: 0,
+            run_header_addrs: Vec::new(),
+            run_header_addr_2: 0,
+        }
+    }
+
+    #[test]
+    fn days_from_civil_epoch() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+    }
+
+    #[test]
+    fn days_from_civil_reference_value() {
+        // Reference value from Hinnant's date algorithms writeup.
+        assert_eq!(days_from_civil(2000, 3, 1), 11017);
+    }
+
+    #[test]
+    fn acquisition_date_matches_known_epoch() {
+        let p = preamble(1970, 1, 1, 0, 0, 0, 0);
+        assert_eq!(p.acquisition_date(), Some(0.0));
+    }
+
+    #[test]
+    fn acquisition_date_includes_time_of_day_and_millis() {
+        let p = preamble(1970, 1, 1, 1, 1, 1, 500);
+        assert_eq!(p.acquisition_date(), Some(3661.5));
+    }
+
+    #[test]
+    fn acquisition_date_none_when_year_zero() {
+        let p = preamble(0, 1, 1, 0, 0, 0, 0);
+        assert_eq!(p.acquisition_date(), None);
+    }
+
+    #[test]
+    fn acquisition_date_none_when_month_out_of_range() {
+        let p = preamble(2020, 13, 1, 0, 0, 0, 0);
+        assert_eq!(p.acquisition_date(), None);
     }
 }
