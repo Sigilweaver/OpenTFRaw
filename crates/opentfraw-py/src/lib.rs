@@ -537,6 +537,45 @@ impl RawFile {
         Ok(list)
     }
 
+    /// Enumerate all controllers in this RAW file as a list of dicts.
+    ///
+    /// Multi-detector acquisition systems write one controller per detector
+    /// (MS, UV, PDA, Analog) alongside the main MS controller; this exposes
+    /// each one. Single-controller files (the common case) return a
+    /// one-element list.
+    ///
+    /// Keys
+    /// ----
+    /// index : int
+    /// is_ms_controller : bool
+    /// controller_type : str  (``"Ms"``, ``"Analog"``, ``"Adc"``, ``"Pda"``,
+    ///     ``"Uv"``, or ``"Other"``)
+    /// first_scan : int
+    /// last_scan : int
+    /// start_time : float  (minutes)
+    /// end_time : float  (minutes)
+    fn controllers<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let mut src = self
+            .source
+            .lock()
+            .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))?;
+        let infos = self.reader.controllers(&mut *src).map_err(to_py_err)?;
+
+        let list = PyList::empty_bound(py);
+        for info in infos {
+            let d = PyDict::new_bound(py);
+            d.set_item("index", info.index)?;
+            d.set_item("is_ms_controller", info.is_ms_controller)?;
+            d.set_item("controller_type", format!("{:?}", info.controller_type))?;
+            d.set_item("first_scan", info.first_scan)?;
+            d.set_item("last_scan", info.last_scan)?;
+            d.set_item("start_time", info.start_time)?;
+            d.set_item("end_time", info.end_time)?;
+            list.append(d)?;
+        }
+        Ok(list)
+    }
+
     /// Write the entire file out as mzML 1.1.0 to `out_path`.
     fn to_mzml(&self, out_path: &str) -> PyResult<()> {
         let out_file = File::create(out_path).map_err(|e| PyIOError::new_err(e.to_string()))?;
