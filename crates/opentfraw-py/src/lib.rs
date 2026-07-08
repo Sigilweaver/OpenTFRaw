@@ -165,6 +165,23 @@ impl RawFile {
         self.reader.scan_filter(scan_number)
     }
 
+    /// Return the acquisition error log as a list of
+    /// ``{"time": ..., "message": ...}`` dicts, in log order.
+    ///
+    /// ``time`` is the acquisition-relative time in minutes; ``message`` is
+    /// the instrument-reported error text. The Rust core already decodes
+    /// this (`RawFileReader::error_log`); this surfaces it to Python.
+    fn error_log<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let list = PyList::empty_bound(py);
+        for entry in &self.reader.error_log {
+            let d = PyDict::new_bound(py);
+            d.set_item("time", entry.time)?;
+            d.set_item("message", &entry.message)?;
+            list.append(d)?;
+        }
+        Ok(list)
+    }
+
     /// Return the per-scan generic ("trailer") parameters for `scan_number` as
     /// a ``{label: value}`` dict, or ``None`` if the scan has no parameter
     /// record. Mirrors the vendor reader's trailer-extra information: keys are

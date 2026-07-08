@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `RawFile.error_log()` (Python): returns the acquisition error log as a
+  list of `{"time": ..., "message": ...}` dicts, in log order (`time` is
+  the acquisition-relative time in minutes). The Rust core already decoded
+  this (`RawFileReader::error_log`); this exposes it to Python. (@Nabejo)
+
 ## [1.2.1] - 2026-07-06
 
 ### Changed
