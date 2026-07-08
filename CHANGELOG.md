@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `RawFile.instrument_method_text()` (Python): best-effort extraction of
+  the embedded acquisition method (UTF-16LE text/XML blob) from the RAW
+  file's metadata region, or `None` if no suitable text block is found
+  or no method was embedded. Distinct from `sample_info()`'s
+  `inst_method` field, which is just the method file name. The Rust core
+  already decoded this (`RawFileReader::instrument_method_text`); this
+  exposes it to Python. (@Nabejo)
+
 ## [1.2.1] - 2026-07-06
 
 ### Changed
