@@ -40,6 +40,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `inst_method` field, which is just the method file name. The Rust core
   already decoded this (`RawFileReader::instrument_method_text`); this
   exposes it to Python. (@Nabejo)
+- `RawFile.computer_name`, `RawFile.controller_count`, and
+  `RawFile.acquisition_date` (Python): surface the remaining fields of
+  `RawFileReader::raw_file_info` that weren't already exposed indirectly
+  through other bindings. `acquisition_date` is a Unix timestamp in
+  seconds decoded from the raw-file-info preamble's discrete
+  year/month/day/hour/minute/second/millisecond fields (new
+  `RawFileInfoPreamble::acquisition_date` in the Rust core, using
+  Howard Hinnant's public-domain civil-calendar arithmetic) - a
+  different decoded timestamp from `RawFile.created` (the Xcalibur
+  audit-tag FILETIME); the two are expected to agree since they record
+  the same acquisition event, but come from independently-decoded
+  fields. (@Nabejo)
 
 ## [1.2.1] - 2026-07-06
 
