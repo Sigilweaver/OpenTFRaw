@@ -576,6 +576,22 @@ impl RawFile {
         Ok(list)
     }
 
+    /// Best-effort extraction of the embedded acquisition method text.
+    ///
+    /// Thermo RAW files embed the acquisition method as a UTF-16LE text or
+    /// XML blob in the metadata region. Returns `None` if no suitable text
+    /// block is found or if no method was embedded in the file. This is
+    /// distinct from :attr:`sample_info`'s ``inst_method`` field, which is
+    /// just the method file name (e.g. ``"Standard_HCD.meth"``) rather than
+    /// its embedded contents.
+    fn instrument_method_text(&self) -> PyResult<Option<String>> {
+        let mut src = self
+            .source
+            .lock()
+            .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))?;
+        Ok(self.reader.instrument_method_text(&mut *src))
+    }
+
     /// Write the entire file out as mzML 1.1.0 to `out_path`.
     fn to_mzml(&self, out_path: &str) -> PyResult<()> {
         let out_file = File::create(out_path).map_err(|e| PyIOError::new_err(e.to_string()))?;
