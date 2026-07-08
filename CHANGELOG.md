@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `RawFile.controllers()` (Python): returns a list of dicts (`index`,
+  `is_ms_controller`, `controller_type`, `first_scan`, `last_scan`,
+  `start_time`, `end_time`) enumerating every controller in a
+  multi-detector RAW file (MS, UV, PDA, Analog channels alongside the
+  main MS controller). Single-controller files (the common case) return
+  a one-element list. The Rust core already decoded this
+  (`RawFileReader::controllers`); this exposes it to Python. (@Nabejo)
+
 ## [1.2.1] - 2026-07-06
 
 ### Changed
