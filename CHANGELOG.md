@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `RawFile.sample_info` (Python): returns the sample-sheet / sequence-row
+  metadata for the acquisition as a dict (`id`, `comment`, `vial`,
+  `injection_volume`, `sample_weight`, `sample_volume`, `istd_amount`,
+  `dilution_factor`, `user_labels`, `inst_method`, `proc_method`,
+  `file_name`, `path`). The Rust core already decoded this
+  (`RawFileReader::seq_row`); this exposes it to Python. (@Nabejo)
+- `RawFile.error_log()` (Python): returns the acquisition error log as a
+  list of `{"time": ..., "message": ...}` dicts, in log order (`time` is
+  the acquisition-relative time in minutes). The Rust core already decoded
+  this (`RawFileReader::error_log`); this exposes it to Python. (@Nabejo)
+- `RawFile.status_log(scan_number)` (Python): returns the per-scan
+  instrument status log as a `{label: value}` dict (or `None`). This is
+  the instrument-state-over-time log (temperatures, voltages, pressures,
+  ion counts, etc.), distinct from the trailer-extra values already
+  surfaced by `scan_parameters()`. The Rust core already decoded these
+  (`inst_log_record` / `GenericRecord`); this exposes them to Python.
+  (@Nabejo)
 - `RawFile.controllers()` (Python): returns a list of dicts (`index`,
   `is_ms_controller`, `controller_type`, `first_scan`, `last_scan`,
   `start_time`, `end_time`) enumerating every controller in a
