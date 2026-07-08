@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `RawFile.sample_info` (Python): returns the sample-sheet / sequence-row
+  metadata for the acquisition as a dict (`id`, `comment`, `vial`,
+  `injection_volume`, `sample_weight`, `sample_volume`, `istd_amount`,
+  `dilution_factor`, `user_labels`, `inst_method`, `proc_method`,
+  `file_name`, `path`). The Rust core already decoded this
+  (`RawFileReader::seq_row`); this exposes it to Python. (@Nabejo)
+
 ## [1.2.1] - 2026-07-06
 
 ### Changed
