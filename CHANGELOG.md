@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `RawFile.sample_info` (Python): returns the sample-sheet / sequence-row
+  metadata for the acquisition as a dict (`id`, `comment`, `vial`,
+  `injection_volume`, `sample_weight`, `sample_volume`, `istd_amount`,
+  `dilution_factor`, `user_labels`, `inst_method`, `proc_method`,
+  `file_name`, `path`). The Rust core already decoded this
+  (`RawFileReader::seq_row`); this exposes it to Python. (@Nabejo)
 - `RawFile.error_log()` (Python): returns the acquisition error log as a
   list of `{"time": ..., "message": ...}` dicts, in log order (`time` is
   the acquisition-relative time in minutes). The Rust core already decoded
