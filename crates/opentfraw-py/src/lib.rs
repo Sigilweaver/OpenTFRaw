@@ -249,6 +249,31 @@ impl RawFile {
         }
     }
 
+    /// Return the per-scan instrument status log for `scan_number` as a
+    /// ``{label: value}`` dict, or ``None`` if the scan has no status-log
+    /// record. This is the instrument-state-over-time log (temperatures,
+    /// voltages, pressures, ion counts, etc.), distinct from the
+    /// trailer-extra values returned by :meth:`scan_parameters`. Values keep
+    /// their stored type (str / int / float / bool / None for absent
+    /// entries). The core already decodes these; this surfaces them to
+    /// Python.
+    fn status_log<'py>(
+        &self,
+        py: Python<'py>,
+        scan_number: u32,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        match self.reader.inst_log_record(scan_number) {
+            None => Ok(None),
+            Some(record) => {
+                let d = PyDict::new_bound(py);
+                for (label, value) in &record.values {
+                    d.set_item(label, generic_value_to_py(py, value))?;
+                }
+                Ok(Some(d))
+            }
+        }
+    }
+
     /// Read centroided peaks for `scan_number` and return
     /// `(mz: numpy.float64[:], intensity: numpy.float32[:])`.
     ///
