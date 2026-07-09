@@ -14,6 +14,7 @@ const sidebars: SidebarsConfig = {
         'guide/scan-data',
         'guide/instrument-families',
         'guide/mzml-export',
+        'guide/python-api',
       ],
     },
     {

@@ -2,6 +2,28 @@
 
 Thank you to everyone who has contributed to OpenTFRaw.
 
+## Benjamin Riley ([@Nabejo](https://github.com/Nabejo))
+
+Contributed in v1.3.0:
+
+- **`RawFile.sample_info`** - exposed the sample-sheet / sequence-row
+  metadata for the acquisition as a dict.
+- **`RawFile.error_log()`** - exposed the acquisition error log as a list
+  of `{"time": ..., "message": ...}` dicts.
+- **`RawFile.status_log()`** - exposed the per-scan instrument status log
+  (temperatures, voltages, pressures, ion counts, etc.), distinct from
+  `scan_parameters()`.
+- **`RawFile.controllers()`** - exposed multi-controller info (MS, UV, PDA,
+  Analog channels) for multi-detector RAW files.
+- **`RawFile.instrument_method_text()`** - best-effort extraction of the
+  embedded acquisition method text/XML blob from the RAW file's metadata
+  region.
+- **`RawFile.computer_name`, `RawFile.controller_count`,
+  `RawFile.acquisition_date`** - surfaced the remaining `raw_file_info`
+  fields, including a new `RawFileInfoPreamble::acquisition_date` helper
+  in the Rust core using Howard Hinnant's public-domain civil-calendar
+  arithmetic.
+
 ## Oskari Kausiala ([@oskarsari](https://github.com/oskarsari)) - [Karsa Oy](https://github.com/karsa-oy)
 
 Contributed in v1.2.0:
