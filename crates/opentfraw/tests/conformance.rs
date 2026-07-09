@@ -16,9 +16,9 @@ use opentfraw::{mzml::OpenTfRawSource, RawFileReader};
 fn fixture() -> Option<PathBuf> {
     let candidates = [
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../ProLance/corpus/thermo/PXD068962_Q_Exactive_UHMR_insource-CID.raw"),
+            .join("../../../SpecLance/corpus/thermo/PXD068962_Q_Exactive_UHMR_insource-CID.raw"),
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../ProLance/corpus/thermo/PXD054004_LTQ_FT_20171113_Map_NS1_1to139_4deg_50uM_001.raw"),
+            .join("../../../SpecLance/corpus/thermo/PXD054004_LTQ_FT_20171113_Map_NS1_1to139_4deg_50uM_001.raw"),
     ];
     candidates.into_iter().find(|p| p.exists())
 }
