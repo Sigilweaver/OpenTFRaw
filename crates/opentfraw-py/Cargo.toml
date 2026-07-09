@@ -18,7 +18,7 @@ name = "opentfraw"
 crate-type = ["cdylib"]
 
 [lints.rust]
-unsafe_code = "allow"
+unsafe_code = "forbid"
 
 [lints.clippy]
 useless_conversion = "allow"

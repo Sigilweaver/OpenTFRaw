@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `opentfraw-py` no longer opts out of the workspace's `unsafe_code = "forbid"`
+  lint; it never contained an `unsafe` block, so this was a stale exception
+  that had drifted out of sync with CONTRIBUTING.md's description of the
+  policy. Also wires up the same `clippy::unwrap_used`/`expect_used` warn
+  lint the core crate already carries.
+- CI (`ci.yml`) now builds and tests on `windows-latest` in addition to
+  Linux/macOS, matching the wheel targets `publish.yml` already ships.
+- New `audit.yml` workflow runs `cargo audit` against the RustSec Advisory
+  DB on dependency changes and weekly. Two pre-existing advisories against
+  `pyo3` are temporarily ignored pending a version bump (#20).
+
+### Internal
+
+- `opentfraw-py`: extracted the repeated source-mutex-lock pattern (6 call
+  sites) into a `RawFile::locked_source` helper.
+
 ## [1.3.0] - 2026-07-09
 
 ### Added

@@ -2,7 +2,7 @@
 #
 # Jobs:
 #   build         - cargo fmt --check, cargo clippy -D warnings, cargo test
-#                   (Linux + macOS via WarpBuild)
+#                   (Linux, macOS, Windows)
 #   validate-mzml - download a small public Thermo RAW file, convert it to
 #                   mzML, run scripts/validate_mzml.py for structural
 #                   conformance, and validate against the vendored PSI-MS mzML
@@ -35,6 +35,7 @@ jobs:
         os:
           - ubuntu-latest
           - macos-latest
+          - windows-latest
     steps:
       - uses: actions/checkout@v4
 
