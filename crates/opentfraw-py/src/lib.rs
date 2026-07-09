@@ -1,3 +1,4 @@
+#![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 //! Python bindings for OpenTFRaw.
 //!
 //! Exposes `opentfraw.RawFile`, an ergonomic Python class that loads a
@@ -96,6 +97,15 @@ struct RawFile {
     // class is thread-safe from Python's perspective even though the PyO3
     // runtime already holds the GIL.
     source: Mutex<BufReader<File>>,
+}
+
+impl RawFile {
+    /// Lock the second file handle used for on-demand scan-data reads.
+    fn locked_source(&self) -> PyResult<std::sync::MutexGuard<'_, BufReader<File>>> {
+        self.source
+            .lock()
+            .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))
+    }
 }
 
 #[pymethods]
@@ -324,10 +334,7 @@ impl RawFile {
         py: Python<'py>,
         scan_number: u32,
     ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f32>>)> {
-        let mut src = self
-            .source
-            .lock()
-            .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))?;
+        let mut src = self.locked_source()?;
         let peaks = self
             .reader
             .read_peaks_only(&mut *src, scan_number)
@@ -370,10 +377,7 @@ impl RawFile {
             .map(|e| e.coefficients.clone())
             .unwrap_or_default();
 
-        let mut src = self
-            .source
-            .lock()
-            .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))?;
+        let mut src = self.locked_source()?;
         let packet = self
             .reader
             .read_scan(&mut *src, scan_number)
@@ -408,10 +412,7 @@ impl RawFile {
         scan_number: u32,
     ) -> PyResult<Bound<'py, PyDict>> {
         let pkt = {
-            let mut src = self
-                .source
-                .lock()
-                .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))?;
+            let mut src = self.locked_source()?;
             self.reader
                 .read_scan_labels(&mut *src, scan_number)
                 .map_err(to_py_err)?
@@ -595,10 +596,7 @@ impl RawFile {
     /// start_time : float  (minutes)
     /// end_time : float  (minutes)
     fn controllers<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let mut src = self
-            .source
-            .lock()
-            .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))?;
+        let mut src = self.locked_source()?;
         let infos = self.reader.controllers(&mut *src).map_err(to_py_err)?;
 
         let list = PyList::empty_bound(py);
@@ -625,10 +623,7 @@ impl RawFile {
     /// just the method file name (e.g. ``"Standard_HCD.meth"``) rather than
     /// its embedded contents.
     fn instrument_method_text(&self) -> PyResult<Option<String>> {
-        let mut src = self
-            .source
-            .lock()
-            .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))?;
+        let mut src = self.locked_source()?;
         Ok(self.reader.instrument_method_text(&mut *src))
     }
 
@@ -636,10 +631,7 @@ impl RawFile {
     fn to_mzml(&self, out_path: &str) -> PyResult<()> {
         let out_file = File::create(out_path).map_err(|e| PyIOError::new_err(e.to_string()))?;
         let mut out = std::io::BufWriter::new(out_file);
-        let mut src = self
-            .source
-            .lock()
-            .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))?;
+        let mut src = self.locked_source()?;
         let raw_filename = self
             .path
             .file_name()
