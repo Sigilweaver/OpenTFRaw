@@ -75,7 +75,7 @@ const config: Config = {
           label: 'OpenTFRaw',
           position: 'left',
           items: [
-            { label: 'OpenProteo', href: 'https://sigilweaver.app/openproteo/docs/' },
+            { label: 'OpenMassSpec', href: 'https://sigilweaver.app/openmassspec/docs/' },
             { label: 'OpenTimsTDF (Bruker)', href: 'https://sigilweaver.app/opentimstdf/docs/' },
             { label: 'OpenWRaw (Waters)', href: 'https://sigilweaver.app/openwraw/docs/' },
           ],

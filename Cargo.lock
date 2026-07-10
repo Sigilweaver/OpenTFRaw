@@ -118,25 +118,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
-name = "openproteo-core"
+name = "openmassspec-core"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "146dc3bf28847e5595ec445d324adaabee034da88936ee4409432542f418ba76"
+checksum = "dc04b483a222fa5c7464d1f07a6f36bcde6e66079fa51c24846aef18b54df645"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "opentfraw"
-version = "1.3.0"
+version = "1.3.1"
 dependencies = [
- "openproteo-core",
+ "openmassspec-core",
  "thiserror",
 ]
 
 [[package]]
 name = "opentfraw-py"
-version = "1.3.0"
+version = "1.3.1"
 dependencies = [
  "numpy",
  "opentfraw",

@@ -66,9 +66,9 @@ not security issues unless they involve one of the categories above.
 ## Stack context
 
 OpenTFRaw is one of three vendor readers in the
-[OpenProteo](https://github.com/Sigilweaver/OpenProteo) stack.
+[OpenMassSpec](https://github.com/Sigilweaver/OpenMassSpec) stack.
 Sibling readers:
 [OpenWRaw](https://github.com/Sigilweaver/OpenWRaw) (Waters),
 [OpenTimsTDF](https://github.com/Sigilweaver/OpenTimsTDF) (Bruker).
 Shared foundation:
-[openproteo-core](https://github.com/Sigilweaver/OpenProteoCore).
+[openmassspec-core](https://github.com/Sigilweaver/OpenMassSpecCore).
