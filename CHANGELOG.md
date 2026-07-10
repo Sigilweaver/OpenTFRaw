@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-07-10
+
 ### Changed
 
+- Dependency renamed `openproteo-core` -> `openmassspec-core` (1.0.0),
+  following the umbrella's rename from OpenProteo to OpenMassSpec.
+  No behavioral change.
 - `opentfraw-py` no longer opts out of the workspace's `unsafe_code = "forbid"`
   lint; it never contained an `unsafe` block, so this was a stale exception
   that had drifted out of sync with CONTRIBUTING.md's description of the

@@ -17,6 +17,6 @@ unsafe_code = "forbid"
 
 [dependencies]
 thiserror = "2"
-openproteo-core = { workspace = true }
+openmassspec-core = { workspace = true }
 
 [dev-dependencies]

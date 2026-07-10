@@ -1,16 +1,16 @@
 """
 OpenTFRaw corpus fetcher (Thermo .raw).
 
-Thin wrapper around the shared OpenProteo stack fetcher at
-``OpenProteo/scripts/fetch_corpus.py``. Defaults preserve the original
+Thin wrapper around the shared OpenMassSpec stack fetcher at
+``OpenMassSpec/scripts/fetch_corpus.py``. Defaults preserve the original
 behavior of this script: read ``scripts/sources.json``, write into
 ``corpus/`` next to it, manifest at ``corpus/manifest.json``.
 
 The shared script must be available at one of:
 
-  - ``$OPENPROTEO_FETCHER`` (env override)
-  - sibling checkout ``../OpenProteo/scripts/fetch_corpus.py``
-  - ``$OPENPROTEO_DIR/scripts/fetch_corpus.py``
+  - ``$OPENMASSSPEC_FETCHER`` (env override)
+  - sibling checkout ``../OpenMassSpec/scripts/fetch_corpus.py``
+  - ``$OPENMASSSPEC_DIR/scripts/fetch_corpus.py``
 
 Pass extra args through to the shared script::
 
@@ -33,24 +33,24 @@ EXT_PATTERN = r"\.[Rr][Aa][Ww]$"
 
 
 def _locate_shared() -> Path:
-    env = os.environ.get("OPENPROTEO_FETCHER")
+    env = os.environ.get("OPENMASSSPEC_FETCHER")
     if env:
         p = Path(env).expanduser().resolve()
         if p.is_file():
             return p
-    op_dir = os.environ.get("OPENPROTEO_DIR")
+    op_dir = os.environ.get("OPENMASSSPEC_DIR")
     if op_dir:
         p = Path(op_dir).expanduser().resolve() / "scripts" / "fetch_corpus.py"
         if p.is_file():
             return p
-    sibling = (REPO.parent / "OpenProteo" / "scripts" / "fetch_corpus.py").resolve()
+    sibling = (REPO.parent / "OpenMassSpec" / "scripts" / "fetch_corpus.py").resolve()
     if sibling.is_file():
         return sibling
     raise SystemExit(
-        "[ERROR] could not locate OpenProteo/scripts/fetch_corpus.py.\n"
-        "  Set $OPENPROTEO_FETCHER to the file path, or\n"
-        "  set $OPENPROTEO_DIR to the OpenProteo checkout, or\n"
-        "  place OpenProteo as a sibling of this repo."
+        "[ERROR] could not locate OpenMassSpec/scripts/fetch_corpus.py.\n"
+        "  Set $OPENMASSSPEC_FETCHER to the file path, or\n"
+        "  set $OPENMASSSPEC_DIR to the OpenMassSpec checkout, or\n"
+        "  place OpenMassSpec as a sibling of this repo."
     )
 
 
