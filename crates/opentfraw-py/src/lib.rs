@@ -24,6 +24,7 @@ use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyIOError, PyIndexError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+use pyo3::IntoPyObjectExt;
 
 /// Translate an `opentfraw::Error` into a Python exception.
 fn to_py_err(e: ::opentfraw::Error) -> PyErr {
@@ -31,20 +32,20 @@ fn to_py_err(e: ::opentfraw::Error) -> PyErr {
 }
 
 /// Convert a generic (trailer) value to a Python object, preserving its type.
-fn generic_value_to_py(py: Python<'_>, value: &GenericValue) -> PyObject {
-    match value {
+fn generic_value_to_py(py: Python<'_>, value: &GenericValue) -> PyResult<Py<PyAny>> {
+    Ok(match value {
         GenericValue::Gap => py.None(),
-        GenericValue::Int8(x) => (*x).into_py(py),
-        GenericValue::Bool(x) => (*x).into_py(py),
-        GenericValue::UInt8(x) => (*x).into_py(py),
-        GenericValue::Int16(x) => (*x).into_py(py),
-        GenericValue::UInt16(x) => (*x).into_py(py),
-        GenericValue::Int32(x) => (*x).into_py(py),
-        GenericValue::UInt32(x) => (*x).into_py(py),
-        GenericValue::Float32(x) => (*x).into_py(py),
-        GenericValue::Float64(x) => (*x).into_py(py),
-        GenericValue::String(s) => s.into_py(py),
-    }
+        GenericValue::Int8(x) => (*x).into_py_any(py)?,
+        GenericValue::Bool(x) => (*x).into_py_any(py)?,
+        GenericValue::UInt8(x) => (*x).into_py_any(py)?,
+        GenericValue::Int16(x) => (*x).into_py_any(py)?,
+        GenericValue::UInt16(x) => (*x).into_py_any(py)?,
+        GenericValue::Int32(x) => (*x).into_py_any(py)?,
+        GenericValue::UInt32(x) => (*x).into_py_any(py)?,
+        GenericValue::Float32(x) => (*x).into_py_any(py)?,
+        GenericValue::Float64(x) => (*x).into_py_any(py)?,
+        GenericValue::String(s) => s.into_py_any(py)?,
+    })
 }
 
 /// Loaded Thermo RAW file.
@@ -189,7 +190,7 @@ impl RawFile {
     #[getter]
     fn sample_info<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let seq_row = &self.reader.seq_row;
-        let d = PyDict::new_bound(py);
+        let d = PyDict::new(py);
         d.set_item("id", &seq_row.id)?;
         d.set_item("comment", &seq_row.comment)?;
         d.set_item("vial", &seq_row.vial)?;
@@ -265,9 +266,9 @@ impl RawFile {
     /// the instrument-reported error text. The Rust core already decodes
     /// this (`RawFileReader::error_log`); this surfaces it to Python.
     fn error_log<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let list = PyList::empty_bound(py);
+        let list = PyList::empty(py);
         for entry in &self.reader.error_log {
-            let d = PyDict::new_bound(py);
+            let d = PyDict::new(py);
             d.set_item("time", entry.time)?;
             d.set_item("message", &entry.message)?;
             list.append(d)?;
@@ -290,9 +291,9 @@ impl RawFile {
         match self.reader.scan_parameters(scan_number) {
             None => Ok(None),
             Some(record) => {
-                let d = PyDict::new_bound(py);
+                let d = PyDict::new(py);
                 for (label, value) in &record.values {
-                    d.set_item(label, generic_value_to_py(py, value))?;
+                    d.set_item(label, generic_value_to_py(py, value)?)?;
                 }
                 Ok(Some(d))
             }
@@ -315,9 +316,9 @@ impl RawFile {
         match self.reader.inst_log_record(scan_number) {
             None => Ok(None),
             Some(record) => {
-                let d = PyDict::new_bound(py);
+                let d = PyDict::new(py);
                 for (label, value) in &record.values {
-                    d.set_item(label, generic_value_to_py(py, value))?;
+                    d.set_item(label, generic_value_to_py(py, value)?)?;
                 }
                 Ok(Some(d))
             }
@@ -341,7 +342,7 @@ impl RawFile {
             .map_err(to_py_err)?;
         let mz: Vec<f64> = peaks.iter().map(|p| p.mz as f64).collect();
         let intensity: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
-        Ok((mz.to_pyarray_bound(py), intensity.to_pyarray_bound(py)))
+        Ok((mz.to_pyarray(py), intensity.to_pyarray(py)))
     }
 
     /// Read the **profile** (raw, non-centroided) spectrum for `scan_number` and
@@ -387,7 +388,7 @@ impl RawFile {
             Some(profile) => profile.to_mz_intensity(&coefficients).into_iter().unzip(),
             None => (Vec::new(), Vec::new()),
         };
-        Ok((mz.to_pyarray_bound(py), intensity.to_pyarray_bound(py)))
+        Ok((mz.to_pyarray(py), intensity.to_pyarray(py)))
     }
 
     /// Read per-peak FT label data for `scan_number`.
@@ -455,13 +456,13 @@ impl RawFile {
             }
         }
 
-        let d = PyDict::new_bound(py);
-        d.set_item("mz", mz.to_pyarray_bound(py))?;
-        d.set_item("intensity", intensity.to_pyarray_bound(py))?;
-        d.set_item("resolution", resolution.to_pyarray_bound(py))?;
-        d.set_item("noise", noise.to_pyarray_bound(py))?;
-        d.set_item("baseline", baseline.to_pyarray_bound(py))?;
-        d.set_item("signal_to_noise", signal_to_noise.to_pyarray_bound(py))?;
+        let d = PyDict::new(py);
+        d.set_item("mz", mz.to_pyarray(py))?;
+        d.set_item("intensity", intensity.to_pyarray(py))?;
+        d.set_item("resolution", resolution.to_pyarray(py))?;
+        d.set_item("noise", noise.to_pyarray(py))?;
+        d.set_item("baseline", baseline.to_pyarray(py))?;
+        d.set_item("signal_to_noise", signal_to_noise.to_pyarray(py))?;
         Ok(d)
     }
 
@@ -521,7 +522,7 @@ impl RawFile {
 
         let (mz, intensity) = self.peaks(py, scan_number)?;
 
-        let d = PyDict::new_bound(py);
+        let d = PyDict::new(py);
         d.set_item("scan_number", scan_number)?;
         d.set_item("ms_level", ms_level)?;
         d.set_item("polarity", polarity)?;
@@ -570,7 +571,7 @@ impl RawFile {
     fn iter_scans<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let first = self.first_scan();
         let n = self.num_scans();
-        let list = PyList::empty_bound(py);
+        let list = PyList::empty(py);
         for i in 0..n {
             let d = self.scan(py, first + i)?;
             list.append(d)?;
@@ -599,9 +600,9 @@ impl RawFile {
         let mut src = self.locked_source()?;
         let infos = self.reader.controllers(&mut *src).map_err(to_py_err)?;
 
-        let list = PyList::empty_bound(py);
+        let list = PyList::empty(py);
         for info in infos {
-            let d = PyDict::new_bound(py);
+            let d = PyDict::new(py);
             d.set_item("index", info.index)?;
             d.set_item("is_ms_controller", info.is_ms_controller)?;
             d.set_item("controller_type", format!("{:?}", info.controller_type))?;

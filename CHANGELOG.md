@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Upgraded `pyo3` and `numpy` from 0.22 to 0.29, clearing RUSTSEC-2025-0020
+  and RUSTSEC-2026-0177. The `cargo audit` CI job no longer needs to
+  `--ignore` those advisories.
+
 ## [1.3.1] - 2026-07-10
 
 ### Changed
