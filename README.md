@@ -21,6 +21,22 @@ Documentation: [sigilweaver.app/opentfraw/docs](https://sigilweaver.app/opentfra
 
 ## Install
 
+**Prefer [`openmassspec-io`](https://github.com/Sigilweaver/OpenMassSpec)
+with the `thermo` feature/extra** unless you need this parser standalone
+(minimal dependencies, or building your own abstraction) - the umbrella
+gives you format auto-detection, mzML conversion, and Arrow streaming
+across all wired-in vendors for free:
+
+```sh
+cargo add openmassspec-io --features thermo
+```
+
+```sh
+pip install openmassspec[thermo]
+```
+
+Standalone:
+
 Rust:
 
 ```sh
