@@ -393,6 +393,14 @@ fn instrument_cv(raw: &RawFileReader) -> msc::CvTerm {
     msc::CvTerm::new("MS:1000483", "Thermo Fisher Scientific instrument model")
 }
 
+/// Acquisition start timestamp (RFC 3339), when the RAW file's info
+/// preamble carries a valid date. See
+/// [`crate::raw_file_info::RawFileInfoPreamble::acquisition_date_rfc3339`]
+/// for the instrument-local-time-with-no-timezone caveat this carries.
+fn start_timestamp(raw: &RawFileReader) -> Option<String> {
+    raw.raw_file_info.preamble.acquisition_date_rfc3339()
+}
+
 fn convert_polarity(p: Option<Polarity>) -> Option<msc::Polarity> {
     p.map(|p| match p {
         Polarity::Negative => msc::Polarity::Negative,
@@ -515,7 +523,7 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
             instrument: instrument_cv(self.raw),
             software_name: SOFTWARE_NAME.into(),
             software_version: SOFTWARE_VERSION.into(),
-            start_timestamp: None,
+            start_timestamp: start_timestamp(self.raw),
             mobility_array_kind: None,
         }
     }
