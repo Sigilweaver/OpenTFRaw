@@ -40,6 +40,48 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
+/// Inverse of [`days_from_civil`]: convert days since 1970-01-01 to a
+/// proleptic Gregorian civil date `(year, month, day)`.
+///
+/// Also Howard Hinnant's `civil_from_days` algorithm
+/// (<https://howardhinnant.github.io/date_algorithms.html#civil_from_days>,
+/// public domain calendar arithmetic, independent of any vendor source).
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Format a Unix-seconds timestamp (as returned by
+/// [`RawFileInfoPreamble::acquisition_date`]) as an RFC 3339 string.
+///
+/// The trailing `Z` is a formatting convention, not a claim about timezone:
+/// the source value is instrument-local wall-clock time with no recorded
+/// offset (see [`RawFileInfoPreamble::acquisition_date`]'s doc comment), so
+/// this should not be read as a true UTC instant.
+fn format_rfc3339(unix_seconds: f64) -> String {
+    let total_secs = unix_seconds.floor() as i64;
+    let millis = ((unix_seconds - unix_seconds.floor()) * 1000.0).round() as i64;
+    let days = total_secs.div_euclid(86_400);
+    let sec_of_day = total_secs.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = sec_of_day / 3600;
+    let minute = (sec_of_day % 3600) / 60;
+    let second = sec_of_day % 60;
+    if millis > 0 {
+        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
+    } else {
+        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+    }
+}
+
 /// RawFileInfo: preamble + label strings + computer name.
 #[derive(Debug)]
 pub struct RawFileInfo {
@@ -88,6 +130,19 @@ impl RawFileInfoPreamble {
         let secs =
             days * 86_400 + self.hour as i64 * 3600 + self.minute as i64 * 60 + self.second as i64;
         Some(secs as f64 + self.millisecond as f64 / 1000.0)
+    }
+
+    /// [`Self::acquisition_date`] formatted as an RFC 3339 string, or `None`
+    /// under the same conditions `acquisition_date` returns `None`.
+    ///
+    /// Per `acquisition_date`'s doc comment, the source value is the
+    /// instrument's local wall-clock time with no recorded timezone offset.
+    /// The trailing `Z` here is a formatting convention (consistent with how
+    /// this crate's other decoded-but-timezone-less timestamp,
+    /// [`crate::audit_tag::AuditTag::time`], would need to be handled) and
+    /// should not be read as a claim that this is a true UTC instant.
+    pub fn acquisition_date_rfc3339(&self) -> Option<String> {
+        self.acquisition_date().map(format_rfc3339)
     }
 
     pub(crate) fn read<R: Read + Seek>(r: &mut BinaryReader<R>, version: u32) -> Result<Self> {
@@ -267,5 +322,37 @@ mod tests {
     fn acquisition_date_none_when_month_out_of_range() {
         let p = preamble(2020, 13, 1, 0, 0, 0, 0);
         assert_eq!(p.acquisition_date(), None);
+    }
+
+    #[test]
+    fn civil_from_days_round_trips_days_from_civil() {
+        for &(y, m, d) in &[(1970, 1, 1), (2000, 3, 1), (2024, 2, 29), (1999, 12, 31)] {
+            let days = days_from_civil(y, m, d);
+            assert_eq!(civil_from_days(days), (y, m, d));
+        }
+    }
+
+    #[test]
+    fn acquisition_date_rfc3339_matches_known_epoch() {
+        let p = preamble(1970, 1, 1, 0, 0, 0, 0);
+        assert_eq!(
+            p.acquisition_date_rfc3339(),
+            Some("1970-01-01T00:00:00Z".to_string())
+        );
+    }
+
+    #[test]
+    fn acquisition_date_rfc3339_includes_millis_when_present() {
+        let p = preamble(2021, 6, 15, 13, 45, 9, 250);
+        assert_eq!(
+            p.acquisition_date_rfc3339(),
+            Some("2021-06-15T13:45:09.250Z".to_string())
+        );
+    }
+
+    #[test]
+    fn acquisition_date_rfc3339_none_when_year_zero() {
+        let p = preamble(0, 1, 1, 0, 0, 0, 0);
+        assert_eq!(p.acquisition_date_rfc3339(), None);
     }
 }
