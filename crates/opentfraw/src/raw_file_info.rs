@@ -112,7 +112,9 @@ impl RawFileInfo {
 impl RawFileInfoPreamble {
     /// Convert the preamble's year/month/day/hour/minute/second/millisecond
     /// fields to a Unix timestamp in seconds, or `None` if no acquisition
-    /// date is present (`year == 0`) or the date fields are out of range.
+    /// date is present (`year == 0`) or any field is out of its valid range
+    /// (month 1-12, day 1-31, hour 0-23, minute 0-59, second 0-59,
+    /// millisecond 0-999).
     ///
     /// Like [`crate::audit_tag::AuditTag::time`], this is the instrument's
     /// local wall-clock time with no timezone: interpreting the result as
@@ -123,7 +125,14 @@ impl RawFileInfoPreamble {
     /// the same acquisition event, but come from independently-decoded
     /// fields.
     pub fn acquisition_date(&self) -> Option<f64> {
-        if self.year == 0 || !(1..=12).contains(&self.month) || !(1..=31).contains(&self.day) {
+        if self.year == 0
+            || !(1..=12).contains(&self.month)
+            || !(1..=31).contains(&self.day)
+            || self.hour > 23
+            || self.minute > 59
+            || self.second > 59
+            || self.millisecond > 999
+        {
             return None;
         }
         let days = days_from_civil(self.year as i64, self.month as u32, self.day as u32);
@@ -321,6 +330,30 @@ mod tests {
     #[test]
     fn acquisition_date_none_when_month_out_of_range() {
         let p = preamble(2020, 13, 1, 0, 0, 0, 0);
+        assert_eq!(p.acquisition_date(), None);
+    }
+
+    #[test]
+    fn acquisition_date_none_when_day_out_of_range() {
+        let p = preamble(2020, 1, 32, 0, 0, 0, 0);
+        assert_eq!(p.acquisition_date(), None);
+    }
+
+    #[test]
+    fn acquisition_date_none_when_hour_out_of_range() {
+        let p = preamble(2020, 1, 1, 24, 0, 0, 0);
+        assert_eq!(p.acquisition_date(), None);
+    }
+
+    #[test]
+    fn acquisition_date_none_when_minute_out_of_range() {
+        let p = preamble(2020, 1, 1, 0, 60, 0, 0);
+        assert_eq!(p.acquisition_date(), None);
+    }
+
+    #[test]
+    fn acquisition_date_none_when_second_out_of_range() {
+        let p = preamble(2020, 1, 1, 0, 0, 60, 0);
         assert_eq!(p.acquisition_date(), None);
     }
 
