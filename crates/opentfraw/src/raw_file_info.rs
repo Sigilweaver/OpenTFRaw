@@ -40,6 +40,18 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
+/// Return the number of days in `month` of `year`, or `None` if either
+/// value is out of its valid range (month 1-12).
+fn days_in_month(year: u16, month: u16) -> Option<u16> {
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => Some(31),
+        4 | 6 | 9 | 11 => Some(30),
+        2 => Some(if leap { 29 } else { 28 }),
+        _ => None,
+    }
+}
+
 /// Inverse of [`days_from_civil`]: convert days since 1970-01-01 to a
 /// proleptic Gregorian civil date `(year, month, day)`.
 ///
@@ -113,7 +125,7 @@ impl RawFileInfoPreamble {
     /// Convert the preamble's year/month/day/hour/minute/second/millisecond
     /// fields to a Unix timestamp in seconds, or `None` if no acquisition
     /// date is present (`year == 0`) or any field is out of its valid range
-    /// (month 1-12, day 1-31, hour 0-23, minute 0-59, second 0-59,
+    /// (month 1-12, day 1-days_in_month, hour 0-23, minute 0-59, second 0-59,
     /// millisecond 0-999).
     ///
     /// Like [`crate::audit_tag::AuditTag::time`], this is the instrument's
@@ -125,9 +137,10 @@ impl RawFileInfoPreamble {
     /// the same acquisition event, but come from independently-decoded
     /// fields.
     pub fn acquisition_date(&self) -> Option<f64> {
+        let max_day = days_in_month(self.year, self.month)?;
         if self.year == 0
-            || !(1..=12).contains(&self.month)
-            || !(1..=31).contains(&self.day)
+            || self.day == 0
+            || self.day > max_day
             || self.hour > 23
             || self.minute > 59
             || self.second > 59
@@ -340,6 +353,19 @@ mod tests {
     }
 
     #[test]
+    fn acquisition_date_none_when_day_exceeds_month_max() {
+        // February 29 on a non-leap year.
+        let p = preamble(2021, 2, 29, 0, 0, 0, 0);
+        assert_eq!(p.acquisition_date(), None);
+        // February 29 on a leap year is valid.
+        let p = preamble(2024, 2, 29, 0, 0, 0, 0);
+        assert!(p.acquisition_date().is_some());
+        // April 31 (April has 30 days).
+        let p = preamble(2020, 4, 31, 0, 0, 0, 0);
+        assert_eq!(p.acquisition_date(), None);
+    }
+
+    #[test]
     fn acquisition_date_none_when_hour_out_of_range() {
         let p = preamble(2020, 1, 1, 24, 0, 0, 0);
         assert_eq!(p.acquisition_date(), None);
@@ -354,6 +380,12 @@ mod tests {
     #[test]
     fn acquisition_date_none_when_second_out_of_range() {
         let p = preamble(2020, 1, 1, 0, 0, 60, 0);
+        assert_eq!(p.acquisition_date(), None);
+    }
+
+    #[test]
+    fn acquisition_date_none_when_millisecond_out_of_range() {
+        let p = preamble(2020, 1, 1, 0, 0, 0, 1000);
         assert_eq!(p.acquisition_date(), None);
     }
 
