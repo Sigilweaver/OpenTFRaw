@@ -79,6 +79,13 @@ fn generic_value_to_py(py: Python<'_>, value: &GenericValue) -> PyResult<Py<PyAn
 ///     Acquisition timestamp as a Unix timestamp in seconds, or `None` if
 ///     absent. See the getter for how this relates to `created`.
 ///
+/// Methods
+/// -------
+/// instrument_method_text() : str | None
+///     Best-effort extraction of the embedded acquisition method text, or
+///     `None` if absent. Distinct from ``sample_info()["inst_method"]``,
+///     which is just the method file name.
+///
 /// Example
 /// -------
 /// ```python
