@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-07-14
+
+### Fixed
+
+- `RunMetadata.start_timestamp` (mzML export) was hardcoded to `None`; it
+  is now populated from `RawFileInfoPreamble::acquisition_date`, formatted
+  as RFC 3339 via a new `acquisition_date_rfc3339()`. (#24)
+- `RawFileInfoPreamble::acquisition_date()` previously only bounds-checked
+  year/month/day (day against a flat 1-31), so out-of-range time-of-day
+  fields (hour, minute, second, millisecond) or impossible dates (Feb 29
+  on a non-leap year, Apr 31) were silently accepted and produced a wrong
+  timestamp instead of `None`. All fields are now validated, including a
+  leap-year-aware day-of-month bound.
+
 ## [1.3.2] - 2026-07-11
 
 ### Security
