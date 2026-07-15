@@ -69,6 +69,7 @@ pub struct SpectrumRecord {
     pub low_mz: f64,
     pub high_mz: f64,
     pub ion_injection_time_ms: Option<f64>,
+    pub faims_cv: Option<f64>,
     pub precursor: Option<PrecursorInfo>,
     pub mz: Vec<f64>,
     pub intensity: Vec<f32>,
@@ -200,6 +201,7 @@ pub fn extract_spectrum<R: Read + Seek>(
     };
 
     let ion_injection_time_ms = params.as_ref().and_then(|p| p.ion_injection_time_ms());
+    let faims_cv = params.as_ref().and_then(|p| p.faims_cv());
 
     Some(SpectrumRecord {
         index: idx as usize,
@@ -216,6 +218,7 @@ pub fn extract_spectrum<R: Read + Seek>(
         low_mz: entry.low_mz,
         high_mz: entry.high_mz,
         ion_injection_time_ms,
+        faims_cv,
         precursor,
         mz,
         intensity,
@@ -478,10 +481,7 @@ fn to_msc_record(rec: SpectrumRecord) -> msc::SpectrumRecord {
         high_mz: Some(rec.high_mz),
         ion_injection_time_ms: rec.ion_injection_time_ms,
         inv_mobility: None,
-        // Not wired yet: this crate's own `ScanParams::faims_cv()` already
-        // decodes it, but the conversion doesn't populate it here. Tracked
-        // separately in Sigilweaver/OpenTFRaw#27.
-        faims_cv: None,
+        faims_cv: rec.faims_cv,
         precursor,
         mz: rec.mz,
         intensity: rec.intensity,
