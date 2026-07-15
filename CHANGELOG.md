@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `to_msc_record` now populates `SpectrumRecord.faims_cv` from this
   crate's own `ScanParams::faims_cv()` decoding instead of hardcoding
   `None`. (#27)
+- The workspace `openmassspec-core` dependency constraint was still
+  `"1.0.0"`, even though `to_msc_record` has required the `faims_cv`
+  field added in 1.2.0 since the previous release. A fresh resolution
+  against 1.0.x or 1.1.x would fail to compile. Bumped the constraint
+  to `"1.2.0"` to match what the code actually requires.
 
 ## [1.3.4] - 2026-07-15
 
