@@ -478,6 +478,10 @@ fn to_msc_record(rec: SpectrumRecord) -> msc::SpectrumRecord {
         high_mz: Some(rec.high_mz),
         ion_injection_time_ms: rec.ion_injection_time_ms,
         inv_mobility: None,
+        // Not wired yet: this crate's own `ScanParams::faims_cv()` already
+        // decodes it, but the conversion doesn't populate it here. Tracked
+        // separately in Sigilweaver/OpenTFRaw#27.
+        faims_cv: None,
         precursor,
         mz: rec.mz,
         intensity: rec.intensity,

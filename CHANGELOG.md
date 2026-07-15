@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-07-15
+
+### Fixed
+
+- Bumped `openmassspec-core` to 1.2.0. That release added a required
+  `SpectrumRecord.faims_cv` field, which broke this crate's build under
+  any dependency resolution that picked up 1.2.0 (`to_msc_record`
+  constructed the struct literal without it). Wiring real FAIMS CV data
+  through (this crate's `ScanParams::faims_cv()` already decodes it) is
+  tracked separately in #27; this release only restores the build.
+
 ## [1.3.3] - 2026-07-14
 
 ### Fixed
