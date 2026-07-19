@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exact values. A new `python-tests` CI job builds the extension with
   `maturin develop` and runs it against the same PRIDE RAW fixture
   `validate-mzml` already uses. (#21)
+- CI now downloads a small corpus fixture (the same PRIDE PXD054004 LTQ
+  FT file `validate-mzml` already uses) ahead of `cargo test`, so
+  `crates/opentfraw/tests/conformance.rs` exercises a real decode path
+  in CI instead of always skipping. Pilot for Sigilweaver/OpenMassSpec#5.
 
 ### Docs
 

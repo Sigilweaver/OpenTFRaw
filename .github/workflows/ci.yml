@@ -2,7 +2,10 @@
 #
 # Jobs:
 #   build         - cargo fmt --check, cargo clippy -D warnings, cargo test
-#                   (Linux, macOS, Windows)
+#                   (Linux, macOS, Windows). Downloads a small corpus fixture
+#                   ahead of `cargo test` so crates/opentfraw/tests/conformance.rs
+#                   exercises a real decode path instead of skipping - see
+#                   Sigilweaver/OpenMassSpec#5.
 #   validate-mzml - download a small public Thermo RAW file, convert it to
 #                   mzML, run scripts/validate_mzml.py for structural
 #                   conformance, and validate against the vendored PSI-MS mzML
@@ -27,6 +30,12 @@ env:
   PRIDE_RAW_URL: >-
     https://ftp.pride.ebi.ac.uk/pride/data/archive/2025/05/PXD054004/20171113_Map_NS1_1to139_4deg_50uM_001.raw
   PRIDE_RAW_NAME: test.raw
+  # Same file as PRIDE_RAW_URL above, cached under corpus/ using the naming
+  # convention scripts/fetch_corpus.py's shared fetcher uses
+  # (`{accession}_{instrument_label}_{filename}`), so a single download can
+  # serve as the conformance-test corpus fixture too. Keep this filename in
+  # sync with crates/opentfraw/tests/conformance.rs's fixture() candidates.
+  CORPUS_FIXTURE_NAME: PXD054004_LTQ_FT_20171113_Map_NS1_1to139_4deg_50uM_001.raw
 
 jobs:
   build:
@@ -55,6 +64,14 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Download corpus fixture for conformance tests
+        shell: bash
+        run: |
+          mkdir -p corpus
+          dest="corpus/$CORPUS_FIXTURE_NAME"
+          curl -sSL --user-agent "OpenTFRaw-CI/1.0" -o "$dest" "$PRIDE_RAW_URL"
+          echo "Downloaded $(du -sh "$dest" | cut -f1) corpus fixture"
 
       - name: cargo test
         run: cargo test --workspace --all-targets
