@@ -7,6 +7,9 @@
 #                   mzML, run scripts/validate_mzml.py for structural
 #                   conformance, and validate against the vendored PSI-MS mzML
 #                   XSD with xmllint.
+#   python-tests  - build the opentfraw Python extension (maturin develop)
+#                   and run the pytest suite in tests/ against it, using the
+#                   same PRIDE RAW fixture as validate-mzml.
 
 name: CI
 
@@ -112,6 +115,32 @@ jobs:
             test_profile.mzML
           xmllint --noout --schema schema/mzML1.1.2_idx.xsd \
             test_indexed.mzML
+
+  python-tests:
+    name: Python bindings (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: uv sync (dev dependencies)
+        run: uv sync
+
+      - name: maturin develop
+        run: uv run maturin develop --release
+
+      - name: pytest
+        run: uv run pytest tests -v
 
   docs:
     name: Docs (Docusaurus)
