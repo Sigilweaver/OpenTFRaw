@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- CI now downloads a small corpus fixture (the same PRIDE PXD054004 LTQ
+  FT file `validate-mzml` already uses) ahead of `cargo test`, so
+  `crates/opentfraw/tests/conformance.rs` exercises a real decode path
+  in CI instead of always skipping. Pilot for Sigilweaver/OpenMassSpec#5.
+
 ### Docs
 
 - `docs/guide/reader.md`'s field table had drifted behind `RawFileReader`
