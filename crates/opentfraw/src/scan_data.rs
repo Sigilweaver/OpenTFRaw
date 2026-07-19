@@ -140,6 +140,8 @@ impl ScanDataPacket {
             return Ok(Vec::new());
         }
         let count = r.read_u32()?;
+        let item_size: u64 = if wide_mz { 12 } else { 8 };
+        r.check_count(count as u64, item_size)?;
         let mut peaks = Vec::with_capacity(count as usize);
         for _ in 0..count {
             let mz = if wide_mz {
@@ -163,8 +165,14 @@ impl ScanDataPacket {
         n_peaks: usize,
     ) -> Result<(Vec<f32>, Vec<NoiseNode>)> {
         // Descriptor stream: one u32 per peak (a peak index), not label data.
+        //
+        // Cast to usize *before* multiplying: `descriptor_list_size` is an
+        // untrusted u32 read straight from the file, and multiplying by 4 in
+        // u32 arithmetic first can overflow (and panic, in a debug/fuzz
+        // build) for values above ~1.07 billion. Widening first is safe
+        // because `usize` is 64-bit on every platform this crate targets.
         if header.descriptor_list_size > 0 {
-            r.skip((header.descriptor_list_size * 4) as usize)?;
+            r.skip(header.descriptor_list_size as usize * 4)?;
         }
 
         // Unknown stream: for FT scans this is `[count_word, resolution...]`
@@ -173,14 +181,17 @@ impl ScanDataPacket {
         // left untouched.
         let resolutions = if n_peaks > 0 && header.unknown_stream_size as usize == n_peaks + 1 {
             let _count = r.read_u32()?;
+            r.check_count(n_peaks as u64, 4)?;
             let mut res = Vec::with_capacity(n_peaks);
             for _ in 0..n_peaks {
                 res.push(r.read_f32()?);
             }
             res
         } else {
+            // Same overflow hazard as the descriptor stream above: widen
+            // before multiplying.
             if header.unknown_stream_size > 0 {
-                r.skip((header.unknown_stream_size * 4) as usize)?;
+                r.skip(header.unknown_stream_size as usize * 4)?;
             }
             Vec::new()
         };
@@ -189,6 +200,7 @@ impl ScanDataPacket {
         // f32 nodes. Per-peak noise/baseline come from interpolating this at
         // the peak m/z (see `noise_at`).
         let node_count = header.triplet_stream_size / 3;
+        r.check_count(node_count as u64, 12)?;
         let mut noise_nodes = Vec::with_capacity(node_count as usize);
         for _ in 0..node_count {
             let mz = r.read_f32()?;
@@ -201,9 +213,13 @@ impl ScanDataPacket {
             });
         }
         // Skip any trailing words if the stream size is not a multiple of 3.
+        // The remainder here is always < 3 (by construction of `node_count`
+        // as a floor division), so widening before multiplying isn't
+        // strictly required for overflow safety, but it matches the pattern
+        // used everywhere else in this function for consistency.
         let consumed = node_count * 3;
         if header.triplet_stream_size > consumed {
-            r.skip(((header.triplet_stream_size - consumed) * 4) as usize)?;
+            r.skip((header.triplet_stream_size - consumed) as usize * 4)?;
         }
 
         Ok((resolutions, noise_nodes))
@@ -270,11 +286,14 @@ impl Profile {
         let nbins = r.read_u32()?;
 
         let has_fudge = layout & 0xFF != 0;
+        // Minimum on-disk size of one chunk: first_bin(4) + chunk_nbins(4).
+        r.check_count(peak_count as u64, 8)?;
         let mut chunks = Vec::with_capacity(peak_count as usize);
         for _ in 0..peak_count {
             let first_bin = r.read_u32()?;
             let chunk_nbins = r.read_u32()?;
             let fudge = if has_fudge { Some(r.read_f32()?) } else { None };
+            r.check_count(chunk_nbins as u64, 4)?;
             let mut signal = Vec::with_capacity(chunk_nbins as usize);
             for _ in 0..chunk_nbins {
                 signal.push(r.read_f32()?);
@@ -299,7 +318,13 @@ impl Profile {
 impl Profile {
     /// Convert profile bins to (mz, intensity) pairs using the conversion coefficients.
     pub fn to_mz_intensity(&self, coefficients: &[f64]) -> Vec<(f64, f64)> {
-        let mut result = Vec::with_capacity(self.nbins as usize);
+        // Size the allocation from the actually-parsed (and therefore already
+        // bounded) chunk signal lengths, not from `self.nbins`: that field is
+        // an untrusted file-provided value not otherwise validated against
+        // the real signal data, so using it directly here would reopen the
+        // same unbounded-allocation issue the read-path checks close off.
+        let cap: usize = self.chunks.iter().map(|c| c.signal.len()).sum();
+        let mut result = Vec::with_capacity(cap);
         for chunk in &self.chunks {
             for (i, &intensity) in chunk.signal.iter().enumerate() {
                 let bin_global = chunk.first_bin as f64 + i as f64;
@@ -380,10 +405,17 @@ pub fn read_flat_peaks<R: Read + Seek>(
         if peak_section_bytes > cum_end {
             continue;
         }
-        let peaks_start = data_addr + cum_end - peak_section_bytes;
+        // `data_addr` and `cum_end` are both untrusted u64 values read
+        // straight from the file (a RawFileInfo address and a ScanIndexEntry
+        // offset respectively); saturate instead of panicking on overflow
+        // for a corrupt/crafted combination of the two.
+        let peaks_start = data_addr
+            .saturating_add(cum_end)
+            .saturating_sub(peak_section_bytes);
         source.seek(SeekFrom::Start(peaks_start))?;
         let mut r = BinaryReader::new(&mut *source);
 
+        r.check_count(peak_count as u64, 8)?;
         let mut peaks = Vec::with_capacity(peak_count);
         for _ in 0..peak_count {
             let mz = r.read_f32()? as f64;
@@ -405,7 +437,7 @@ pub fn read_flat_peaks<R: Read + Seek>(
 
     // Neither worked; return empty
     Err(Error::UnexpectedEof {
-        offset: data_addr + cum_end,
+        offset: data_addr.saturating_add(cum_end),
         needed: 0,
     })
 }
@@ -427,7 +459,9 @@ pub fn read_scan_srm_v66<R: Read + Seek>(
     start_offset: u64,
     _record_size: u32,
 ) -> Result<Vec<Peak>> {
-    let abs_start = data_addr + start_offset;
+    // Both are untrusted u64 values read from the file; saturate
+    // instead of panicking on overflow for a corrupt combination.
+    let abs_start = data_addr.saturating_add(start_offset);
     source.seek(SeekFrom::Start(abs_start))?;
     let mut r = BinaryReader::new(source);
 
@@ -444,6 +478,7 @@ pub fn read_scan_srm_v66<R: Read + Seek>(
     r.skip(n_peaks * 8)?;
 
     // Read peak records: (u32 channel_idx, f32 mz, f32 intensity) × n_peaks
+    r.check_count(n_peaks as u64, 12)?;
     let mut peaks = Vec::with_capacity(n_peaks);
     for _ in 0..n_peaks {
         let _channel = r.read_u32()?;
@@ -464,7 +499,9 @@ pub fn read_scan_srm_v66_windows<R: Read + Seek>(
     data_addr: u64,
     start_offset: u64,
 ) -> Result<Vec<(f32, f32)>> {
-    let abs_start = data_addr + start_offset;
+    // Both are untrusted u64 values read from the file; saturate
+    // instead of panicking on overflow for a corrupt combination.
+    let abs_start = data_addr.saturating_add(start_offset);
     source.seek(SeekFrom::Start(abs_start))?;
     let mut r = BinaryReader::new(source);
 
@@ -478,6 +515,7 @@ pub fn read_scan_srm_v66_windows<R: Read + Seek>(
     r.skip(28)?;
 
     // Read m/z window table: n_peaks × 8 bytes (lo_mz f32, hi_mz f32)
+    r.check_count(n_peaks as u64, 8)?;
     let mut windows = Vec::with_capacity(n_peaks);
     for _ in 0..n_peaks {
         let lo = r.read_f32()?;
@@ -536,4 +574,231 @@ pub fn search_v63_transition(data: &[u8], q3_center_target: f64) -> Option<(f64,
         return Some((q1, q3w, ce));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn header_with(
+        descriptor_list_size: u32,
+        unknown_stream_size: u32,
+        triplet_stream_size: u32,
+    ) -> PacketHeader {
+        PacketHeader {
+            profile_size: 0,
+            peak_list_size: 0,
+            layout: 0,
+            descriptor_list_size,
+            unknown_stream_size,
+            triplet_stream_size,
+            low_mz: 0.0,
+            high_mz: 0.0,
+        }
+    }
+
+    /// Regression test for a fuzzer-found crash: `descriptor_list_size` and
+    /// `unknown_stream_size` are untrusted u32 values read straight from the
+    /// file. Multiplying by 4 in u32 arithmetic (rather than widening first)
+    /// overflows - and panics under debug assertions - for values at or
+    /// above `u32::MAX / 4 + 1`. `read_labels` must reject or skip past
+    /// these cleanly instead of panicking.
+    #[test]
+    fn huge_descriptor_list_size_does_not_overflow() {
+        let header = header_with(u32::MAX / 4 + 1, 0, 0);
+        let mut r = BinaryReader::new(Cursor::new(vec![0u8; 8]));
+        // Skipping past EOF is allowed (only a subsequent read would fail);
+        // the point of this test is that it must not panic.
+        let _ = ScanDataPacket::read_labels(&mut r, &header, 0);
+    }
+
+    #[test]
+    fn huge_unknown_stream_size_does_not_overflow() {
+        // n_peaks = 0 so the `unknown_stream_size == n_peaks + 1` decode
+        // branch is not taken and the plain skip path (the one that
+        // crashed) runs instead.
+        let header = header_with(0, u32::MAX / 4 + 1, 0);
+        let mut r = BinaryReader::new(Cursor::new(vec![0u8; 8]));
+        let _ = ScanDataPacket::read_labels(&mut r, &header, 0);
+    }
+
+    #[test]
+    fn read_labels_with_no_streams_returns_empty() {
+        let header = header_with(0, 0, 0);
+        let mut r = BinaryReader::new(Cursor::new(Vec::new()));
+        let (resolutions, noise_nodes) = ScanDataPacket::read_labels(&mut r, &header, 0).unwrap();
+        assert!(resolutions.is_empty());
+        assert!(noise_nodes.is_empty());
+    }
+
+    #[test]
+    fn read_labels_decodes_resolutions_when_size_matches() {
+        // unknown_stream_size == n_peaks + 1 selects the resolution-decoding
+        // branch: a leading count word followed by one f32 per peak.
+        let header = header_with(0, 3, 0);
+        let mut bytes = 2u32.to_le_bytes().to_vec(); // count word
+        bytes.extend_from_slice(&1.5f32.to_le_bytes());
+        bytes.extend_from_slice(&2.5f32.to_le_bytes());
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let (resolutions, _) = ScanDataPacket::read_labels(&mut r, &header, 2).unwrap();
+        assert_eq!(resolutions, vec![1.5, 2.5]);
+    }
+
+    #[test]
+    fn read_labels_decodes_noise_nodes() {
+        let header = header_with(0, 0, 3); // one (mz, noise, baseline) node
+        let mut bytes = 100.0f32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&5.0f32.to_le_bytes());
+        bytes.extend_from_slice(&1.0f32.to_le_bytes());
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let (_, noise_nodes) = ScanDataPacket::read_labels(&mut r, &header, 0).unwrap();
+        assert_eq!(noise_nodes.len(), 1);
+        assert_eq!(noise_nodes[0].mz, 100.0);
+        assert_eq!(noise_nodes[0].noise, 5.0);
+        assert_eq!(noise_nodes[0].baseline, 1.0);
+    }
+
+    #[test]
+    fn read_peaks_rejects_implausible_count_before_allocating() {
+        // peak_list_size must be nonzero or read_peaks short-circuits to an
+        // empty Vec before ever reading a count.
+        let mut header = header_with(0, 0, 0);
+        header.peak_list_size = 1;
+        let mut bytes = u32::MAX.to_le_bytes().to_vec(); // declared peak count
+        bytes.extend_from_slice(&[0u8; 4]); // far short of what's needed
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let err = ScanDataPacket::read_peaks(&mut r, &header).unwrap_err();
+        assert!(matches!(err, Error::AllocationTooLarge { .. }));
+    }
+
+    #[test]
+    fn read_peaks_empty_when_peak_list_size_zero() {
+        let header = header_with(0, 0, 0);
+        let mut r = BinaryReader::new(Cursor::new(Vec::new()));
+        assert_eq!(
+            ScanDataPacket::read_peaks(&mut r, &header).unwrap().len(),
+            0
+        );
+    }
+
+    #[test]
+    fn read_flat_peaks_decodes_valid_record() {
+        // data_addr=0, cum_end = end offset of this scan's record. One peak
+        // (mz=500.0, abundance=10.0) plus one trailing flag byte, so
+        // data_size = peak_count(1) + 1 = 2.
+        let mut bytes = vec![0u8; 100]; // leading padding
+        let peak_start = bytes.len();
+        bytes.extend_from_slice(&500.0f32.to_le_bytes());
+        bytes.extend_from_slice(&10.0f32.to_le_bytes());
+        bytes.push(0); // flag byte accounted for by `data_size - 1`
+        let cum_end = (bytes.len()) as u64;
+        let mut cursor = Cursor::new(bytes);
+        let peaks = read_flat_peaks(&mut cursor, 0, cum_end, 2).unwrap();
+        assert_eq!(peaks.len(), 1);
+        assert_eq!(peaks[0].mz, 500.0);
+        assert_eq!(peaks[0].abundance, 10.0);
+        let _ = peak_start; // silence unused-var warning if layout changes
+    }
+
+    #[test]
+    fn read_flat_peaks_rejects_implausible_peak_count() {
+        // data_size implies a peak_count that could never fit in the file.
+        let bytes = vec![0u8; 16];
+        let mut cursor = Cursor::new(bytes);
+        let err = read_flat_peaks(&mut cursor, 0, 16, u32::MAX).unwrap_err();
+        // Either our new allocation guard or the pre-existing
+        // "peak_section_bytes > cum_end" guard is an acceptable rejection
+        // reason; a panic or successful huge allocation is not.
+        match err {
+            Error::AllocationTooLarge { .. } | Error::UnexpectedEof { .. } => {}
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_scan_srm_v66_decodes_valid_record() {
+        // n_peaks=1, 28 bytes of skipped header, one (lo,hi) window pair,
+        // then one (channel, mz, intensity) peak record.
+        let mut bytes = 1u32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&[0u8; 28]);
+        bytes.extend_from_slice(&100.0f32.to_le_bytes()); // window lo
+        bytes.extend_from_slice(&110.0f32.to_le_bytes()); // window hi
+        bytes.extend_from_slice(&7u32.to_le_bytes()); // channel idx
+        bytes.extend_from_slice(&105.0f32.to_le_bytes()); // mz
+        bytes.extend_from_slice(&42.0f32.to_le_bytes()); // intensity
+        let mut cursor = Cursor::new(bytes);
+        let peaks = read_scan_srm_v66(&mut cursor, 0, 0, 0).unwrap();
+        assert_eq!(peaks.len(), 1);
+        assert_eq!(peaks[0].mz, 105.0);
+        assert_eq!(peaks[0].abundance, 42.0);
+    }
+
+    #[test]
+    fn read_scan_srm_v66_zero_peaks_is_empty() {
+        let bytes = 0u32.to_le_bytes().to_vec();
+        let mut cursor = Cursor::new(bytes);
+        assert!(read_scan_srm_v66(&mut cursor, 0, 0, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn read_scan_srm_v66_windows_decodes_pairs() {
+        let mut bytes = 2u32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&[0u8; 28]);
+        bytes.extend_from_slice(&1.0f32.to_le_bytes());
+        bytes.extend_from_slice(&2.0f32.to_le_bytes());
+        bytes.extend_from_slice(&3.0f32.to_le_bytes());
+        bytes.extend_from_slice(&4.0f32.to_le_bytes());
+        let mut cursor = Cursor::new(bytes);
+        let windows = read_scan_srm_v66_windows(&mut cursor, 0, 0).unwrap();
+        assert_eq!(windows, vec![(1.0, 2.0), (3.0, 4.0)]);
+    }
+
+    #[test]
+    fn search_v63_transition_finds_matching_record() {
+        // 72-byte-per-channel table: [flag][unk][Q1][Q3_center][Q3_width][dwell][CE]...
+        let mut data = vec![0u8; 8]; // leading offset so `j - 8` is in range
+        data.extend_from_slice(&1.0f64.to_le_bytes()); // flag
+        data.extend_from_slice(&0.0f64.to_le_bytes()); // unknown
+        data.extend_from_slice(&500.0f64.to_le_bytes()); // Q1
+        data.extend_from_slice(&300.0f64.to_le_bytes()); // Q3 center
+        data.extend_from_slice(&1.0f64.to_le_bytes()); // Q3 width
+        data.extend_from_slice(&0.02f64.to_le_bytes()); // dwell
+        data.extend_from_slice(&25.0f64.to_le_bytes()); // CE
+                                                        // Trailing padding: the scan only considers positions `j` with
+                                                        // `j < data.len() - 32`, so there must be slack past the CE field
+                                                        // for the Q3-center position (at offset 32) to be in range.
+        data.extend_from_slice(&[0u8; 16]);
+        let (q1, q3w, ce) = search_v63_transition(&data, 300.0).unwrap();
+        assert_eq!(q1, 500.0);
+        assert_eq!(q3w, 1.0);
+        assert_eq!(ce, 25.0);
+    }
+
+    #[test]
+    fn search_v63_transition_no_match_returns_none() {
+        let data = vec![0u8; 128];
+        assert!(search_v63_transition(&data, 300.0).is_none());
+    }
+
+    #[test]
+    fn to_mz_intensity_capacity_uses_actual_signal_length_not_untrusted_nbins() {
+        // `nbins` deliberately does not match the real chunk data below; the
+        // conversion must not use it to size an allocation (see the fix in
+        // `Profile::to_mz_intensity`), and the result must reflect the real
+        // (small) amount of signal data actually present.
+        let profile = Profile {
+            first_value: 100.0,
+            step: 0.01,
+            peak_count: 1,
+            nbins: u32::MAX,
+            chunks: vec![ProfileChunk {
+                first_bin: 0,
+                signal: vec![1.0, 2.0, 3.0],
+                fudge: None,
+            }],
+        };
+        let result = profile.to_mz_intensity(&[]);
+        assert_eq!(result.len(), 3);
+    }
 }

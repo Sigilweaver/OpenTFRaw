@@ -62,3 +62,71 @@ impl FileHeader {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::Error;
+    use crate::test_util::file_header_bytes;
+    use std::io::Cursor;
+
+    fn read(bytes: Vec<u8>) -> Result<FileHeader> {
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        FileHeader::read(&mut r)
+    }
+
+    #[test]
+    fn valid_header_v66_round_trips() {
+        let hdr = read(file_header_bytes(66)).unwrap();
+        assert_eq!(hdr.magic, 0xa101);
+        assert_eq!(hdr.signature, "Finnigan");
+        assert_eq!(hdr.version, 66);
+        assert_eq!(hdr.audit_start.tag2, "Test Instrument");
+        assert_eq!(hdr.tag.trim_end_matches('\0'), "tag");
+    }
+
+    #[test]
+    fn every_supported_version_parses() {
+        for &v in &[8u32, 47, 57, 60, 62, 63, 64, 66] {
+            let hdr = read(file_header_bytes(v)).unwrap();
+            assert_eq!(hdr.version, v);
+        }
+    }
+
+    #[test]
+    fn rejects_bad_magic() {
+        let mut bytes = file_header_bytes(66);
+        bytes[0] = 0x00;
+        bytes[1] = 0x00;
+        let err = read(bytes).unwrap_err();
+        assert!(matches!(err, Error::BadMagic(0)));
+    }
+
+    #[test]
+    fn rejects_bad_signature() {
+        let mut bytes = file_header_bytes(66);
+        // Corrupt the signature region (bytes 2..20).
+        bytes[2] = b'X';
+        let err = read(bytes).unwrap_err();
+        assert!(matches!(err, Error::BadSignature(_)));
+    }
+
+    #[test]
+    fn rejects_unsupported_version() {
+        let bytes = file_header_bytes(999);
+        let err = read(bytes).unwrap_err();
+        assert!(matches!(err, Error::UnsupportedVersion(999)));
+    }
+
+    #[test]
+    fn truncated_header_is_eof() {
+        let mut bytes = file_header_bytes(66);
+        bytes.truncate(100);
+        assert!(read(bytes).is_err());
+    }
+
+    #[test]
+    fn empty_input_is_eof() {
+        assert!(read(Vec::new()).is_err());
+    }
+}

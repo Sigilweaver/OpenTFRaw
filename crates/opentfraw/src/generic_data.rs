@@ -288,3 +288,210 @@ impl GenericValue {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_util::pascal_string;
+    use std::io::Cursor;
+
+    /// One field descriptor: type_code(u32) + length(u32) + label (pascal string).
+    fn field_bytes(type_code: u32, length: u32, label: &str) -> Vec<u8> {
+        let mut out = type_code.to_le_bytes().to_vec();
+        out.extend_from_slice(&length.to_le_bytes());
+        out.extend_from_slice(&pascal_string(label));
+        out
+    }
+
+    /// A full GDH blob: field count(u32) + that many field descriptors.
+    fn gdh_bytes(fields: &[(u32, u32, &str)]) -> Vec<u8> {
+        let mut out = (fields.len() as u32).to_le_bytes().to_vec();
+        for &(t, l, label) in fields {
+            out.extend_from_slice(&field_bytes(t, l, label));
+        }
+        out
+    }
+
+    fn try_read(bytes: Vec<u8>) -> Result<Option<GenericDataHeader>> {
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        GenericDataHeader::try_read(&mut r)
+    }
+
+    #[test]
+    fn valid_two_field_header_parses() {
+        let bytes = gdh_bytes(&[
+            (GenericType::Float64 as u32, 0, "RT:"),
+            (GenericType::Int32 as u32, 0, "Scan:"),
+        ]);
+        let hdr = try_read(bytes).unwrap().expect("should parse");
+        assert_eq!(hdr.fields.len(), 2);
+        assert_eq!(hdr.fields[0].label, "RT:");
+        assert_eq!(hdr.fields[1].label, "Scan:");
+        assert_eq!(hdr.fixed_record_size(), 8 + 4);
+    }
+
+    #[test]
+    fn field_count_zero_is_rejected() {
+        let bytes = gdh_bytes(&[]);
+        assert!(try_read(bytes).unwrap().is_none());
+    }
+
+    #[test]
+    fn field_count_one_is_rejected() {
+        let bytes = gdh_bytes(&[(GenericType::Int32 as u32, 0, "Only:")]);
+        assert!(try_read(bytes).unwrap().is_none());
+    }
+
+    #[test]
+    fn field_count_above_500_is_rejected() {
+        let mut bytes = 501u32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&field_bytes(GenericType::Int32 as u32, 0, "A:"));
+        assert!(try_read(bytes).unwrap().is_none());
+    }
+
+    #[test]
+    fn invalid_type_code_is_rejected() {
+        let bytes = gdh_bytes(&[(0xDEAD_BEEF, 0, "A:"), (GenericType::Int32 as u32, 0, "B:")]);
+        assert!(try_read(bytes).unwrap().is_none());
+    }
+
+    #[test]
+    fn label_char_count_above_200_is_rejected() {
+        let mut out = 2u32.to_le_bytes().to_vec();
+        out.extend_from_slice(&(GenericType::Int32 as u32).to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes()); // length
+        out.extend_from_slice(&300u32.to_le_bytes()); // implausible char count
+        out.extend_from_slice(&[0u8; 20]); // some filler bytes (not enough for 300 chars)
+        assert!(try_read(out).unwrap().is_none());
+    }
+
+    #[test]
+    fn all_empty_labels_are_not_meaningful() {
+        // named() requires at least 2 non-empty labels; both empty here.
+        let bytes = gdh_bytes(&[
+            (GenericType::Int32 as u32, 0, ""),
+            (GenericType::Int32 as u32, 0, ""),
+        ]);
+        assert!(try_read(bytes).unwrap().is_none());
+    }
+
+    #[test]
+    fn position_restored_on_rejection() {
+        let mut bytes = vec![0xAAu8; 8]; // leading junk before the candidate
+        let candidate_start = bytes.len();
+        bytes.extend_from_slice(&gdh_bytes(&[])); // n=0, rejected
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        r.seek_to(candidate_start as u64).unwrap();
+        let saved = r.position();
+        assert!(GenericDataHeader::try_read(&mut r).unwrap().is_none());
+        assert_eq!(r.position(), saved);
+    }
+
+    #[test]
+    fn truncated_header_is_eof_not_panic() {
+        let mut bytes = gdh_bytes(&[
+            (GenericType::Float64 as u32, 0, "RT:"),
+            (GenericType::Int32 as u32, 0, "Scan:"),
+        ]);
+        bytes.truncate(bytes.len() - 2);
+        // Either a clean error or a `None` (truncated pascal string content
+        // fails UTF-16 decoding / hits EOF) is acceptable; a panic is not.
+        let _ = try_read(bytes);
+    }
+
+    #[test]
+    fn fixed_record_size_sums_all_field_kinds() {
+        let bytes = gdh_bytes(&[
+            (GenericType::Int8 as u32, 0, "a:"),
+            (GenericType::Int32 as u32, 0, "b:"),
+            (GenericType::Float64 as u32, 0, "c:"),
+            (GenericType::AsciiString as u32, 10, "d:"),
+            (GenericType::WideString as u32, 5, "e:"),
+        ]);
+        let hdr = try_read(bytes).unwrap().unwrap();
+        // 1 (Int8) + 4 (Int32) + 8 (Float64) + 10 (Ascii len) + 5*2 (Wide len*2)
+        assert_eq!(hdr.fixed_record_size(), 1 + 4 + 8 + 10 + 10);
+    }
+
+    #[test]
+    fn find_forward_locates_header_after_garbage_prefix() {
+        let mut bytes = vec![0x11u8; 64]; // garbage that doesn't look like a valid GDH
+        bytes.extend_from_slice(&gdh_bytes(&[
+            (GenericType::Float64 as u32, 0, "RT:"),
+            (GenericType::Int32 as u32, 0, "Scan:"),
+        ]));
+        let max_scan = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let hdr = GenericDataHeader::find_forward(&mut r, max_scan, None)
+            .unwrap()
+            .expect("should find the embedded header");
+        assert_eq!(hdr.fields.len(), 2);
+    }
+
+    #[test]
+    fn find_forward_returns_none_when_absent() {
+        let bytes = vec![0x11u8; 128];
+        let max_scan = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert!(GenericDataHeader::find_forward(&mut r, max_scan, None)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn generic_record_reads_typed_fields() {
+        let hdr = GenericDataHeader {
+            fields: vec![
+                GenericDataDescriptor {
+                    field_type: GenericType::Int32,
+                    length: 0,
+                    label: "Scan:".to_string(),
+                },
+                GenericDataDescriptor {
+                    field_type: GenericType::Float64,
+                    length: 0,
+                    label: "RT:".to_string(),
+                },
+                GenericDataDescriptor {
+                    field_type: GenericType::AsciiString,
+                    length: 8,
+                    label: "Note:".to_string(),
+                },
+            ],
+        };
+        let mut bytes = 42i32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&1.5f64.to_le_bytes());
+        let mut note = b"hi".to_vec();
+        note.resize(8, 0); // null-padded fixed-width ASCII field
+        bytes.extend_from_slice(&note);
+
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let record = GenericRecord::read(&mut r, &hdr).unwrap();
+        assert_eq!(record.get_i32("Scan:"), Some(42));
+        assert_eq!(record.get_f64("RT:"), Some(1.5));
+        assert_eq!(record.get_string("Note:"), Some("hi"));
+    }
+
+    #[test]
+    fn generic_record_truncated_is_eof() {
+        let hdr = GenericDataHeader {
+            fields: vec![GenericDataDescriptor {
+                field_type: GenericType::Float64,
+                length: 0,
+                label: "RT:".to_string(),
+            }],
+        };
+        let bytes = vec![0u8; 4]; // Float64 needs 8 bytes
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert!(GenericRecord::read(&mut r, &hdr).is_err());
+    }
+
+    #[test]
+    fn generic_value_as_f64_converts_numeric_variants() {
+        assert_eq!(GenericValue::Float64(2.5).as_f64(), Some(2.5));
+        assert_eq!(GenericValue::Int32(7).as_f64(), Some(7.0));
+        assert_eq!(GenericValue::UInt8(3).as_f64(), Some(3.0));
+        assert_eq!(GenericValue::Gap.as_f64(), None);
+        assert_eq!(GenericValue::String("x".into()).as_f64(), None);
+    }
+}
