@@ -20,6 +20,23 @@ pub struct ScanIndexEntry {
 }
 
 impl ScanIndexEntry {
+    /// Minimum on-disk size in bytes of one entry for the given file version.
+    /// Used to bound `Vec::with_capacity(num_scans)` against the file's
+    /// actual remaining size before allocating.
+    pub(crate) fn min_size_for_version(version: u32) -> u64 {
+        // offset_32(4) + index(4) + scan_event(2) + scan_segment(2) + next(4)
+        // + unk(4) + data_size(4) + 6 * f64(8) = 72 bytes, common to every
+        // version (the offset_32 field is reused directly pre-v64).
+        const BASE: u64 = 72;
+        if version >= 66 {
+            BASE + 8 /* u64 offset instead of offset_32 */ + 8 /* 2 trailing u32s */
+        } else if version >= 64 {
+            BASE + 8 /* u64 offset instead of offset_32 */
+        } else {
+            BASE
+        }
+    }
+
     pub(crate) fn read<R: Read + Seek>(r: &mut BinaryReader<R>, version: u32) -> Result<Self> {
         let offset_32 = r.read_u32()?;
         let index = r.read_u32()?;

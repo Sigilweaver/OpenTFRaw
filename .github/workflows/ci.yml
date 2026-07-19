@@ -10,6 +10,11 @@
 #                   mzML, run scripts/validate_mzml.py for structural
 #                   conformance, and validate against the vendored PSI-MS mzML
 #                   XSD with xmllint.
+#   fuzz-smoke    - PR-only, gated on crates/opentfraw/src/** changing: runs
+#                   the two cargo-fuzz targets (open, read_scan_peaks) for a
+#                   fixed 60s each as a crash/panic/hang smoke test. This is
+#                   deliberately short and separate from any longer
+#                   scheduled/manual fuzzing run.
 #   python-tests  - build the opentfraw Python extension (maturin develop)
 #                   and run the pytest suite in tests/ against it, using the
 #                   same PRIDE RAW fixture as validate-mzml.
@@ -132,6 +137,62 @@ jobs:
             test_profile.mzML
           xmllint --noout --schema schema/mzML1.1.2_idx.xsd \
             test_indexed.mzML
+
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      opentfraw_src: ${{ steps.filter.outputs.opentfraw_src }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            opentfraw_src:
+              - 'crates/opentfraw/src/**'
+
+  fuzz-smoke:
+    name: Fuzz smoke test (60s)
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.opentfraw_src == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/opentfraw/fuzz -> target
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Seed the fuzz corpus with a small real RAW fixture
+        run: |
+          wget -q --user-agent="OpenTFRaw-CI/1.0" \
+               -O "$PRIDE_RAW_NAME" "$PRIDE_RAW_URL"
+          mkdir -p crates/opentfraw/fuzz/corpus/open crates/opentfraw/fuzz/corpus/read_scan_peaks
+          cp "$PRIDE_RAW_NAME" crates/opentfraw/fuzz/corpus/open/
+          cp "$PRIDE_RAW_NAME" crates/opentfraw/fuzz/corpus/read_scan_peaks/
+
+      - name: Fuzz RawFileReader::open (60s)
+        working-directory: crates/opentfraw/fuzz
+        run: cargo fuzz run open corpus/open -- -max_total_time=60
+
+      - name: Fuzz read_scan_peaks (60s)
+        working-directory: crates/opentfraw/fuzz
+        run: cargo fuzz run read_scan_peaks corpus/read_scan_peaks -- -max_total_time=60
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-artifacts
+          path: crates/opentfraw/fuzz/artifacts/
 
   python-tests:
     name: Python bindings (pytest)

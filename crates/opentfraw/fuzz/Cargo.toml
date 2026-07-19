@@ -1,0 +1,33 @@
+[package]
+name = "opentfraw-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Keep this crate out of the top-level Cargo workspace (it lives inside
+# crates/opentfraw/ but is its own standalone fuzz project, per cargo-fuzz
+# convention).
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.opentfraw]
+path = ".."
+
+[[bin]]
+name = "open"
+path = "fuzz_targets/open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "read_scan_peaks"
+path = "fuzz_targets/read_scan_peaks.rs"
+test = false
+doc = false
+bench = false
