@@ -4,6 +4,8 @@ mod reader;
 mod types;
 
 pub(crate) mod bytes;
+#[cfg(test)]
+mod test_util;
 
 pub mod audit_tag;
 pub mod device;
