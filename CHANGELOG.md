@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `tests/` now has a pytest suite for the `opentfraw` Python bindings:
+  a smoke test per `RawFile` method/property (peaks, profile,
+  centroid_labels, scan, iter_scans, scan_filter, scan_parameters,
+  status_log, error_log, controllers, instrument_method_text,
+  sample_info, computer_name, controller_count, acquisition_date,
+  created, to_mzml), asserting on shape/type/non-emptiness rather than
+  exact values. A new `python-tests` CI job builds the extension with
+  `maturin develop` and runs it against the same PRIDE RAW fixture
+  `validate-mzml` already uses. (#21)
+
 ### Docs
 
 - `docs/guide/reader.md`'s field table had drifted behind `RawFileReader`
