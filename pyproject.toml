@@ -39,4 +39,8 @@ include = [
 [dependency-groups]
 dev = [
     "maturin>=1.14.1",
+    "pytest>=8",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
