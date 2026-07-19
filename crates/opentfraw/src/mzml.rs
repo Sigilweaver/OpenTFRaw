@@ -489,6 +489,142 @@ fn to_msc_record(rec: SpectrumRecord) -> msc::SpectrumRecord {
     }
 }
 
+// -- Chromatogram records (TIC / BPC / SRM) --
+//
+// These map already-decoded per-scan fields into vendor-neutral
+// `openmassspec_core::ChromatogramRecord`s. No new binary parsing happens
+// here: the TIC/BPC series come straight from the scan index
+// (`total_current`, `base_intensity`), and SRM transitions are formed by
+// grouping the same scans by their `scan_event` using the Q1/Q3 maps the
+// reader already builds. Following the sibling Waters wiring
+// (Sigilweaver/OpenWRaw#9), a trace is only emitted when it can be labeled
+// with a real PSI-MS chromatogram-type term and its defining fields resolve;
+// anything ambiguous is omitted rather than guessed.
+
+/// Build the total-ion-current chromatogram from `(rt_min, total_current)`
+/// pairs, or `None` when the file has no scans.
+///
+/// `ChromatogramRecord::time_sec` is seconds; the reader reports retention
+/// time in minutes, hence the `* 60.0`.
+fn tic_record(tic: &[(f64, f64)]) -> Option<msc::ChromatogramRecord> {
+    if tic.is_empty() {
+        return None;
+    }
+    Some(msc::ChromatogramRecord {
+        index: 0,
+        id: "TIC".to_string(),
+        chromatogram_type: Some(msc::CvTerm::new(
+            "MS:1000235",
+            "total ion current chromatogram",
+        )),
+        precursor_mz: None,
+        product_mz: None,
+        time_sec: tic.iter().map(|&(rt, _)| (rt * 60.0) as f32).collect(),
+        intensity: tic.iter().map(|&(_, i)| i as f32).collect(),
+    })
+}
+
+/// Build the base-peak chromatogram from `(rt_min, base_intensity, base_mz)`
+/// triples, or `None` when the file has no scans. `base_mz` is not carried on
+/// a chromatogram record, so only the intensity trace is emitted.
+fn bpc_record(bpc: &[(f64, f64, f64)]) -> Option<msc::ChromatogramRecord> {
+    if bpc.is_empty() {
+        return None;
+    }
+    Some(msc::ChromatogramRecord {
+        index: 0,
+        id: "BPC".to_string(),
+        chromatogram_type: Some(msc::CvTerm::new("MS:1000628", "basepeak chromatogram")),
+        precursor_mz: None,
+        product_mz: None,
+        time_sec: bpc.iter().map(|&(rt, _, _)| (rt * 60.0) as f32).collect(),
+        intensity: bpc.iter().map(|&(_, bpi, _)| bpi as f32).collect(),
+    })
+}
+
+/// Group SRM/flat-peak scans into one chromatogram per transition.
+///
+/// `scans` is `(scan_event, rt_min, total_current)` in scan (time) order.
+/// Each `scan_event` is one Q1->Q3 transition; its points are the summed
+/// product-ion current (`total_current`) already decoded per scan, so no
+/// re-summing of peaks is needed. A transition is emitted only when its Q1
+/// precursor is known (`q1_by_event`); the product m/z is filled in only when
+/// exactly one Q3 window resolves unambiguously, and left unset otherwise
+/// rather than guessed. Events are visited in sorted order for deterministic
+/// output.
+fn srm_chromatograms(
+    scans: &[(u16, f64, f64)],
+    q1_by_event: &std::collections::HashMap<u16, f64>,
+    q3_windows: &std::collections::HashMap<u16, Vec<(f32, f32)>>,
+) -> Vec<msc::ChromatogramRecord> {
+    let mut points_by_event: std::collections::BTreeMap<u16, Vec<(f32, f32)>> =
+        std::collections::BTreeMap::new();
+    for &(event, rt_min, current) in scans {
+        points_by_event
+            .entry(event)
+            .or_default()
+            .push(((rt_min * 60.0) as f32, current as f32));
+    }
+
+    let mut out = Vec::new();
+    for (event, points) in points_by_event {
+        let Some(&q1) = q1_by_event.get(&event) else {
+            continue;
+        };
+        let product_mz = match q3_windows.get(&event) {
+            Some(windows) if windows.len() == 1 => {
+                let (lo, hi) = windows[0];
+                Some(((lo + hi) / 2.0) as f64)
+            }
+            _ => None,
+        };
+        let id = match product_mz {
+            Some(q3) => format!("SRM Q1={q1:.4} Q3={q3:.4}"),
+            None => format!("SRM Q1={q1:.4}"),
+        };
+        out.push(msc::ChromatogramRecord {
+            index: 0,
+            id,
+            chromatogram_type: Some(msc::CvTerm::new(
+                "MS:1000627",
+                "selected reaction monitoring chromatogram",
+            )),
+            precursor_mz: Some(q1),
+            product_mz,
+            time_sec: points.iter().map(|&(t, _)| t).collect(),
+            intensity: points.iter().map(|&(_, i)| i).collect(),
+        });
+    }
+    out
+}
+
+/// Assemble every chromatogram trace `raw` can supply: always a TIC and BPC
+/// (when the file has scans), plus one SRM chromatogram per transition for
+/// flat-peak SRM files. Records are indexed sequentially in emission order.
+fn build_chromatograms(raw: &RawFileReader) -> Vec<msc::ChromatogramRecord> {
+    let mut out = Vec::new();
+    out.extend(tic_record(&raw.tic_chromatogram()));
+    out.extend(bpc_record(&raw.bpc_chromatogram()));
+
+    if raw.flat_peaks && !raw.srm_q1_by_event.is_empty() {
+        let scans: Vec<(u16, f64, f64)> = raw
+            .scan_index
+            .iter()
+            .map(|e| (e.scan_event, e.start_time, e.total_current))
+            .collect();
+        out.extend(srm_chromatograms(
+            &scans,
+            &raw.srm_q1_by_event,
+            &raw.srm_q3_windows,
+        ));
+    }
+
+    for (i, rec) in out.iter_mut().enumerate() {
+        rec.index = i;
+    }
+    out
+}
+
 /// `SpectrumSource` adapter over a Thermo RAW reader.
 ///
 /// Use this when you want to feed Thermo data into any
@@ -553,6 +689,12 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
     fn spectrum_count_hint(&self) -> Option<usize> {
         Some(self.raw.num_scans as usize)
     }
+
+    fn iter_chromatograms<'s>(
+        &'s mut self,
+    ) -> Box<dyn Iterator<Item = msc::ChromatogramRecord> + 's> {
+        Box::new(build_chromatograms(self.raw).into_iter())
+    }
 }
 
 // -- Public mzML entry points (unchanged signatures) --
@@ -604,4 +746,101 @@ where
     let mut src = OpenTfRawSource::new(raw, source, raw_filename, include_profile);
     msc::write_indexed_mzml(&mut src, out)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn tic_record_maps_pairs_and_converts_minutes_to_seconds() {
+        // (rt_min, total_current)
+        let tic = [(0.0, 100.0), (0.5, 250.0), (1.0, 175.0)];
+        let rec = tic_record(&tic).expect("non-empty TIC");
+        assert_eq!(rec.id, "TIC");
+        let cv = rec.chromatogram_type.as_ref().unwrap();
+        assert_eq!(cv.accession, "MS:1000235");
+        assert_eq!(cv.name, "total ion current chromatogram");
+        assert!(rec.precursor_mz.is_none());
+        assert!(rec.product_mz.is_none());
+        assert_eq!(rec.time_sec, vec![0.0, 30.0, 60.0]); // rt_min * 60
+        assert_eq!(rec.intensity, vec![100.0, 250.0, 175.0]);
+    }
+
+    #[test]
+    fn bpc_record_uses_base_intensity_and_drops_base_mz() {
+        // (rt_min, base_intensity, base_mz)
+        let bpc = [(0.0, 90.0, 500.0), (0.5, 220.0, 501.0)];
+        let rec = bpc_record(&bpc).expect("non-empty BPC");
+        assert_eq!(rec.id, "BPC");
+        let cv = rec.chromatogram_type.as_ref().unwrap();
+        assert_eq!(cv.accession, "MS:1000628");
+        assert_eq!(cv.name, "basepeak chromatogram");
+        assert_eq!(rec.time_sec, vec![0.0, 30.0]);
+        assert_eq!(rec.intensity, vec![90.0, 220.0]); // base_mz not carried
+    }
+
+    #[test]
+    fn tic_and_bpc_records_are_none_when_no_scans() {
+        assert!(tic_record(&[]).is_none());
+        assert!(bpc_record(&[]).is_none());
+    }
+
+    #[test]
+    fn srm_groups_scans_by_event_and_sets_precursor_and_product() {
+        // Two transitions interleaved in scan order, one scan_event each.
+        let scans = [
+            (1u16, 0.0f64, 10.0f64),
+            (2u16, 0.0, 20.0),
+            (1, 0.5, 12.0),
+            (2, 0.5, 22.0),
+        ];
+        let mut q1 = HashMap::new();
+        q1.insert(1u16, 500.0);
+        q1.insert(2u16, 600.0);
+        let mut q3 = HashMap::new();
+        q3.insert(1u16, vec![(100.0f32, 101.0f32)]); // single window -> product m/z
+        q3.insert(2u16, vec![(200.0f32, 201.0f32)]);
+
+        let recs = srm_chromatograms(&scans, &q1, &q3);
+        assert_eq!(recs.len(), 2);
+
+        // BTreeMap order: event 1 first.
+        let r1 = &recs[0];
+        assert_eq!(r1.precursor_mz, Some(500.0));
+        assert_eq!(r1.product_mz, Some(100.5)); // (100 + 101) / 2
+        assert_eq!(r1.id, "SRM Q1=500.0000 Q3=100.5000");
+        let cv = r1.chromatogram_type.as_ref().unwrap();
+        assert_eq!(cv.accession, "MS:1000627");
+        assert_eq!(cv.name, "selected reaction monitoring chromatogram");
+        assert_eq!(r1.time_sec, vec![0.0, 30.0]);
+        assert_eq!(r1.intensity, vec![10.0, 12.0]);
+
+        let r2 = &recs[1];
+        assert_eq!(r2.precursor_mz, Some(600.0));
+        assert_eq!(r2.product_mz, Some(200.5));
+        assert_eq!(r2.intensity, vec![20.0, 22.0]);
+    }
+
+    #[test]
+    fn srm_skips_events_without_a_known_q1_and_omits_ambiguous_product() {
+        let scans = [
+            (1u16, 0.0f64, 10.0f64), // no Q1 -> skipped
+            (2u16, 0.0, 20.0),       // Q1 known, two Q3 windows -> product omitted
+        ];
+        let mut q1 = HashMap::new();
+        q1.insert(2u16, 600.0);
+        let mut q3 = HashMap::new();
+        q3.insert(2u16, vec![(200.0f32, 201.0f32), (300.0f32, 301.0f32)]);
+
+        let recs = srm_chromatograms(&scans, &q1, &q3);
+        assert_eq!(recs.len(), 1, "event without a Q1 must be skipped");
+        assert_eq!(recs[0].precursor_mz, Some(600.0));
+        assert!(
+            recs[0].product_mz.is_none(),
+            "ambiguous multi-window Q3 must not be guessed"
+        );
+        assert_eq!(recs[0].id, "SRM Q1=600.0000");
+    }
 }
