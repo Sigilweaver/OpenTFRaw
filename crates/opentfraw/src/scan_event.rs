@@ -383,6 +383,7 @@ impl ScanEvent {
         let _unk1 = r.read_u32()?;
         let fc = FractionCollector::read(r)?;
         let nparam = r.read_u32()?;
+        r.check_count(nparam as u64, 8)?;
         let mut coefficients = Vec::with_capacity(nparam as usize);
         for _ in 0..nparam {
             coefficients.push(r.read_f64()?);

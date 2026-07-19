@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Length-prefixed reads and scan/error-log/scan-parameter counts read from
+  a RAW file's headers are now checked against the file's actual remaining
+  size before any allocation is attempted, instead of allocating first and
+  letting the subsequent read fail. A crafted or corrupt file could
+  previously declare an implausible count (e.g. a scan count derived from
+  a bogus `last_scan` header field, or a peak/node count with no relation
+  to the file's real size) and trigger a memory-exhaustion allocation
+  before a single byte of the declared payload was read. (#26)
+- Fixed several integer-overflow panics reachable from crafted/corrupt RAW
+  files, found via the new fuzz harness (see below): u32 multiplication
+  overflow in `PacketHeader` label-stream skip lengths, u32 addition
+  overflow computing `num_scans` from `first_scan`/`last_scan`, u64
+  addition overflow combining `data_addr` with a scan offset, and u32
+  subtraction underflow converting a requested scan number to a scan-index
+  offset when it fell below the file's declared `first_scan_number`. (#26)
+- Added a `cargo-fuzz` harness (`crates/opentfraw/fuzz`) with two targets,
+  `open` (`RawFileReader::open`) and `read_scan_peaks` (open + read every
+  scan's peaks), and a 60-second smoke-test CI job gated on
+  `crates/opentfraw/src/**` changing on pull requests. (#23, #26)
+
+### Added
+
+- Unit tests for the pure-decode functions in `bytes.rs`, `header.rs`,
+  `audit_tag.rs`, `generic_data.rs`, and `error_log.rs`, using hand-built
+  byte fixtures (valid, truncated, and out-of-range cases). Also added
+  regression tests in `reader.rs` and `scan_data.rs` for the allocation-cap
+  and integer-overflow fixes above. (#23)
+
 ### Docs
 
 - `docs/guide/reader.md`'s field table had drifted behind `RawFileReader`

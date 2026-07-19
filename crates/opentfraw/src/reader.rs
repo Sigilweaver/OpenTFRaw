@@ -18,11 +18,21 @@ use crate::seq_row::SeqRow;
 pub(crate) struct BinaryReader<R> {
     inner: R,
     pos: u64,
+    /// Cached total stream length, populated on first call to [`Self::length`]
+    /// or [`Self::remaining`]. The underlying stream is never written to
+    /// while parsing, so this is safe to cache for the reader's lifetime and
+    /// avoids repeated end-of-stream seeks in allocation-size checks that can
+    /// run once per record in a large loop.
+    total_len: Option<u64>,
 }
 
 impl<R: Read + Seek> BinaryReader<R> {
     pub fn new(inner: R) -> Self {
-        Self { inner, pos: 0 }
+        Self {
+            inner,
+            pos: 0,
+            total_len: None,
+        }
     }
 
     pub fn into_inner(self) -> R {
@@ -41,6 +51,10 @@ impl<R: Read + Seek> BinaryReader<R> {
     }
 
     pub fn read_bytes(&mut self, n: usize) -> Result<Vec<u8>> {
+        // Guard against a crafted/corrupt file declaring an implausible
+        // length-prefix: verify the bytes could actually exist in the
+        // remaining input before allocating a buffer for them.
+        self.check_count(n as u64, 1)?;
         let mut buf = vec![0u8; n];
         self.inner.read_exact(&mut buf).map_err(|e| {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
@@ -79,11 +93,50 @@ impl<R: Read + Seek> BinaryReader<R> {
     }
 
     pub fn length(&mut self) -> Result<u64> {
-        let cur = self.pos;
+        if let Some(len) = self.total_len {
+            return Ok(len);
+        }
+        // Query and restore the *true* underlying position (not `self.pos`):
+        // some callers construct a fresh `BinaryReader` over a source that
+        // was already seeked to a nonzero offset, so `self.pos` (which starts
+        // at 0 for every new reader) would not agree with where the
+        // underlying stream actually is.
+        let cur = self.inner.stream_position()?;
         let end = self.inner.seek(SeekFrom::End(0))?;
         self.inner.seek(SeekFrom::Start(cur))?;
-        self.pos = cur;
+        self.total_len = Some(end);
         Ok(end)
+    }
+
+    /// Bytes remaining between the stream's true current position and its end.
+    pub(crate) fn remaining(&mut self) -> Result<u64> {
+        let cur = self.inner.stream_position()?;
+        let end = self.length()?;
+        Ok(end.saturating_sub(cur))
+    }
+
+    /// Verify that `count` items of at least `min_item_bytes` bytes each
+    /// could plausibly still be read from the stream, before any allocation
+    /// proportional to `count` is attempted.
+    ///
+    /// Crafted or corrupt RAW files can declare implausible counts (a scan
+    /// count derived from a bogus header field, a peak count with no
+    /// relation to the file's actual size, etc). Without this check, code
+    /// like `Vec::with_capacity(count)` would allocate memory proportional
+    /// to an attacker-controlled value rather than to what the input could
+    /// actually contain - a memory-exhaustion vector reachable before a
+    /// single byte of the declared payload is read.
+    pub(crate) fn check_count(&mut self, count: u64, min_item_bytes: u64) -> Result<()> {
+        let remaining = self.remaining()?;
+        let needed = count.saturating_mul(min_item_bytes.max(1));
+        if needed > remaining {
+            return Err(Error::AllocationTooLarge {
+                offset: self.pos,
+                requested: needed,
+                available: remaining,
+            });
+        }
+        Ok(())
     }
 
     pub fn read_u8(&mut self) -> Result<u8> {
@@ -182,6 +235,33 @@ impl<R: Read + Seek> BinaryReader<R> {
         }
         Ok((ft as f64 / 10_000_000.0) - 11_644_473_600.0)
     }
+}
+
+/// Compute the number of scans from the run header's declared first/last
+/// scan numbers.
+///
+/// Both inputs are untrusted u32 values read straight from the file, so
+/// `last_scan - first_scan` can be as large as `u32::MAX` (e.g.
+/// `first_scan == 0`, `last_scan == u32::MAX`); the `+ 1` therefore
+/// saturates rather than wrapping or panicking. Any resulting oversized
+/// value is caught by `BinaryReader::check_count` before it can drive an
+/// allocation.
+fn compute_num_scans(first_scan: u32, last_scan: u32) -> u32 {
+    if last_scan >= first_scan {
+        (last_scan - first_scan).saturating_add(1)
+    } else {
+        0
+    }
+}
+
+/// Convert a 1-based scan number to a `scan_index` array offset, or `None`
+/// if `scan_number` is below `first_scan_number` (a plain subtraction here
+/// would underflow rather than simply being "out of range" - both
+/// `scan_number` and `first_scan_number` can be arbitrary/untrusted values).
+fn scan_number_to_index(scan_number: u32, first_scan_number: u32) -> Option<usize> {
+    scan_number
+        .checked_sub(first_scan_number)
+        .map(|v| v as usize)
 }
 
 /// A parsed Thermo Fisher RAW file.
@@ -344,15 +424,14 @@ impl RawFileReader {
 
         let first_scan = run_header.sample_info.first_scan_number;
         let last_scan = run_header.sample_info.last_scan_number;
-
-        let num_scans = if last_scan >= first_scan {
-            last_scan - first_scan + 1
-        } else {
-            0
-        };
+        let num_scans = compute_num_scans(first_scan, last_scan);
 
         // 7. Scan index
         r.seek_to(run_header.scan_index_addr)?;
+        r.check_count(
+            num_scans as u64,
+            ScanIndexEntry::min_size_for_version(version),
+        )?;
         let mut scan_index = Vec::with_capacity(num_scans as usize);
         for _ in 0..num_scans {
             scan_index.push(ScanIndexEntry::read(&mut r, version)?);
@@ -430,6 +509,9 @@ impl RawFileReader {
             } else {
                 (0, 0)
             };
+        // Each event consumes at least its preamble on disk (the body may add
+        // more, but the preamble alone is a safe lower bound for the count check).
+        r.check_count(n_events as u64, preamble_size as u64)?;
         let mut scan_events = Vec::with_capacity(n_events as usize);
         for _ in 0..n_events {
             scan_events.push(ScanEvent::read(
@@ -447,6 +529,9 @@ impl RawFileReader {
             if version >= 64 {
                 let _preamble = r.read_u32()?;
             }
+            // Minimum on-disk size of one entry: f32 time (4) + u32 pascal
+            // string char count (4), i.e. an empty message.
+            r.check_count(n_errors as u64, 8)?;
             let mut log = Vec::with_capacity(n_errors as usize);
             for _ in 0..n_errors {
                 log.push(ErrorEntry::read(&mut r)?);
@@ -492,6 +577,7 @@ impl RawFileReader {
                 Some(hdr) => {
                     // Records start directly at scan_params_addr - no stream preamble.
                     r.seek_to(run_header.scan_params_addr)?;
+                    r.check_count(num_scans as u64, hdr.fixed_record_size().max(1) as u64)?;
                     let mut params = Vec::with_capacity(num_scans as usize);
                     for _ in 0..num_scans {
                         params.push(GenericRecord::read(&mut r, &hdr)?);
@@ -510,6 +596,7 @@ impl RawFileReader {
             match GenericDataHeader::try_read(&mut r)? {
                 Some(hdr) => {
                     let n_inst = run_header.sample_info.inst_log_length;
+                    r.check_count(n_inst as u64, hdr.fixed_record_size().max(1) as u64)?;
                     let mut log = Vec::with_capacity(n_inst as usize);
                     for _ in 0..n_inst {
                         log.push(GenericRecord::read(&mut r, &hdr)?);
@@ -743,18 +830,33 @@ impl RawFileReader {
         Ok(infos)
     }
 
+    /// Look up the [`ScanIndexEntry`] for a 1-based scan number, bounds- and
+    /// underflow-checked.
+    ///
+    /// `scan_number` is caller-provided (and, via the public API, ultimately
+    /// file/user controlled) and `first_scan_number` is itself an untrusted
+    /// value read from the file, so a plain `scan_number - first_scan_number`
+    /// subtraction can underflow when `scan_number` is smaller - not just an
+    /// "index too large" situation. Both cases are simply out of range.
+    fn scan_index_entry(&self, scan_number: u32) -> Result<&ScanIndexEntry> {
+        let idx = scan_number_to_index(scan_number, self.run_header.sample_info.first_scan_number)
+            .ok_or(Error::AddressOutOfRange(scan_number as u64))?;
+        self.scan_index
+            .get(idx)
+            .ok_or(Error::AddressOutOfRange(scan_number as u64))
+    }
+
     /// Read a single scan data packet (PacketHeader format).
     pub fn read_scan<R: Read + Seek>(
         &self,
         source: &mut R,
         scan_number: u32,
     ) -> Result<ScanDataPacket> {
-        let idx = (scan_number - self.run_header.sample_info.first_scan_number) as usize;
-        if idx >= self.scan_index.len() {
-            return Err(Error::AddressOutOfRange(scan_number as u64));
-        }
-        let entry = &self.scan_index[idx];
-        let abs_offset = self.data_addr + entry.offset;
+        let entry = self.scan_index_entry(scan_number)?;
+        // Both are untrusted u64 values read from the file (a
+        // RawFileInfo address and a ScanIndexEntry offset); saturate
+        // instead of panicking on overflow for a corrupt combination.
+        let abs_offset = self.data_addr.saturating_add(entry.offset);
         source.seek(SeekFrom::Start(abs_offset))?;
         let mut r = BinaryReader::new(source);
         ScanDataPacket::read(&mut r)
@@ -776,12 +878,11 @@ impl RawFileReader {
                 "centroid_labels / read_scan_labels requires a PacketHeader file (Orbitrap/ion-trap); TSQ/SRM files carry no FT label data",
             ));
         }
-        let idx = (scan_number - self.run_header.sample_info.first_scan_number) as usize;
-        if idx >= self.scan_index.len() {
-            return Err(Error::AddressOutOfRange(scan_number as u64));
-        }
-        let entry = &self.scan_index[idx];
-        let abs_offset = self.data_addr + entry.offset;
+        let entry = self.scan_index_entry(scan_number)?;
+        // Both are untrusted u64 values read from the file (a
+        // RawFileInfo address and a ScanIndexEntry offset); saturate
+        // instead of panicking on overflow for a corrupt combination.
+        let abs_offset = self.data_addr.saturating_add(entry.offset);
         source.seek(SeekFrom::Start(abs_offset))?;
         let mut r = BinaryReader::new(source);
         ScanDataPacket::read_skip_profile(&mut r)
@@ -796,11 +897,7 @@ impl RawFileReader {
         source: &mut R,
         scan_number: u32,
     ) -> Result<Vec<Peak>> {
-        let idx = (scan_number - self.run_header.sample_info.first_scan_number) as usize;
-        if idx >= self.scan_index.len() {
-            return Err(Error::AddressOutOfRange(scan_number as u64));
-        }
-        let entry = &self.scan_index[idx];
+        let entry = self.scan_index_entry(scan_number)?;
         read_flat_peaks(source, self.data_addr, entry.offset, entry.data_size)
     }
 
@@ -814,11 +911,7 @@ impl RawFileReader {
         source: &mut R,
         scan_number: u32,
     ) -> Result<Vec<Peak>> {
-        let idx = (scan_number - self.run_header.sample_info.first_scan_number) as usize;
-        if idx >= self.scan_index.len() {
-            return Err(Error::AddressOutOfRange(scan_number as u64));
-        }
-        let entry = &self.scan_index[idx];
+        let entry = self.scan_index_entry(scan_number)?;
         read_scan_srm_v66(source, self.data_addr, entry.offset, entry.data_size)
     }
 
@@ -865,12 +958,11 @@ impl RawFileReader {
         use crate::scan_format::ScanDataFormat;
         match self.scan_format {
             ScanDataFormat::PacketHeader => {
-                let idx = (scan_number - self.run_header.sample_info.first_scan_number) as usize;
-                if idx >= self.scan_index.len() {
-                    return Err(Error::AddressOutOfRange(scan_number as u64));
-                }
-                let entry = &self.scan_index[idx];
-                let abs_offset = self.data_addr + entry.offset;
+                let entry = self.scan_index_entry(scan_number)?;
+                // Both are untrusted u64 values read from the file (a
+                // RawFileInfo address and a ScanIndexEntry offset); saturate
+                // instead of panicking on overflow for a corrupt combination.
+                let abs_offset = self.data_addr.saturating_add(entry.offset);
                 source.seek(SeekFrom::Start(abs_offset))?;
                 let mut r = BinaryReader::new(source);
                 ScanDataPacket::read_peaks_only(&mut r)
@@ -1592,5 +1684,157 @@ impl<'a> StatusLogEntry<'a> {
     /// Get a string field by name.
     pub fn get_string(&self, label: &str) -> Option<&str> {
         self.0.get_string(label)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    // Regression tests for a fuzzer-found crash: with `first_scan = 0` and
+    // `last_scan = u32::MAX`, the old `last_scan - first_scan + 1`
+    // computation overflowed u32 and panicked under debug assertions.
+    #[test]
+    fn compute_num_scans_normal_range() {
+        assert_eq!(compute_num_scans(1, 5), 5);
+        assert_eq!(compute_num_scans(1, 1), 1);
+    }
+
+    #[test]
+    fn compute_num_scans_last_before_first_is_zero() {
+        assert_eq!(compute_num_scans(10, 3), 0);
+    }
+
+    #[test]
+    fn compute_num_scans_saturates_instead_of_overflowing() {
+        assert_eq!(compute_num_scans(0, u32::MAX), u32::MAX);
+        assert_eq!(compute_num_scans(u32::MAX, u32::MAX), 1);
+    }
+
+    // Regression test for a second fuzzer-found crash: `data_addr +
+    // entry.offset` (both untrusted u64 values) overflowed and panicked for
+    // a crafted combination near u64::MAX.
+    #[test]
+    fn saturating_add_of_addr_and_offset_does_not_panic() {
+        let data_addr = u64::MAX - 5;
+        let offset = 100u64;
+        assert_eq!(data_addr.saturating_add(offset), u64::MAX);
+    }
+
+    // Regression test for a third fuzzer-found crash: `read_scan` /
+    // `read_scan_flat` / `read_scan_srm_v66` / `read_peaks_only` computed
+    // `scan_number - first_scan_number` directly, which underflowed (and
+    // panicked under debug assertions) whenever a requested `scan_number`
+    // fell below the file's declared `first_scan_number` - reachable simply
+    // by asking for an out-of-range scan on a file with a large
+    // `first_scan_number`.
+    #[test]
+    fn scan_number_to_index_normal_case() {
+        assert_eq!(scan_number_to_index(5, 1), Some(4));
+        assert_eq!(scan_number_to_index(1, 1), Some(0));
+    }
+
+    #[test]
+    fn scan_number_to_index_below_first_scan_is_none_not_a_panic() {
+        assert_eq!(scan_number_to_index(0, 5), None);
+        assert_eq!(scan_number_to_index(0, u32::MAX), None);
+    }
+
+    #[test]
+    fn read_bytes_returns_requested_slice() {
+        let mut r = BinaryReader::new(Cursor::new(vec![1, 2, 3, 4, 5]));
+        assert_eq!(r.read_bytes(3).unwrap(), vec![1, 2, 3]);
+        assert_eq!(r.read_bytes(2).unwrap(), vec![4, 5]);
+    }
+
+    #[test]
+    fn read_bytes_past_end_is_eof_not_a_huge_allocation() {
+        let mut r = BinaryReader::new(Cursor::new(vec![1u8, 2, 3]));
+        let err = r.read_bytes(10).unwrap_err();
+        assert!(matches!(err, Error::AllocationTooLarge { .. }));
+    }
+
+    #[test]
+    fn read_bytes_rejects_implausible_declared_length() {
+        // A corrupt/crafted file declaring an enormous length must be
+        // rejected before any allocation is attempted, not after.
+        let mut r = BinaryReader::new(Cursor::new(vec![0u8; 16]));
+        let err = r.read_bytes(1_usize << 40).unwrap_err();
+        match err {
+            Error::AllocationTooLarge {
+                requested,
+                available,
+                ..
+            } => {
+                assert_eq!(requested, 1u64 << 40);
+                assert_eq!(available, 16);
+            }
+            other => panic!("expected AllocationTooLarge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn check_count_allows_exact_fit() {
+        let mut r = BinaryReader::new(Cursor::new(vec![0u8; 16]));
+        assert!(r.check_count(2, 8).is_ok());
+    }
+
+    #[test]
+    fn check_count_rejects_when_short_by_one_byte() {
+        let mut r = BinaryReader::new(Cursor::new(vec![0u8; 15]));
+        assert!(r.check_count(2, 8).is_err());
+    }
+
+    #[test]
+    fn check_count_accounts_for_current_position() {
+        let mut r = BinaryReader::new(Cursor::new(vec![0u8; 16]));
+        r.skip(10).unwrap();
+        // Only 6 bytes remain; asking for 1 item of 8 bytes must fail.
+        assert!(r.check_count(1, 8).is_err());
+        assert!(r.check_count(1, 6).is_ok());
+    }
+
+    #[test]
+    fn check_count_saturates_instead_of_overflowing() {
+        let mut r = BinaryReader::new(Cursor::new(vec![0u8; 4]));
+        // count * min_item_bytes would overflow a u64 multiply; this must
+        // not panic and must still be reported as too large.
+        assert!(r.check_count(u64::MAX, u64::MAX).is_err());
+    }
+
+    #[test]
+    fn length_is_cached_across_calls() {
+        let mut r = BinaryReader::new(Cursor::new(vec![0u8; 100]));
+        assert_eq!(r.length().unwrap(), 100);
+        r.skip(50).unwrap();
+        // Still reports the whole-stream length, not affected by position.
+        assert_eq!(r.length().unwrap(), 100);
+    }
+
+    #[test]
+    fn pascal_string_with_implausible_char_count_is_rejected_before_allocating() {
+        let mut bytes = u32::MAX.to_le_bytes().to_vec(); // char_count
+        bytes.extend_from_slice(&[0u8; 8]); // far short of the declared length
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert!(r.read_pascal_string().is_err());
+    }
+
+    #[test]
+    fn utf16_fixed_strips_null_padding() {
+        let mut bytes = Vec::new();
+        for u in "hi".encode_utf16() {
+            bytes.extend_from_slice(&u.to_le_bytes());
+        }
+        bytes.extend_from_slice(&[0, 0, 0, 0]); // null padding
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(r.read_utf16_fixed(8).unwrap(), "hi");
+    }
+
+    #[test]
+    fn windows_filetime_zero_is_zero() {
+        let bytes = 0u64.to_le_bytes().to_vec();
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(r.read_windows_filetime().unwrap(), 0.0);
     }
 }

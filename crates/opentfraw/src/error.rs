@@ -28,6 +28,16 @@ pub enum Error {
 
     #[error("operation not supported for this scan-data format: {0}")]
     UnsupportedOperation(&'static str),
+
+    #[error(
+        "refusing to allocate for {requested} bytes at offset {offset:#x}: \
+         only {available} bytes remain in the input"
+    )]
+    AllocationTooLarge {
+        offset: u64,
+        requested: u64,
+        available: u64,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
