@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+
+- `docs/guide/reader.md`'s field table had drifted behind `RawFileReader`
+  (listed 5 of 21 public fields). Regenerated the table from the struct,
+  documented `controllers()`/`ControllerInfo`, and added a table for the
+  scan-read methods (`read_scan`, `read_scan_labels`, `read_peaks_only`,
+  `read_scan_flat`, `read_scan_srm_v66`) alongside `read_scan_peaks`. (#22)
+
 ### Fixed
 
 - `to_msc_record` now populates `SpectrumRecord.faims_cv` from this
