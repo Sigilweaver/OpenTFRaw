@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "opentfraw"
-version = "1.3.4"
+version = "1.3.5"
 dependencies = [
  "openmassspec-core",
  "thiserror",
@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "opentfraw-py"
-version = "1.3.4"
+version = "1.3.5"
 dependencies = [
  "numpy",
  "opentfraw",
