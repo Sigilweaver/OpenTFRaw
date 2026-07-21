@@ -33,6 +33,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `OpenTfRawSource::iter_chromatograms` (Sigilweaver/OpenTFRaw#39): wires the
+  already-decoded per-scan chromatogram fields into
+  `openmassspec_core::ChromatogramRecord`s so TIC, BPC, and SRM traces reach
+  mzML output via the shared `<chromatogramList>` writer. Emits a total ion
+  current chromatogram (`MS:1000235`) and a base-peak chromatogram
+  (`MS:1000628`) from the scan index's `total_current` / `base_intensity`
+  fields, and, for flat-peak SRM files (v63/v66), one selected reaction
+  monitoring chromatogram (`MS:1000627`) per transition, grouping scans by
+  `scan_event` with `precursor_mz` from the Q1 map and `product_mz` filled in
+  only when a single Q3 window resolves unambiguously. No new binary parsing
+  is involved. SRM chromatogram ids are disambiguated with the `scan_event`
+  when two transitions share the same Q1/Q3 (e.g. a scheduled method
+  re-monitoring the same pair across separate retention-time windows), since
+  the indexed mzML writer keys its offset index by id. (contributed by
+  @Nabejo)
 - Unit tests for the pure-decode functions in `bytes.rs`, `header.rs`,
   `audit_tag.rs`, `generic_data.rs`, and `error_log.rs`, using hand-built
   byte fixtures (valid, truncated, and out-of-range cases). Also added
