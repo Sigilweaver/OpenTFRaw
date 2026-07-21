@@ -41,7 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   monitoring chromatogram (`MS:1000627`) per transition, grouping scans by
   `scan_event` with `precursor_mz` from the Q1 map and `product_mz` filled in
   only when a single Q3 window resolves unambiguously. No new binary parsing
-  is involved. (contributed by @Nabejo)
+  is involved. SRM chromatogram ids are disambiguated with the `scan_event`
+  when two transitions share the same Q1/Q3 (e.g. a scheduled method
+  re-monitoring the same pair across separate retention-time windows), since
+  the indexed mzML writer keys its offset index by id. (contributed by
+  @Nabejo)
 - Unit tests for the pure-decode functions in `bytes.rs`, `header.rs`,
   `audit_tag.rs`, `generic_data.rs`, and `error_log.rs`, using hand-built
   byte fixtures (valid, truncated, and out-of-range cases). Also added

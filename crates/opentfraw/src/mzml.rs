@@ -552,6 +552,16 @@ fn bpc_record(bpc: &[(f64, f64, f64)]) -> Option<msc::ChromatogramRecord> {
 /// exactly one Q3 window resolves unambiguously, and left unset otherwise
 /// rather than guessed. Events are visited in sorted order for deterministic
 /// output.
+///
+/// Two transitions can legitimately share the same Q1/Q3 (e.g. a scheduled
+/// method re-monitoring the same pair across separate retention-time
+/// windows, each its own `scan_event`), which would otherwise collide on the
+/// same `Q1={..} Q3={..}` id - `mzML`'s chromatogram `id` is a plain
+/// `xsd:string`, not `xsd:ID`, so nothing upstream would catch a duplicate,
+/// but the indexed-mzML writer keys its offset index by `id`
+/// (`openmassspec_core::mzml::write_indexed_mzml`), so a collision there
+/// would make one of the two transitions unreachable by id-based lookup.
+/// Disambiguate any repeat by appending its `scan_event`.
 fn srm_chromatograms(
     scans: &[(u16, f64, f64)],
     q1_by_event: &std::collections::HashMap<u16, f64>,
@@ -567,6 +577,7 @@ fn srm_chromatograms(
     }
 
     let mut out = Vec::new();
+    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (event, points) in points_by_event {
         let Some(&q1) = q1_by_event.get(&event) else {
             continue;
@@ -578,9 +589,14 @@ fn srm_chromatograms(
             }
             _ => None,
         };
-        let id = match product_mz {
+        let base_id = match product_mz {
             Some(q3) => format!("SRM Q1={q1:.4} Q3={q3:.4}"),
             None => format!("SRM Q1={q1:.4}"),
+        };
+        let id = if seen_ids.insert(base_id.clone()) {
+            base_id
+        } else {
+            format!("{base_id} event={event}")
         };
         out.push(msc::ChromatogramRecord {
             index: 0,
@@ -842,5 +858,30 @@ mod tests {
             "ambiguous multi-window Q3 must not be guessed"
         );
         assert_eq!(recs[0].id, "SRM Q1=600.0000");
+    }
+
+    #[test]
+    fn srm_disambiguates_ids_when_two_events_share_the_same_q1_and_q3() {
+        // Scheduled method re-monitoring the same transition in two separate
+        // time windows: same Q1/Q3, different scan_event.
+        let scans = [(1u16, 0.0f64, 10.0f64), (2u16, 5.0, 15.0)];
+        let mut q1 = HashMap::new();
+        q1.insert(1u16, 500.0);
+        q1.insert(2u16, 500.0);
+        let mut q3 = HashMap::new();
+        q3.insert(1u16, vec![(100.0f32, 101.0f32)]);
+        q3.insert(2u16, vec![(100.0f32, 101.0f32)]);
+
+        let recs = srm_chromatograms(&scans, &q1, &q3);
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[0].id, "SRM Q1=500.0000 Q3=100.5000");
+        assert_eq!(
+            recs[1].id, "SRM Q1=500.0000 Q3=100.5000 event=2",
+            "second event with an identical Q1/Q3 must get a disambiguated id"
+        );
+        assert_ne!(
+            recs[0].id, recs[1].id,
+            "ids feed the indexed-mzML offset index and must stay unique"
+        );
     }
 }
