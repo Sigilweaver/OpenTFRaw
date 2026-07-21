@@ -4,6 +4,13 @@ Thank you to everyone who has contributed to OpenTFRaw.
 
 ## Benjamin Riley ([@Nabejo](https://github.com/Nabejo))
 
+Contributed in [Unreleased]:
+
+- **`OpenTfRawSource::iter_chromatograms`** - wired the already-decoded
+  per-scan TIC / base-peak fields (and, for flat-peak SRM files, the Q1/Q3
+  transition maps) into `openmassspec_core::ChromatogramRecord`s so TIC, BPC,
+  and SRM chromatograms reach mzML output. (Sigilweaver/OpenTFRaw#39)
+
 Contributed in v1.3.0:
 
 - **`RawFile.sample_info`** - exposed the sample-sheet / sequence-row
