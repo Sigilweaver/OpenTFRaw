@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RunMetadata::analyzers`/`instrument_serial_number` fields (defaulted,
   as none of the three are decoded here - Thermo instruments in this
   suite don't carry ion mobility).
+- Declared `openmassspec-core` minimum was still `"1.2.0"`; now that the
+  code needs 1.3.0's new fields to compile, bumped the declared minimum
+  to `"1.3.0"` to match.
 
 ## [1.3.5] - 2026-07-20
 
