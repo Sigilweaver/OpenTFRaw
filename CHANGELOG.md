@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.6] - 2026-07-25
+
+### Fixed
+
+- Adapted to `openmassspec-core` 1.3.0's new `PrecursorInfo::ccs` and
+  `RunMetadata::analyzers`/`instrument_serial_number` fields (defaulted,
+  as none of the three are decoded here - Thermo instruments in this
+  suite don't carry ion mobility).
+
 ## [1.3.5] - 2026-07-20
 
 ### Security
