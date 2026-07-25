@@ -462,6 +462,7 @@ fn to_msc_record(rec: SpectrumRecord) -> msc::SpectrumRecord {
         precursor_native_id: p.master_scan_number.map(native_id_for),
         activation: convert_activation(p.activation),
         analyzer: convert_analyzer(p.analyzer),
+        ccs: None,
     });
     msc::SpectrumRecord {
         index: rec.index,
@@ -677,10 +678,12 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
             source_file_format: source_file_format_cv(),
             native_id_format: native_id_format_cv(),
             instrument: instrument_cv(self.raw),
+            instrument_serial_number: None,
             software_name: SOFTWARE_NAME.into(),
             software_version: SOFTWARE_VERSION.into(),
             start_timestamp: start_timestamp(self.raw),
             mobility_array_kind: None,
+            analyzers: Vec::new(),
         }
     }
 
