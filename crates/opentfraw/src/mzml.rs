@@ -681,6 +681,8 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
             instrument_serial_number: None,
             software_name: SOFTWARE_NAME.into(),
             software_version: SOFTWARE_VERSION.into(),
+            acquisition_software_name: None,
+            acquisition_software_version: None,
             start_timestamp: start_timestamp(self.raw),
             mobility_array_kind: None,
             analyzers: Vec::new(),

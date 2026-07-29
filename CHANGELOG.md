@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Adapted to `openmassspec-core` 1.4.0's new `RunMetadata::acquisition_software_name`/
+  `acquisition_software_version` fields (defaulted to `None` - this reader
+  doesn't currently parse an Xcalibur software version string out of the
+  RAW file's instrument method metadata). Bumped the declared
+  `openmassspec-core` minimum to `"1.4.0"` to match. (#47)
+
 ## [1.3.6] - 2026-07-25
 
 ### Fixed
