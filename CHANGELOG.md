@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Surfaced per-scan DIA and wideband flags in structured spectrum records and
+  Python `scan()`/`iter_scans()` dictionaries. (#41)
+- Added label headings and a heading-to-value mapping to Python `sample_info`,
+  while retaining the existing ordered `user_labels` list. (#42)
+- Added the Python `RawFile.ended` acquisition-end timestamp property. (#43)
+
 ## [1.3.7] - 2026-07-29
 
 ### Fixed
