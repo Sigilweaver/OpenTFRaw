@@ -473,6 +473,8 @@ fn to_msc_record(rec: SpectrumRecord) -> msc::SpectrumRecord {
         ccs: None,
     });
     msc::SpectrumRecord {
+        extra: ::std::collections::BTreeMap::new(),
+        acquisition_event_id: None,
         index: rec.index,
         scan_number: rec.scan_number,
         native_id: native_id_for(rec.scan_number),
@@ -682,6 +684,7 @@ impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
 impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
     fn run_metadata(&self) -> msc::RunMetadata {
         msc::RunMetadata {
+            extra: ::std::collections::BTreeMap::new(),
             source_file_name: self.raw_filename.to_string(),
             source_file_format: source_file_format_cv(),
             native_id_format: native_id_format_cv(),
