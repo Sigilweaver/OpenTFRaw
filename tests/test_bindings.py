@@ -61,6 +61,10 @@ def test_created(raw_file):
     assert raw_file.created is None or isinstance(raw_file.created, float)
 
 
+def test_ended(raw_file):
+    assert raw_file.ended is None or isinstance(raw_file.ended, float)
+
+
 def test_acquisition_date(raw_file):
     assert raw_file.acquisition_date is None or isinstance(
         raw_file.acquisition_date, float
@@ -80,6 +84,8 @@ def test_sample_info(raw_file):
         "istd_amount",
         "dilution_factor",
         "user_labels",
+        "label_headings",
+        "user_labels_by_heading",
         "inst_method",
         "proc_method",
         "file_name",
@@ -88,6 +94,12 @@ def test_sample_info(raw_file):
     assert expected_keys <= info.keys()
     assert isinstance(info["user_labels"], list)
     assert all(isinstance(x, str) for x in info["user_labels"])
+    assert isinstance(info["label_headings"], list)
+    assert len(info["label_headings"]) == len(info["user_labels"]) == 5
+    assert all(isinstance(x, str) for x in info["label_headings"])
+    assert info["user_labels_by_heading"] == dict(
+        zip(info["label_headings"], info["user_labels"])
+    )
 
 
 def test_computer_name(raw_file):
@@ -182,6 +194,8 @@ def test_scan(raw_file):
     expected_keys = {
         "scan_number",
         "ms_level",
+        "is_dia",
+        "is_wideband",
         "polarity",
         "retention_time",
         "filter_string",
@@ -201,6 +215,8 @@ def test_scan(raw_file):
     assert expected_keys <= scan.keys()
     assert scan["scan_number"] == raw_file.first_scan
     assert scan["ms_level"] >= 1
+    assert isinstance(scan["is_dia"], bool)
+    assert isinstance(scan["is_wideband"], bool)
     assert scan["polarity"] in ("+", "-", "")
     assert isinstance(scan["mz"], np.ndarray)
     assert isinstance(scan["intensity"], np.ndarray)

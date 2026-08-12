@@ -68,6 +68,9 @@ fn generic_value_to_py(py: Python<'_>, value: &GenericValue) -> PyResult<Py<PyAn
 /// created : float | None
 ///     File creation (acquisition start) time as a Unix timestamp in seconds,
 ///     or `None` if absent. See the getter for the timezone caveat.
+/// ended : float | None
+///     Acquisition end time as a Unix timestamp in seconds, or `None` if
+///     absent. It has the same timezone caveat as ``created``.
 /// sample_info : dict
 ///     Sample-sheet / sequence-row metadata for this acquisition. See the
 ///     getter for the full set of keys.
@@ -174,6 +177,21 @@ impl RawFile {
         }
     }
 
+    /// Acquisition end time as a Unix timestamp, in seconds, or `None` if the
+    /// file carries no end audit timestamp.
+    ///
+    /// Like :attr:`created`, this is an instrument-local wall-clock value with
+    /// no recorded timezone, represented as though it were UTC.
+    #[getter]
+    fn ended(&self) -> Option<f64> {
+        let t = self.reader.header.audit_end.time;
+        if t == 0.0 {
+            None
+        } else {
+            Some(t)
+        }
+    }
+
     /// Sample-sheet / sequence-row metadata for this acquisition, as a dict.
     ///
     /// Keys
@@ -186,7 +204,9 @@ impl RawFile {
     /// sample_volume : float
     /// istd_amount : float
     /// dilution_factor : float
-    /// user_labels : list[str]  (the 5 user-defined label fields)
+    /// user_labels : list[str]  (the 5 user-defined label values)
+    /// label_headings : list[str]  (the corresponding 5 headings)
+    /// user_labels_by_heading : dict[str, str]  (headings paired with values)
     /// inst_method : str  (instrument method file name)
     /// proc_method : str  (processing method file name)
     /// file_name : str  (original file name at acquisition time)
@@ -207,6 +227,13 @@ impl RawFile {
         d.set_item("istd_amount", seq_row.injection.istd_amount)?;
         d.set_item("dilution_factor", seq_row.injection.dilution_factor)?;
         d.set_item("user_labels", &seq_row.user_labels)?;
+        let label_headings = &self.reader.raw_file_info.label_headings;
+        d.set_item("label_headings", label_headings)?;
+        let labels_by_heading = PyDict::new(py);
+        for (heading, value) in label_headings.iter().zip(&seq_row.user_labels) {
+            labels_by_heading.set_item(heading, value)?;
+        }
+        d.set_item("user_labels_by_heading", labels_by_heading)?;
         d.set_item("inst_method", &seq_row.inst_method)?;
         d.set_item("proc_method", &seq_row.proc_method)?;
         d.set_item("file_name", &seq_row.file_name)?;
@@ -479,6 +506,8 @@ impl RawFile {
     /// ----
     /// scan_number : int
     /// ms_level : int
+    /// is_dia : bool
+    /// is_wideband : bool
     /// polarity : str  ("+" or "-")
     /// retention_time : float  (minutes)
     /// filter_string : str | None
@@ -532,6 +561,11 @@ impl RawFile {
         let d = PyDict::new(py);
         d.set_item("scan_number", scan_number)?;
         d.set_item("ms_level", ms_level)?;
+        d.set_item("is_dia", event.is_some_and(|e| e.preamble.is_dia()))?;
+        d.set_item(
+            "is_wideband",
+            event.is_some_and(|e| e.preamble.is_wideband()),
+        )?;
         d.set_item("polarity", polarity)?;
         d.set_item("retention_time", entry.start_time)?;
         d.set_item("filter_string", self.reader.scan_filter(scan_number))?;
