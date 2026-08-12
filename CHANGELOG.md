@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- DIA isolation-window center m/z on Orbitrap Exploris 480 and Fusion Lumos
+  DIA files was already recovered as of the Exploris scan-event fix
+  (`fix(scan-event): decode Exploris coefficients + MS2 precursor`), but this
+  was undocumented and untested: that fix's `body[4..12]` fallback fires for
+  any MS2+/non-primary event, DDA or DIA alike, and the tribrid reaction-record
+  path already carried DIA isolation centers the same way it carries DDA
+  precursors. Added regression tests against the PXD035500 (Exploris 480) and
+  PXD031322 (Fusion Lumos) DIA corpus files, validated by cross-checking the
+  reaction record's width field against the independently-decoded trailer
+  `MS2 Isolation Width:` value (a self-consistency check, no vendor tools),
+  and updated `CORPUS.md` to close out the "Open Issues" entry that had gone
+  stale. (#44)
+
 ## [1.3.7] - 2026-07-29
 
 ### Fixed
