@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `scan_filter::acquisition_mode` and `scan_filter::is_wideband`: classify
+  an MS2+ scan event as DDA or DIA, and expose the wideband-isolation flag,
+  using the already-decoded `ScanEventPreamble::is_dia`/`is_wideband`.
+  `SpectrumRecord.is_dia`/`is_wideband` (`mzml.rs`, `extract_spectrum`) carry
+  the same classification for consumers of the Rust API. Not yet mapped into
+  `to_msc_record`'s `msc::SpectrumRecord`/`msc::PrecursorInfo` output, since
+  `openmassspec-core` has no field for it yet (cross-repo dependency, same
+  situation `faims_cv` was in before #27). The canonical Thermo filter
+  string (`build_filter`) is unchanged - Thermo's filter grammar has no
+  separate DIA/DDA token, so this is exposed as a classification helper
+  instead of new filter-string syntax. (#41)
+
 ## [1.3.7] - 2026-07-29
 
 ### Fixed

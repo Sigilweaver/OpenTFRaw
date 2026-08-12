@@ -39,6 +39,58 @@ pub fn activation_str(analyzer: Option<Analyzer>, act: Activation) -> &'static s
     }
 }
 
+/// Data acquisition strategy for an MS2+ scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcquisitionMode {
+    /// Data-dependent acquisition: the scan targets a specific precursor
+    /// selected by the instrument (typically the most abundant ion(s) in a
+    /// preceding MS1 scan).
+    Dda,
+    /// Data-independent acquisition: the scan sweeps a (often wide)
+    /// isolation window with no specific precursor target, fragmenting
+    /// everything that falls inside it.
+    Dia,
+}
+
+/// Classify an MS2+ scan event as [`AcquisitionMode::Dda`] or
+/// [`AcquisitionMode::Dia`]. Returns `None` for MS1 (or otherwise
+/// non-MS2+) scans, where the distinction doesn't apply.
+///
+/// This does not change [`build_filter`]'s output: Thermo's own filter
+/// string grammar has no separate DIA/DDA token (a DIA scan's filter string
+/// is structurally identical to a DDA one - the "d" dependent-scan token is
+/// simply absent, which `build_filter` already renders correctly via
+/// [`crate::scan_event::ScanEventPreamble::is_dependent`]). This helper is
+/// for callers that want to filter or classify scans by acquisition
+/// strategy directly, without re-deriving it from the raw preamble bytes.
+pub fn acquisition_mode(event: &ScanEvent) -> Option<AcquisitionMode> {
+    let p = &event.preamble;
+    let is_ms2_plus = !matches!(
+        p.ms_power(),
+        None | Some(MsPower::Undefined) | Some(MsPower::Ms1)
+    );
+    if !is_ms2_plus {
+        return None;
+    }
+    Some(if p.is_dia() {
+        AcquisitionMode::Dia
+    } else {
+        AcquisitionMode::Dda
+    })
+}
+
+/// Whether wideband (broadband) isolation is active for this scan.
+///
+/// This is an isolation-window property orthogonal to [`acquisition_mode`]:
+/// DDA and DIA scans can each independently be wideband or not (e.g.
+/// multi-charge-state co-isolation for HCD/PQD is a DDA-side use of
+/// wideband isolation). Thin wrapper around
+/// [`crate::scan_event::ScanEventPreamble::is_wideband`], kept here so
+/// filter/classification helpers for a scan event live in one place.
+pub fn is_wideband(event: &ScanEvent) -> bool {
+    event.preamble.is_wideband()
+}
+
 /// Build the canonical Thermo scan filter string for a single scan event.
 ///
 /// - `event` - the scan event record (provides analyzer, polarity, activation, etc.)
@@ -421,5 +473,52 @@ mod tests {
             s,
             "FTMS + c NSI d Full ms2 649.1200@etd35.00@hcd28.00 [150.0000-2000.0000]"
         );
+    }
+
+    fn make_event(preamble: ScanEventPreamble) -> ScanEvent {
+        ScanEvent {
+            preamble,
+            reactions: vec![],
+            fraction_collectors: vec![],
+            coefficients: vec![],
+        }
+    }
+
+    #[test]
+    fn acquisition_mode_none_for_ms1() {
+        let ev = make_event(make_preamble(1, 1, 1, 0));
+        assert_eq!(acquisition_mode(&ev), None);
+    }
+
+    #[test]
+    fn acquisition_mode_dda_for_dependent_ms2() {
+        let mut pre = make_preamble(1, 0, 2, 0);
+        pre.bytes[10] = 1; // dependent
+        let ev = make_event(pre);
+        assert_eq!(acquisition_mode(&ev), Some(AcquisitionMode::Dda));
+    }
+
+    #[test]
+    fn acquisition_mode_dia_for_non_dependent_ms2() {
+        // ms_power >= 2 and NOT flagged dependent: DIA (byte 10 left at 0).
+        let ev = make_event(make_preamble(1, 0, 2, 0));
+        assert_eq!(acquisition_mode(&ev), Some(AcquisitionMode::Dia));
+    }
+
+    #[test]
+    fn acquisition_mode_dia_for_higher_ms_levels_too() {
+        // The DDA/DIA distinction applies uniformly to any MS2+ level, not
+        // just ms2 specifically.
+        let ev = make_event(make_preamble(1, 0, 3, 0));
+        assert_eq!(acquisition_mode(&ev), Some(AcquisitionMode::Dia));
+    }
+
+    #[test]
+    fn is_wideband_reflects_preamble_byte_32() {
+        assert!(!is_wideband(&make_event(make_preamble(1, 0, 2, 0))));
+
+        let mut pre = make_preamble(1, 0, 2, 0);
+        pre.bytes[32] = 1;
+        assert!(is_wideband(&make_event(pre)));
     }
 }
