@@ -57,6 +57,10 @@ pub struct SpectrumRecord {
     pub scan_number: u32,
     pub ms_level: u32,
     pub is_ms1: bool,
+    /// Whether this MS2+ scan uses data-independent acquisition.
+    pub is_dia: bool,
+    /// Whether broadband isolation is enabled for this scan.
+    pub is_wideband: bool,
     pub polarity: Option<Polarity>,
     /// Effective scan mode after `include_profile` resolution.
     pub scan_mode: Option<crate::ScanMode>,
@@ -118,6 +122,8 @@ pub fn extract_spectrum<R: Read + Seek>(
     };
     let filter = raw.scan_filter(scan_number);
     let is_ms1 = !is_srm && level == 1;
+    let is_dia = event.is_some_and(|e| e.preamble.is_dia());
+    let is_wideband = event.is_some_and(|e| e.preamble.is_wideband());
     let srm_q1 = if is_srm {
         raw.srm_q1_by_event.get(&entry.scan_event).copied()
     } else {
@@ -208,6 +214,8 @@ pub fn extract_spectrum<R: Read + Seek>(
         scan_number,
         ms_level: level,
         is_ms1,
+        is_dia,
+        is_wideband,
         polarity,
         scan_mode: effective_scan_mode,
         filter,
