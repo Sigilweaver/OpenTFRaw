@@ -10,6 +10,11 @@ Contributed in [Unreleased]:
   per-scan TIC / base-peak fields (and, for flat-peak SRM files, the Q1/Q3
   transition maps) into `openmassspec_core::ChromatogramRecord`s so TIC, BPC,
   and SRM chromatograms reach mzML output. (Sigilweaver/OpenTFRaw#39)
+- **DIA isolation-window center m/z regression coverage** - confirmed that
+  Orbitrap Exploris 480 and Fusion Lumos DIA isolation centers are already
+  recovered via the existing Exploris scan-event fix, and added corpus-backed
+  self-consistency regression tests plus `CORPUS.md` documentation to lock
+  that in. (Sigilweaver/OpenTFRaw#44)
 
 Contributed in v1.3.0:
 
