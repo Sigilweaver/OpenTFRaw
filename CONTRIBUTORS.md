@@ -10,6 +10,12 @@ Contributed in [Unreleased]:
   per-scan TIC / base-peak fields (and, for flat-peak SRM files, the Q1/Q3
   transition maps) into `openmassspec_core::ChromatogramRecord`s so TIC, BPC,
   and SRM chromatograms reach mzML output. (Sigilweaver/OpenTFRaw#39)
+- **DIA/wideband scan-event flags** - wired the already-decoded
+  `ScanEventPreamble::is_dia`/`is_wideband` into a new
+  `scan_filter::acquisition_mode`/`is_wideband` classification API and
+  `SpectrumRecord.is_dia`/`is_wideband`, noting where full wiring into the
+  shared mzML schema conversion is blocked on an upstream
+  `openmassspec-core` field. (Sigilweaver/OpenTFRaw#41)
 
 Contributed in v1.3.0:
 

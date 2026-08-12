@@ -57,6 +57,15 @@ pub struct SpectrumRecord {
     pub scan_number: u32,
     pub ms_level: u32,
     pub is_ms1: bool,
+    /// Whether this MS2+ scan uses data-independent acquisition (a swept
+    /// isolation window, no specific precursor target) rather than
+    /// data-dependent acquisition. `false` for MS1 scans, where the
+    /// distinction doesn't apply. See
+    /// [`crate::scan_filter::acquisition_mode`].
+    pub is_dia: bool,
+    /// Whether wideband (broadband) isolation is active for this scan. See
+    /// [`crate::scan_filter::is_wideband`].
+    pub is_wideband: bool,
     pub polarity: Option<Polarity>,
     /// Effective scan mode after `include_profile` resolution.
     pub scan_mode: Option<crate::ScanMode>,
@@ -118,6 +127,10 @@ pub fn extract_spectrum<R: Read + Seek>(
     };
     let filter = raw.scan_filter(scan_number);
     let is_ms1 = !is_srm && level == 1;
+    let is_dia = event.is_some_and(|e| {
+        crate::scan_filter::acquisition_mode(e) == Some(crate::scan_filter::AcquisitionMode::Dia)
+    });
+    let is_wideband = event.is_some_and(crate::scan_filter::is_wideband);
     let srm_q1 = if is_srm {
         raw.srm_q1_by_event.get(&entry.scan_event).copied()
     } else {
@@ -208,6 +221,8 @@ pub fn extract_spectrum<R: Read + Seek>(
         scan_number,
         ms_level: level,
         is_ms1,
+        is_dia,
+        is_wideband,
         polarity,
         scan_mode: effective_scan_mode,
         filter,
@@ -451,6 +466,14 @@ fn native_id_for(scan_number: u32) -> String {
 }
 
 fn to_msc_record(rec: SpectrumRecord) -> msc::SpectrumRecord {
+    // rec.is_dia / rec.is_wideband have no home in msc::SpectrumRecord or
+    // msc::PrecursorInfo yet (openmassspec-core 1.4.0 has no acquisition-mode
+    // or wideband-isolation field on either struct). They're still useful
+    // within this crate (see SpectrumRecord's own doc comments and
+    // scan_filter::acquisition_mode/is_wideband), but wiring them into the
+    // shared mzML/schema conversion needs a new field added upstream in
+    // OpenMassSpecCore first - same kind of cross-repo dependency as the
+    // faims_cv field originally was (#27), tracked separately.
     let precursor = rec.precursor.map(|p| msc::PrecursorInfo {
         target_mz: p.target_mz,
         selected_mz: p.selected_mz,
@@ -888,5 +911,46 @@ mod tests {
             recs[0].id, recs[1].id,
             "ids feed the indexed-mzML offset index and must stay unique"
         );
+    }
+
+    fn make_spectrum_record(is_dia: bool, is_wideband: bool) -> SpectrumRecord {
+        SpectrumRecord {
+            index: 0,
+            scan_number: 1,
+            ms_level: 2,
+            is_ms1: false,
+            is_dia,
+            is_wideband,
+            polarity: Some(Polarity::Positive),
+            scan_mode: Some(crate::ScanMode::Centroid),
+            filter: Some("FTMS + p NSI Full ms2".to_string()),
+            retention_time_min: 1.0,
+            total_ion_current: 1000.0,
+            base_peak_mz: 500.0,
+            base_peak_intensity: 100.0,
+            low_mz: 200.0,
+            high_mz: 1200.0,
+            ion_injection_time_ms: None,
+            faims_cv: None,
+            precursor: None,
+            mz: vec![500.0],
+            intensity: vec![100.0],
+        }
+    }
+
+    #[test]
+    fn to_msc_record_carries_core_fields_regardless_of_dia_wideband() {
+        // is_dia / is_wideband have no home in msc::SpectrumRecord yet (see
+        // the comment at the top of to_msc_record) - this pins that other
+        // fields still pass through correctly for both a DDA and a DIA/
+        // wideband scan, so a future change can't silently drop data while
+        // wiring these through.
+        for (is_dia, is_wideband) in [(false, false), (true, false), (true, true)] {
+            let rec = make_spectrum_record(is_dia, is_wideband);
+            let msc_rec = to_msc_record(rec);
+            assert_eq!(msc_rec.scan_number, 1);
+            assert_eq!(msc_rec.ms_level, 2);
+            assert_eq!(msc_rec.mz, vec![500.0]);
+        }
     }
 }
