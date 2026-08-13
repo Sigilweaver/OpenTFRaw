@@ -13,6 +13,7 @@ shape, type, and non-emptiness where that's a structural guarantee.
 
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -221,6 +222,30 @@ def test_scan(raw_file):
     assert isinstance(scan["mz"], np.ndarray)
     assert isinstance(scan["intensity"], np.ndarray)
     assert scan["mz"].shape == scan["intensity"].shape
+
+
+def test_precursor_mz_consistent_with_filter(raw_file):
+    """MS2 scans whose filter string carries a precursor also expose it
+    as ``precursor_mz``, and the two roughly agree.
+
+    Both values are derived purely from the file (trailer / scan event),
+    so this is a self-consistency check, not a vendor-value assertion.
+    The trailer value is monoisotopic-corrected while the filter shows
+    the isolation target, so they can differ by isotope spacings (n/z);
+    the tolerance only guards against wiring in an unrelated field.
+    """
+    checked = 0
+    for scan in raw_file.iter_scans():
+        if scan["ms_level"] < 2 or not scan["filter_string"]:
+            continue
+        match = re.search(r"ms2 (\d+\.\d+)@", scan["filter_string"])
+        if match is None:
+            continue
+        assert scan["precursor_mz"] is not None
+        assert scan["precursor_mz"] == pytest.approx(float(match.group(1)), abs=5.0)
+        checked += 1
+    if checked == 0:
+        pytest.skip("fixture file has no MS2 scans with a filter precursor")
 
 
 def test_iter_scans(raw_file):

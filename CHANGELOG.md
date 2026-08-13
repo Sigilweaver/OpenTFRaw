@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Python `scan()`/`iter_scans()` `precursor_mz` now falls back to the scan
+  event's first reaction when the trailer monoisotopic m/z is absent or zero,
+  so MS2 scans whose trailer reports 0 no longer return `None` while their
+  filter string shows the precursor.
+
 ## [1.4.1] - 2026-09-17
 
 ### Fixed
