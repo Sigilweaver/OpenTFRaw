@@ -151,7 +151,7 @@ A contiguous run of non-zero signal values within the profile.
 |--------|------|------|-------|
 | 0x00 | 4 | UInt32 | first_bin | Index of first bin in this chunk |
 | 0x04 | 4 | UInt32 | nbins | Number of bins in this chunk |
-| 0x08 | 4 | Float32 | fudge | Instrument drift / conversion bias factor |
+| 0x08 | 4 | Float32 | fudge | Additive m/z correction for this chunk (see §19.3) |
 | 0x0C | nbins × 4 | Float32[] | signal | Signal intensity values |
 
 ### 19.3 M/z Calculation for a Bin
@@ -163,10 +163,14 @@ frequency = profile.first_value + bin_index_global * profile.step
 mz = convert(frequency)    # See §32
 ```
 
-If a fudge factor is present, it modifies the frequency before conversion:
+If a fudge factor is present, it is an additive m/z correction applied after
+conversion (it is in m/z units, typically on the order of 1e-4 to 1e-3):
 ```
-frequency_adjusted = frequency + chunk.fudge
+mz = convert(frequency) + chunk.fudge
 ```
+
+Applying it in the frequency domain instead shifts Orbitrap profile bins by
+roughly 1e-3 m/z relative to the centroid peak list.
 
 ---
 
