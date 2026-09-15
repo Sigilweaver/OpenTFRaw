@@ -329,12 +329,12 @@ impl Profile {
             for (i, &intensity) in chunk.signal.iter().enumerate() {
                 let bin_global = chunk.first_bin as f64 + i as f64;
                 let freq = self.first_value + bin_global * self.step;
-                let freq_adj = if let Some(fudge) = chunk.fudge {
-                    freq + fudge as f64
-                } else {
-                    freq
-                };
-                let mz = freq_to_mz(freq_adj, coefficients);
+                // The per-chunk fudge is an additive m/z correction applied
+                // after frequency-to-m/z conversion, not a frequency offset.
+                // Applying it in the frequency domain shifts Orbitrap profile
+                // bins by ~1e-3 m/z relative to the centroid list (verified
+                // against centroids across Q Exactive / Exploris / Eclipse).
+                let mz = freq_to_mz(freq, coefficients) + chunk.fudge.unwrap_or(0.0) as f64;
                 result.push((mz, intensity as f64));
             }
         }
@@ -800,5 +800,28 @@ mod tests {
         };
         let result = profile.to_mz_intensity(&[]);
         assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn to_mz_intensity_applies_fudge_in_mz_domain_after_conversion() {
+        // Orbitrap-style 7-coefficient conversion: mz = A + B/f^2 + C/f^4.
+        // With A = 0, C = 0 and B = 1e6, f = 1000 gives mz = 1.0 exactly.
+        let coeffs = [0.0, 0.0, 0.0, 1.0e6, 0.0, 0.0, 0.0];
+        let fudge = 0.25_f32;
+        let profile = Profile {
+            first_value: 1000.0,
+            step: 0.0,
+            peak_count: 1,
+            nbins: 1,
+            chunks: vec![ProfileChunk {
+                first_bin: 0,
+                signal: vec![1.0],
+                fudge: Some(fudge),
+            }],
+        };
+        let (mz, _) = profile.to_mz_intensity(&coeffs)[0];
+        // Correct: 1.0 + 0.25. Frequency-domain application would instead
+        // give 1e6 / 1000.25^2 = 0.99950..., a shift in the wrong direction.
+        assert!((mz - 1.25).abs() < 1e-12, "got {mz}");
     }
 }

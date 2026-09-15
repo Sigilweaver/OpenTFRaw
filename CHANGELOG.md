@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `Profile::to_mz_intensity` applied the per-chunk fudge value as a frequency
+  offset before conversion. It is an additive m/z correction applied after
+  conversion; the old behaviour shifted Orbitrap profile m/z values by roughly
+  1e-3 relative to the centroid peak list. Verified against centroid apexes
+  across Q Exactive, HF-X, Exploris and Eclipse files.
+
 ## [1.4.0] - 2026-08-12
 
 ### Changed
