@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-09-17
+
 ### Fixed
 
 - `Profile::to_mz_intensity` applied the per-chunk fudge value as a frequency
