@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Python `scan()`/`iter_scans()` dictionaries now carry `scan_event`,
+  `scan_segment` and `data_size` (the scan index's event and segment indices
+  and data packet size) and `scan_mode` (`"centroid"` or `"profile"`, from the
+  scan event), all already decoded.
+
 ## [1.4.1] - 2026-09-17
 
 ### Fixed
