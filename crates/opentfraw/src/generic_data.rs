@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::reader::BinaryReader;
 use crate::types::GenericType;
 use std::io::{Cursor, Read, Seek};
@@ -157,7 +157,13 @@ impl GenericDataHeader {
                 let n = crate::bytes::read_u32_le(&buf, offset)?;
                 if (2..=500).contains(&n) {
                     let mut cursor = BinaryReader::new(Cursor::new(&buf[offset..]));
-                    if let Some(hdr) = Self::try_read(&mut cursor)? {
+                    // A candidate that runs past the end of the window is not
+                    // a header: skip it rather than fail the whole search.
+                    let candidate = match Self::try_read(&mut cursor) {
+                        Err(Error::UnexpectedEof { .. } | Error::AllocationTooLarge { .. }) => None,
+                        other => other?,
+                    };
+                    if let Some(hdr) = candidate {
                         let size_ok = match (pass, expected_record_size) {
                             (0, Some(want)) => hdr.fixed_record_size() == want,
                             _ => true,
@@ -425,6 +431,26 @@ mod tests {
         let hdr = GenericDataHeader::find_forward(&mut r, max_scan, None)
             .unwrap()
             .expect("should find the embedded header");
+        assert_eq!(hdr.fields.len(), 2);
+    }
+
+    #[test]
+    fn find_forward_skips_candidate_truncated_at_window_end() {
+        // The real header does not match the expected record size, so the
+        // first pass scans on to the end of the window...
+        let mut bytes = gdh_bytes(&[
+            (GenericType::Float64 as u32, 0, "RT:"),
+            (GenericType::Int32 as u32, 0, "Scan:"),
+        ]);
+        // ...where a plausible field count is cut off mid-descriptor.
+        bytes.extend_from_slice(&64u32.to_le_bytes());
+        bytes.extend_from_slice(&(GenericType::Int32 as u32).to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 5]);
+        let max_scan = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let hdr = GenericDataHeader::find_forward(&mut r, max_scan, Some(999))
+            .unwrap()
+            .expect("the second pass should still find the real header");
         assert_eq!(hdr.fields.len(), 2);
     }
 

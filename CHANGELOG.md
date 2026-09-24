@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Opening a file no longer fails with `unexpected end of file at offset 0x10`
+  when the forward search for the scan-parameters schema meets a candidate
+  that runs past the end of its search window. The candidate is skipped like
+  any other that does not parse. Seen on short single-scan Orbitrap Exploris
+  120 acquisitions: in a file with fewer than five scans no candidate matches
+  the expected record size, so the first pass searches to the end of the
+  window.
+
 ## [1.4.1] - 2026-09-17
 
 ### Fixed
