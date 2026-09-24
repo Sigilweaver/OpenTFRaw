@@ -518,7 +518,9 @@ impl RawFile {
     /// high_mz : float
     /// ion_injection_time_ms : float | None
     /// charge : int | None
-    /// precursor_mz : float | None
+    /// precursor_mz : float | None  (trailer monoisotopic m/z, falling back
+    ///     to the scan event's first reaction when the trailer value is
+    ///     absent or zero)
     /// isolation_width : float | None
     /// collision_energy : float | None
     /// mz : numpy.ndarray[float64]
@@ -590,7 +592,13 @@ impl RawFile {
             params
                 .as_ref()
                 .and_then(|p| p.monoisotopic_mz())
-                .filter(|&v| v > 0.0),
+                .filter(|&v| v > 0.0)
+                .or_else(|| {
+                    event
+                        .and_then(|e| e.reactions.first())
+                        .map(|r| r.precursor_mz)
+                        .filter(|&v| v > 0.0)
+                }),
         )?;
         d.set_item(
             "isolation_width",
