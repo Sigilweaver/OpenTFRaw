@@ -194,10 +194,14 @@ def test_scan(raw_file):
     assert isinstance(scan, dict)
     expected_keys = {
         "scan_number",
+        "scan_event",
+        "scan_segment",
+        "data_size",
         "ms_level",
         "is_dia",
         "is_wideband",
         "polarity",
+        "scan_mode",
         "retention_time",
         "filter_string",
         "total_ion_current",
@@ -219,6 +223,12 @@ def test_scan(raw_file):
     assert isinstance(scan["is_dia"], bool)
     assert isinstance(scan["is_wideband"], bool)
     assert scan["polarity"] in ("+", "-", "")
+    assert scan["scan_mode"] in ("centroid", "profile", None)
+    for key in ("scan_event", "scan_segment"):
+        assert isinstance(scan[key], int)
+        assert 0 <= scan[key] <= 0xFFFF
+    assert isinstance(scan["data_size"], int)
+    assert scan["data_size"] >= 0
     assert isinstance(scan["mz"], np.ndarray)
     assert isinstance(scan["intensity"], np.ndarray)
     assert scan["mz"].shape == scan["intensity"].shape
@@ -246,6 +256,19 @@ def test_precursor_mz_consistent_with_filter(raw_file):
         checked += 1
     if checked == 0:
         pytest.skip("fixture file has no MS2 scans with a filter precursor")
+
+
+def test_scan_mode_consistent_with_filter(raw_file):
+    """``scan_mode`` matches the scan-data token (``c`` / ``p``) of the
+    filter string, which is rendered from the same scan event."""
+    token = {"centroid": "c", "profile": "p"}
+    checked = 0
+    for scan in raw_file.iter_scans():
+        if scan["scan_mode"] is None or not scan["filter_string"]:
+            continue
+        assert scan["filter_string"].split()[2] == token[scan["scan_mode"]]
+        checked += 1
+    assert checked > 0
 
 
 def test_iter_scans(raw_file):

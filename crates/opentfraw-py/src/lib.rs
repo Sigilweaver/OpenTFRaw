@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use ::opentfraw::generic_data::GenericValue;
-use ::opentfraw::{MsPower, Polarity, RawFileReader};
+use ::opentfraw::{MsPower, Polarity, RawFileReader, ScanMode};
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyIOError, PyIndexError, PyValueError};
 use pyo3::prelude::*;
@@ -505,10 +505,14 @@ impl RawFile {
     /// Keys
     /// ----
     /// scan_number : int
+    /// scan_event : int  (scan event index, as stored in the scan index)
+    /// scan_segment : int  (scan segment index, as stored in the scan index)
+    /// data_size : int  (scan data packet size, as stored in the scan index)
     /// ms_level : int
     /// is_dia : bool
     /// is_wideband : bool
     /// polarity : str  ("+" or "-")
+    /// scan_mode : str | None  ("centroid" or "profile")
     /// retention_time : float  (minutes)
     /// filter_string : str | None
     /// total_ion_current : float
@@ -557,11 +561,18 @@ impl RawFile {
             Some(Polarity::Negative) => "-",
             _ => "",
         };
+        let scan_mode = event.and_then(|e| e.preamble.scan_mode()).map(|m| match m {
+            ScanMode::Centroid => "centroid",
+            ScanMode::Profile => "profile",
+        });
 
         let (mz, intensity) = self.peaks(py, scan_number)?;
 
         let d = PyDict::new(py);
         d.set_item("scan_number", scan_number)?;
+        d.set_item("scan_event", entry.scan_event)?;
+        d.set_item("scan_segment", entry.scan_segment)?;
+        d.set_item("data_size", entry.data_size)?;
         d.set_item("ms_level", ms_level)?;
         d.set_item("is_dia", event.is_some_and(|e| e.preamble.is_dia()))?;
         d.set_item(
@@ -569,6 +580,7 @@ impl RawFile {
             event.is_some_and(|e| e.preamble.is_wideband()),
         )?;
         d.set_item("polarity", polarity)?;
+        d.set_item("scan_mode", scan_mode)?;
         d.set_item("retention_time", entry.start_time)?;
         d.set_item("filter_string", self.reader.scan_filter(scan_number))?;
         d.set_item("total_ion_current", entry.total_current)?;
