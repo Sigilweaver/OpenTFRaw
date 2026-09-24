@@ -23,7 +23,7 @@ use ::opentfraw::generic_data::GenericValue;
 use ::opentfraw::mzml::OpenTfRawSource;
 use ::opentfraw::scan_filter::activation_str;
 use ::opentfraw::ExtraFields;
-use ::opentfraw::{scan_metadata, Polarity, RawFileReader, ScanMode};
+use ::opentfraw::{scan_metadata, Polarity, RawFileReader, ScanMetadata, ScanMode};
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyIOError, PyIndexError, PyValueError};
 use pyo3::prelude::*;
@@ -558,63 +558,34 @@ impl RawFile {
         let meta = scan_metadata(&self.reader, idx)
             .ok_or_else(|| PyIndexError::new_err(format!("scan {scan_number} out of range")))?;
 
-        let polarity = match meta.polarity {
-            Some(Polarity::Positive) => "+",
-            Some(Polarity::Negative) => "-",
-            _ => "",
-        };
-        let scan_mode = meta.scan_mode.map(|m| match m {
-            ScanMode::Centroid => "centroid",
-            ScanMode::Profile => "profile",
-        });
-        let precursor = meta.precursor.as_ref();
-
         let (mz, intensity) = self.peaks(py, scan_number)?;
-
-        let d = PyDict::new(py);
-        d.set_item("scan_number", meta.scan_number)?;
-        d.set_item("scan_event", meta.scan_event)?;
-        d.set_item("scan_segment", meta.scan_segment)?;
-        d.set_item("data_size", meta.data_size)?;
-        d.set_item("ms_level", meta.ms_level)?;
-        d.set_item("is_dia", meta.is_dia)?;
-        d.set_item("is_wideband", meta.is_wideband)?;
-        d.set_item("polarity", polarity)?;
-        d.set_item("scan_mode", scan_mode)?;
-        d.set_item("analyzer", meta.analyzer.map(|a| a.as_str()))?;
-        d.set_item("retention_time", meta.retention_time_min)?;
-        d.set_item("filter_string", &meta.filter)?;
-        d.set_item("total_ion_current", meta.total_ion_current)?;
-        d.set_item("base_peak_mz", meta.base_peak_mz)?;
-        d.set_item("base_peak_intensity", meta.base_peak_intensity)?;
-        d.set_item("low_mz", meta.low_mz)?;
-        d.set_item("high_mz", meta.high_mz)?;
-        d.set_item("ion_injection_time_ms", meta.ion_injection_time_ms)?;
-        d.set_item("faims_cv", meta.faims_cv)?;
-        d.set_item("charge", precursor.and_then(|p| p.charge))?;
-        d.set_item("precursor_mz", precursor.and_then(|p| p.selected_mz))?;
-        d.set_item("isolation_target_mz", precursor.and_then(|p| p.target_mz))?;
-        d.set_item("isolation_width", precursor.and_then(|p| p.isolation_width))?;
-        d.set_item(
-            "collision_energy",
-            precursor.and_then(|p| p.collision_energy),
-        )?;
-        d.set_item(
-            "collision_energy_is_nce",
-            precursor.is_some_and(|p| p.ce_is_nce),
-        )?;
-        d.set_item(
-            "activation",
-            precursor.and_then(|p| p.activation.map(|a| activation_str(p.analyzer, a))),
-        )?;
-        d.set_item(
-            "master_scan_number",
-            precursor.and_then(|p| p.master_scan_number),
-        )?;
-        d.set_item("extra", scan_extras(&self.reader, &meta, &ExtraFields::All))?;
+        let d = metadata_dict(py, &self.reader, &meta)?;
         d.set_item("mz", mz)?;
         d.set_item("intensity", intensity)?;
         Ok(d)
+    }
+
+    /// Return the metadata of every scan as columns, without reading any
+    /// peak data.
+    ///
+    /// The result maps each :meth:`scan` key except ``mz`` and ``intensity``
+    /// to a list with one entry per scan, in scan order, so
+    /// ``pandas.DataFrame(raw.scan_table())`` gives one row per scan. It is
+    /// much faster than :meth:`iter_scans` when only metadata is needed.
+    fn scan_table<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let columns = PyDict::new(py);
+        for idx in 0..self.reader.num_scans {
+            let Some(meta) = scan_metadata(&self.reader, idx) else {
+                continue;
+            };
+            for (key, value) in metadata_dict(py, &self.reader, &meta)?.iter() {
+                match columns.get_item(&key)? {
+                    Some(column) => column.cast_into::<PyList>()?.append(value)?,
+                    None => columns.set_item(key, PyList::new(py, [value])?)?,
+                }
+            }
+        }
+        Ok(columns)
     }
 
     /// Iterate all scans. Yields dicts identical in shape to :meth:`scan`.
@@ -725,6 +696,68 @@ impl RawFile {
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
         Ok(())
     }
+}
+
+/// The metadata keys of :meth:`RawFile.scan` for one scan (everything but
+/// the peak arrays).
+fn metadata_dict<'py>(
+    py: Python<'py>,
+    reader: &RawFileReader,
+    meta: &ScanMetadata,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    let polarity = match meta.polarity {
+        Some(Polarity::Positive) => "+",
+        Some(Polarity::Negative) => "-",
+        _ => "",
+    };
+    let scan_mode = meta.scan_mode.map(|m| match m {
+        ScanMode::Centroid => "centroid",
+        ScanMode::Profile => "profile",
+    });
+    let precursor = meta.precursor.as_ref();
+
+    d.set_item("scan_number", meta.scan_number)?;
+    d.set_item("scan_event", meta.scan_event)?;
+    d.set_item("scan_segment", meta.scan_segment)?;
+    d.set_item("data_size", meta.data_size)?;
+    d.set_item("ms_level", meta.ms_level)?;
+    d.set_item("is_dia", meta.is_dia)?;
+    d.set_item("is_wideband", meta.is_wideband)?;
+    d.set_item("polarity", polarity)?;
+    d.set_item("scan_mode", scan_mode)?;
+    d.set_item("analyzer", meta.analyzer.map(|a| a.as_str()))?;
+    d.set_item("retention_time", meta.retention_time_min)?;
+    d.set_item("filter_string", &meta.filter)?;
+    d.set_item("total_ion_current", meta.total_ion_current)?;
+    d.set_item("base_peak_mz", meta.base_peak_mz)?;
+    d.set_item("base_peak_intensity", meta.base_peak_intensity)?;
+    d.set_item("low_mz", meta.low_mz)?;
+    d.set_item("high_mz", meta.high_mz)?;
+    d.set_item("ion_injection_time_ms", meta.ion_injection_time_ms)?;
+    d.set_item("faims_cv", meta.faims_cv)?;
+    d.set_item("charge", precursor.and_then(|p| p.charge))?;
+    d.set_item("precursor_mz", precursor.and_then(|p| p.selected_mz))?;
+    d.set_item("isolation_target_mz", precursor.and_then(|p| p.target_mz))?;
+    d.set_item("isolation_width", precursor.and_then(|p| p.isolation_width))?;
+    d.set_item(
+        "collision_energy",
+        precursor.and_then(|p| p.collision_energy),
+    )?;
+    d.set_item(
+        "collision_energy_is_nce",
+        precursor.is_some_and(|p| p.ce_is_nce),
+    )?;
+    d.set_item(
+        "activation",
+        precursor.and_then(|p| p.activation.map(|a| activation_str(p.analyzer, a))),
+    )?;
+    d.set_item(
+        "master_scan_number",
+        precursor.and_then(|p| p.master_scan_number),
+    )?;
+    d.set_item("extra", scan_extras(reader, meta, &ExtraFields::All))?;
+    Ok(d)
 }
 
 fn check_extra_keys(keys: &[String]) -> PyResult<()> {

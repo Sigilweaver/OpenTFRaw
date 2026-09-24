@@ -409,6 +409,15 @@ def test_iter_scans(raw_file):
         assert "mz" in scan and "intensity" in scan
 
 
+def test_scan_table_matches_iter_scans(raw_file):
+    table = raw_file.scan_table()
+    scans = raw_file.iter_scans()
+    assert set(table) == set(scans[0]) - {"mz", "intensity"}
+    for key, column in table.items():
+        assert len(column) == len(scans)
+        assert column == [scan[key] for scan in scans], key
+
+
 def test_controllers(raw_file):
     controllers = raw_file.controllers()
     assert isinstance(controllers, list)
