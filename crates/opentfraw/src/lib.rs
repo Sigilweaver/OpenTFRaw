@@ -10,6 +10,7 @@ mod test_util;
 pub mod audit_tag;
 pub mod device;
 pub mod error_log;
+pub mod extra;
 pub mod generic_data;
 pub mod header;
 pub mod mzml;
@@ -25,6 +26,7 @@ pub mod seq_row;
 
 pub use device::{DetectedInstrument, DeviceFamily};
 pub use error::{Error, Result};
+pub use extra::ExtraFields;
 pub use mzml::{
     extract_spectrum, iter_spectra, scan_metadata, write_indexed_mzml, write_mzml, PrecursorInfo,
     ScanMetadata, SpectrumRecord,

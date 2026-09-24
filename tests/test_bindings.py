@@ -220,6 +220,7 @@ def test_scan(raw_file):
         "collision_energy_is_nce",
         "activation",
         "master_scan_number",
+        "extra",
         "mz",
         "intensity",
     }
@@ -236,6 +237,8 @@ def test_scan(raw_file):
     assert isinstance(scan["data_size"], int)
     assert scan["data_size"] >= 0
     assert isinstance(scan["collision_energy_is_nce"], bool)
+    assert isinstance(scan["extra"], dict)
+    assert set(scan["extra"]) <= set(opentfraw.extra_field_keys())
     assert isinstance(scan["mz"], np.ndarray)
     assert isinstance(scan["intensity"], np.ndarray)
     assert scan["mz"].shape == scan["intensity"].shape
@@ -329,6 +332,71 @@ def test_scan_precursor_matches_mzml(raw_file, tmp_path):
                 checked += 1
     if checked == 0:
         pytest.skip("fixture file has no MS2 precursors")
+
+
+def _opentfraw_user_params(path):
+    ns = {"m": "http://psi.hupo.org/ms/mzml"}
+    root = ET.parse(path).getroot()
+    return {
+        p.get("name")
+        for p in root.iterfind(".//m:spectrum/m:userParam", ns)
+        if p.get("name").startswith("opentfraw.")
+    }
+
+
+def test_extra_field_keys():
+    keys = opentfraw.extra_field_keys()
+    assert keys
+    assert len(keys) == len(set(keys))
+    assert all(k.startswith("opentfraw.") for k in keys)
+
+
+def test_to_mzml_extra_field_selection(raw_file, tmp_path):
+    carried = set()
+    for scan in raw_file.iter_scans():
+        carried |= set(scan["extra"])
+    assert carried, "fixture scans carry no extra fields"
+    some = sorted(carried)[0]
+
+    out = tmp_path / "all.mzML"
+    raw_file.to_mzml(str(out))
+    assert _opentfraw_user_params(out) == carried
+
+    out = tmp_path / "none.mzML"
+    raw_file.to_mzml(str(out), extra_fields=[])
+    assert _opentfraw_user_params(out) == set()
+
+    out = tmp_path / "only.mzML"
+    raw_file.to_mzml(str(out), extra_fields=[some])
+    assert _opentfraw_user_params(out) == {some}
+
+    out = tmp_path / "except.mzML"
+    raw_file.to_mzml(str(out), exclude_extra_fields=[some])
+    assert _opentfraw_user_params(out) == carried - {some}
+
+
+def test_to_mzml_rejects_bad_extra_field_arguments(raw_file, tmp_path):
+    out = str(tmp_path / "out.mzML")
+    with pytest.raises(ValueError, match="unknown extra field"):
+        raw_file.to_mzml(out, extra_fields=["opentfraw.no_such_field"])
+    with pytest.raises(ValueError, match="not both"):
+        raw_file.to_mzml(out, extra_fields=[], exclude_extra_fields=[])
+
+
+def test_to_mzml_references_scan_analyzers(raw_file, tmp_path):
+    """Each spectrum points at the instrument configuration of its analyzer."""
+    out = tmp_path / "out.mzML"
+    raw_file.to_mzml(str(out))
+    ns = {"m": "http://psi.hupo.org/ms/mzml"}
+    root = ET.parse(out).getroot()
+    configs = {c.get("id") for c in root.iterfind(".//m:instrumentConfiguration", ns)}
+    analyzers = {s["analyzer"] for s in raw_file.iter_scans() if s["analyzer"]}
+    assert len(configs) == 1 + len(analyzers)
+    refs = {
+        scan.get("instrumentConfigurationRef")
+        for scan in root.iterfind(".//m:spectrum//m:scan", ns)
+    }
+    assert refs <= configs
 
 
 def test_iter_scans(raw_file):

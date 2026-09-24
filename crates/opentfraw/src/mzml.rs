@@ -16,6 +16,7 @@
 use std::io::{Read, Seek, Write};
 
 use crate::error::Result;
+use crate::extra::{scan_extras, ExtraFields};
 use crate::scan_event::ScanEvent;
 use crate::types::{Activation, MsPower, Polarity};
 use crate::RawFileReader;
@@ -283,16 +284,8 @@ pub fn extract_spectrum<R: Read + Seek>(
     idx: u32,
     include_profile: bool,
 ) -> Option<SpectrumRecord> {
-    let meta = scan_metadata(raw, idx)?;
-    let event = raw.scan_events.get(idx as usize);
-    let (mz, intensity, effective_scan_mode) = resolve_scan_arrays(
-        raw,
-        source,
-        meta.scan_number,
-        include_profile,
-        event,
-        meta.scan_mode,
-    )?;
+    let (meta, mz, intensity, effective_scan_mode) =
+        extract_parts(raw, source, idx, include_profile)?;
     Some(SpectrumRecord {
         index: meta.index,
         scan_number: meta.scan_number,
@@ -315,6 +308,28 @@ pub fn extract_spectrum<R: Read + Seek>(
         mz,
         intensity,
     })
+}
+
+/// A scan's metadata, its peak arrays and the scan mode those arrays are in.
+type ScanParts = (ScanMetadata, Vec<f64>, Vec<f32>, Option<crate::ScanMode>);
+
+fn extract_parts<R: Read + Seek>(
+    raw: &RawFileReader,
+    source: &mut R,
+    idx: u32,
+    include_profile: bool,
+) -> Option<ScanParts> {
+    let meta = scan_metadata(raw, idx)?;
+    let event = raw.scan_events.get(idx as usize);
+    let (mz, intensity, effective_scan_mode) = resolve_scan_arrays(
+        raw,
+        source,
+        meta.scan_number,
+        include_profile,
+        event,
+        meta.scan_mode,
+    )?;
+    Some((meta, mz, intensity, effective_scan_mode))
 }
 
 /// Iterate every scan in `raw` as a [`SpectrumRecord`].
@@ -542,8 +557,12 @@ fn native_id_for(scan_number: u32) -> String {
     format!("controllerType=0 controllerNumber=1 scan={scan_number}")
 }
 
-fn to_msc_record(rec: SpectrumRecord) -> msc::SpectrumRecord {
-    let precursor = rec.precursor.map(|p| msc::PrecursorInfo {
+fn to_msc_record(
+    parts: ScanParts,
+    extra: ::std::collections::BTreeMap<String, String>,
+) -> msc::SpectrumRecord {
+    let (meta, mz, intensity, scan_mode) = parts;
+    let precursor = meta.precursor.map(|p| msc::PrecursorInfo {
         target_mz: p.target_mz,
         selected_mz: p.selected_mz,
         isolation_width: p.isolation_width,
@@ -557,29 +576,29 @@ fn to_msc_record(rec: SpectrumRecord) -> msc::SpectrumRecord {
         ccs: None,
     });
     msc::SpectrumRecord {
-        extra: ::std::collections::BTreeMap::new(),
-        acquisition_event_id: None,
-        index: rec.index,
-        scan_number: rec.scan_number,
-        native_id: native_id_for(rec.scan_number),
-        ms_level: rec.ms_level,
-        polarity: convert_polarity(rec.polarity),
-        scan_mode: convert_scan_mode(rec.scan_mode),
-        analyzer: None, // Per-spectrum analyzer is rarely useful here; the
-        // precursor's analyzer is what matters for CID/HCD CV resolution.
-        filter: rec.filter,
-        retention_time_sec: rec.retention_time_min * 60.0,
-        total_ion_current: Some(rec.total_ion_current),
-        base_peak_mz: Some(rec.base_peak_mz),
-        base_peak_intensity: Some(rec.base_peak_intensity),
-        low_mz: Some(rec.low_mz),
-        high_mz: Some(rec.high_mz),
-        ion_injection_time_ms: rec.ion_injection_time_ms,
+        extra,
+        // 0xFFFF is a "no event" sentinel some files store.
+        acquisition_event_id: (meta.scan_event != u16::MAX).then_some(u32::from(meta.scan_event)),
+        index: meta.index,
+        scan_number: meta.scan_number,
+        native_id: native_id_for(meta.scan_number),
+        ms_level: meta.ms_level,
+        polarity: convert_polarity(meta.polarity),
+        scan_mode: convert_scan_mode(scan_mode),
+        analyzer: convert_analyzer(meta.analyzer),
+        filter: meta.filter,
+        retention_time_sec: meta.retention_time_min * 60.0,
+        total_ion_current: Some(meta.total_ion_current),
+        base_peak_mz: Some(meta.base_peak_mz),
+        base_peak_intensity: Some(meta.base_peak_intensity),
+        low_mz: Some(meta.low_mz),
+        high_mz: Some(meta.high_mz),
+        ion_injection_time_ms: meta.ion_injection_time_ms,
         inv_mobility: None,
-        faims_cv: rec.faims_cv,
+        faims_cv: meta.faims_cv,
         precursor,
-        mz: rec.mz,
-        intensity: rec.intensity,
+        mz,
+        intensity,
         inv_mobility_per_peak: None,
     }
 }
@@ -747,6 +766,7 @@ pub struct OpenTfRawSource<'a, R: Read + Seek> {
     source: &'a mut R,
     raw_filename: &'a str,
     include_profile: bool,
+    extra_fields: ExtraFields,
 }
 
 impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
@@ -761,8 +781,30 @@ impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
             source,
             raw_filename,
             include_profile,
+            extra_fields: ExtraFields::All,
         }
     }
+
+    /// Choose which `opentfraw.*` values go into each spectrum's `extra`
+    /// map (and so into mzML `<userParam>`s). Defaults to
+    /// [`ExtraFields::All`]; see [`crate::extra::extra_field_keys`] for the keys.
+    pub fn with_extra_fields(mut self, fields: ExtraFields) -> Self {
+        self.extra_fields = fields;
+        self
+    }
+}
+
+/// Distinct analyzers across the file's scan events, in first-seen order.
+fn run_analyzers(raw: &RawFileReader) -> Vec<msc::Analyzer> {
+    let mut out = Vec::new();
+    for event in &raw.scan_events {
+        if let Some(a) = convert_analyzer(event.preamble.analyzer()) {
+            if !out.contains(&a) {
+                out.push(a);
+            }
+        }
+    }
+    out
 }
 
 impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
@@ -780,7 +822,7 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
             acquisition_software_version: None,
             start_timestamp: start_timestamp(self.raw),
             mobility_array_kind: None,
-            analyzers: Vec::new(),
+            analyzers: run_analyzers(self.raw),
         }
     }
 
@@ -789,13 +831,15 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
         let raw = self.raw;
         let source = &mut *self.source;
         let include_profile = self.include_profile;
+        let extra_fields = &self.extra_fields;
         let mut idx: u32 = 0;
         Box::new(std::iter::from_fn(move || {
             while idx < n {
                 let cur = idx;
                 idx += 1;
-                if let Some(rec) = extract_spectrum(raw, source, cur, include_profile) {
-                    return Some(to_msc_record(rec));
+                if let Some(parts) = extract_parts(raw, source, cur, include_profile) {
+                    let extra = scan_extras(raw, &parts.0, extra_fields);
+                    return Some(to_msc_record(parts, extra));
                 }
             }
             None
