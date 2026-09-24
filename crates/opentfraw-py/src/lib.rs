@@ -18,8 +18,11 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use ::opentfraw::extra::{extra_field_keys, scan_extras};
 use ::opentfraw::generic_data::GenericValue;
+use ::opentfraw::mzml::OpenTfRawSource;
 use ::opentfraw::scan_filter::activation_str;
+use ::opentfraw::ExtraFields;
 use ::opentfraw::{scan_metadata, Polarity, RawFileReader, ScanMode};
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyIOError, PyIndexError, PyValueError};
@@ -540,6 +543,8 @@ impl RawFile {
     ///     normalized collision energy rather than eV)
     /// activation : str | None  ("hcd", "cid", "etd", ...)
     /// master_scan_number : int | None  (scan that triggered this one)
+    /// extra : dict[str, str]  (every other decoded ``opentfraw.*`` value
+    ///     the scan carries; see :func:`extra_field_keys`)
     /// mz : numpy.ndarray[float64]
     /// intensity : numpy.ndarray[float32]
     ///
@@ -578,7 +583,7 @@ impl RawFile {
         d.set_item("scan_mode", scan_mode)?;
         d.set_item("analyzer", meta.analyzer.map(|a| a.as_str()))?;
         d.set_item("retention_time", meta.retention_time_min)?;
-        d.set_item("filter_string", meta.filter)?;
+        d.set_item("filter_string", &meta.filter)?;
         d.set_item("total_ion_current", meta.total_ion_current)?;
         d.set_item("base_peak_mz", meta.base_peak_mz)?;
         d.set_item("base_peak_intensity", meta.base_peak_intensity)?;
@@ -606,6 +611,7 @@ impl RawFile {
             "master_scan_number",
             precursor.and_then(|p| p.master_scan_number),
         )?;
+        d.set_item("extra", scan_extras(&self.reader, &meta, &ExtraFields::All))?;
         d.set_item("mz", mz)?;
         d.set_item("intensity", intensity)?;
         Ok(d)
@@ -676,7 +682,35 @@ impl RawFile {
     }
 
     /// Write the entire file out as mzML 1.1.0 to `out_path`.
-    fn to_mzml(&self, out_path: &str) -> PyResult<()> {
+    ///
+    /// Each spectrum carries the file's ``opentfraw.*`` extra values (see
+    /// :func:`extra_field_keys`) as ``<userParam>`` elements. Pass
+    /// ``extra_fields`` to write only the listed keys, or
+    /// ``exclude_extra_fields`` to write all but the listed keys;
+    /// ``extra_fields=[]`` writes none.
+    #[pyo3(signature = (out_path, extra_fields=None, exclude_extra_fields=None))]
+    fn to_mzml(
+        &self,
+        out_path: &str,
+        extra_fields: Option<Vec<String>>,
+        exclude_extra_fields: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let selection = match (extra_fields, exclude_extra_fields) {
+            (Some(_), Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "pass extra_fields or exclude_extra_fields, not both",
+                ))
+            }
+            (Some(keys), None) => {
+                check_extra_keys(&keys)?;
+                ExtraFields::Only(keys)
+            }
+            (None, Some(keys)) => {
+                check_extra_keys(&keys)?;
+                ExtraFields::Except(keys)
+            }
+            (None, None) => ExtraFields::All,
+        };
         let out_file = File::create(out_path).map_err(|e| PyIOError::new_err(e.to_string()))?;
         let mut out = std::io::BufWriter::new(out_file);
         let mut src = self.locked_source()?;
@@ -685,16 +719,44 @@ impl RawFile {
             .file_name()
             .and_then(|s| s.to_str())
             .ok_or_else(|| PyValueError::new_err("non-UTF8 file name"))?;
-        ::opentfraw::write_mzml(&self.reader, &mut *src, &mut out, raw_filename, false)
-            .map_err(to_py_err)?;
+        let mut source = OpenTfRawSource::new(&self.reader, &mut *src, raw_filename, false)
+            .with_extra_fields(selection);
+        openmassspec_core::write_mzml(&mut source, &mut out)
+            .map_err(|e| PyIOError::new_err(e.to_string()))?;
         Ok(())
     }
+}
+
+fn check_extra_keys(keys: &[String]) -> PyResult<()> {
+    let unknown: Vec<&str> = keys
+        .iter()
+        .map(String::as_str)
+        .filter(|k| !extra_field_keys().any(|known| known == *k))
+        .collect();
+    if unknown.is_empty() {
+        Ok(())
+    } else {
+        Err(PyValueError::new_err(format!(
+            "unknown extra field(s): {}; see opentfraw.extra_field_keys()",
+            unknown.join(", ")
+        )))
+    }
+}
+
+/// Every ``opentfraw.*`` extra field key, in the order they are written.
+///
+/// These are the keys of :meth:`RawFile.scan`'s ``extra`` dict and of the
+/// per-spectrum ``<userParam>`` elements :meth:`RawFile.to_mzml` writes.
+#[pyfunction(name = "extra_field_keys")]
+fn py_extra_field_keys() -> Vec<&'static str> {
+    extra_field_keys().collect()
 }
 
 /// OpenTFRaw - Rust Thermo `.raw` file parser.
 #[pymodule]
 fn opentfraw(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RawFile>()?;
+    m.add_function(wrap_pyfunction!(py_extra_field_keys, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

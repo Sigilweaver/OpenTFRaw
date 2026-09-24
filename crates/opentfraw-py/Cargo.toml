@@ -27,5 +27,6 @@ type_complexity = "allow"
 
 [dependencies]
 opentfraw.workspace = true
+openmassspec-core.workspace = true
 pyo3 = { workspace = true }
 numpy.workspace = true
