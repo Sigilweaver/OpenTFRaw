@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `scan_metadata()` and `ScanMetadata`: every per-scan field of a
+  `SpectrumRecord` except the peak arrays, plus the scan index's
+  `scan_event`, `scan_segment` and `data_size` and the scan's analyzer.
+  `extract_spectrum()` and the mzML writer are now built on it; mzML output is
+  unchanged.
+- Python `scan()`/`iter_scans()` dictionaries now carry `analyzer`,
+  `faims_cv`, `isolation_target_mz`, `collision_energy_is_nce`, `activation`
+  and `master_scan_number`.
+
+### Changed
+
+- Python `scan()`/`iter_scans()` now read their metadata from
+  `scan_metadata()`, the same derivation the mzML writer uses, so the two
+  report the same values:
+  - `collision_energy` falls back to the scan event's reaction energy when
+    the trailer has none, as mzML already did. On the PRIDE test fixture this
+    fills the value on all 894 MS2 scans, which were `None` before.
+  - `precursor_mz` falls back to the trailer's isolation target before the
+    scan event's reaction, as mzML already did.
+  - On MS1 scans `charge`, `precursor_mz`, `isolation_width` and
+    `collision_energy` are now `None`. They previously passed through trailer
+    values that do not describe a precursor.
+  - On SRM files `ms_level`, `polarity` and `scan_mode` now match mzML (2,
+    `"+"` and `"centroid"`) instead of defaulting from the missing scan event.
+
 ## [1.5.0] - 2026-09-24
 
 ### Added
