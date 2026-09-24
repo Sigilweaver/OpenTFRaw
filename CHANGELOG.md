@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OpenTfRawSource::with_extra_fields(ExtraFields::...)`. Python `scan()` carries
   them as an `extra` dict, `to_mzml()` takes `extra_fields` /
   `exclude_extra_fields`, and `opentfraw.extra_field_keys()` lists the keys.
+- Python `scan_table()`: the metadata of every scan as columns (one list
+  per `scan()` key, peak arrays excluded), ready for
+  `pandas.DataFrame(raw.scan_table())`. It reads no peak data, so it runs
+  about 9x faster than `iter_scans()` on the test fixture.
 - The `openmassspec_core` adapter now fills `SpectrumRecord::analyzer`,
   `SpectrumRecord::acquisition_event_id` (from the scan index's scan event;
   `None` for the 0xFFFF sentinel) and `RunMetadata::analyzers`.

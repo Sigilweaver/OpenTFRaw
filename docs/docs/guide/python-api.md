@@ -41,6 +41,7 @@ mz, intensity = raw.peaks(3)              # centroid peaks, float64/float32 nump
 scan = raw.scan(3)                        # dict: ms_level, RT, charge, filter_string, ...
 for scan in raw.iter_scans():             # equivalent to scan(n) for n in range(first_scan, last_scan+1)
     ...
+raw.scan_table()                          # {key: [one value per scan]} for every scan() key but mz/intensity; no peak reads
 raw.scan_filter(3)                        # canonical Thermo filter string, or None
 raw.profile(3)                            # (mz, intensity) from the raw profile signal
 raw.centroid_labels(3)                    # mz/intensity/resolution/noise/baseline/signal_to_noise
