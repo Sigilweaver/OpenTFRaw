@@ -79,19 +79,57 @@ pub struct SpectrumRecord {
     pub intensity: Vec<f32>,
 }
 
-/// Extract a single spectrum's record from `raw` at scan-index `idx`
-/// (zero-based offset from the first scan).
+/// Per-scan metadata: every field of a [`SpectrumRecord`] except the peak
+/// arrays, plus the scan-index fields that locate the scan in the method.
 ///
-/// Returns `None` if the scan's peak arrays cannot be read (matches the
-/// silent-skip behaviour of [`write_mzml`]). `include_profile` controls
-/// whether profile-mode scans return the raw profile signal or the
-/// centroided peak list, matching [`write_mzml`].
-pub fn extract_spectrum<R: Read + Seek>(
-    raw: &RawFileReader,
-    source: &mut R,
-    idx: u32,
-    include_profile: bool,
-) -> Option<SpectrumRecord> {
+/// Returned by [`scan_metadata`]. Reading it touches no scan data packet, so
+/// it is cheap enough to build for every scan in a file.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct ScanMetadata {
+    pub index: usize,
+    pub scan_number: u32,
+    /// Scan event index, as stored in the scan index. Some files store
+    /// `0xFFFF` here.
+    pub scan_event: u16,
+    /// Scan segment index, as stored in the scan index. Some files store
+    /// `0xFFFF` here.
+    pub scan_segment: u16,
+    /// Size of the scan data packet in bytes, as stored in the scan index.
+    pub data_size: u32,
+    pub ms_level: u32,
+    pub is_ms1: bool,
+    /// Whether this MS2+ scan uses data-independent acquisition.
+    pub is_dia: bool,
+    /// Whether broadband isolation is enabled for this scan.
+    pub is_wideband: bool,
+    pub polarity: Option<Polarity>,
+    /// Scan mode as recorded in the scan event.
+    pub scan_mode: Option<crate::ScanMode>,
+    /// Mass analyzer of this scan.
+    pub analyzer: Option<crate::Analyzer>,
+    pub filter: Option<String>,
+    /// Retention time in minutes.
+    pub retention_time_min: f64,
+    pub total_ion_current: f64,
+    pub base_peak_mz: f64,
+    pub base_peak_intensity: f64,
+    pub low_mz: f64,
+    pub high_mz: f64,
+    pub ion_injection_time_ms: Option<f64>,
+    pub faims_cv: Option<f64>,
+    pub precursor: Option<PrecursorInfo>,
+}
+
+/// Extract the metadata of the scan at scan-index `idx` (zero-based offset
+/// from the first scan), without reading its peak arrays.
+///
+/// This is the single place where per-scan fields are derived from the scan
+/// index, scan event and trailer. [`extract_spectrum`], the mzML writer, the
+/// `openmassspec_core` adapter and the Python bindings all build on it, so a
+/// field wired here reaches every output. Returns `None` if `idx` is out of
+/// range.
+pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
     if idx >= raw.num_scans {
         return None;
     }
@@ -134,9 +172,6 @@ pub fn extract_spectrum<R: Read + Seek>(
     } else {
         None
     };
-
-    let (mz, intensity, effective_scan_mode) =
-        resolve_scan_arrays(raw, source, scan_number, include_profile, event, scan_mode)?;
 
     let precursor = if !is_ms1 {
         let info = if let Some(q1) = srm_q1 {
@@ -209,15 +244,19 @@ pub fn extract_spectrum<R: Read + Seek>(
     let ion_injection_time_ms = params.as_ref().and_then(|p| p.ion_injection_time_ms());
     let faims_cv = params.as_ref().and_then(|p| p.faims_cv());
 
-    Some(SpectrumRecord {
+    Some(ScanMetadata {
         index: idx as usize,
         scan_number,
+        scan_event: entry.scan_event,
+        scan_segment: entry.scan_segment,
+        data_size: entry.data_size,
         ms_level: level,
         is_ms1,
         is_dia,
         is_wideband,
         polarity,
-        scan_mode: effective_scan_mode,
+        scan_mode,
+        analyzer: event.and_then(|e| e.preamble.analyzer()),
         filter,
         retention_time_min: entry.start_time,
         total_ion_current: entry.total_current,
@@ -228,6 +267,51 @@ pub fn extract_spectrum<R: Read + Seek>(
         ion_injection_time_ms,
         faims_cv,
         precursor,
+    })
+}
+
+/// Extract a single spectrum's record from `raw` at scan-index `idx`
+/// (zero-based offset from the first scan).
+///
+/// Returns `None` if the scan's peak arrays cannot be read (matches the
+/// silent-skip behaviour of [`write_mzml`]). `include_profile` controls
+/// whether profile-mode scans return the raw profile signal or the
+/// centroided peak list, matching [`write_mzml`].
+pub fn extract_spectrum<R: Read + Seek>(
+    raw: &RawFileReader,
+    source: &mut R,
+    idx: u32,
+    include_profile: bool,
+) -> Option<SpectrumRecord> {
+    let meta = scan_metadata(raw, idx)?;
+    let event = raw.scan_events.get(idx as usize);
+    let (mz, intensity, effective_scan_mode) = resolve_scan_arrays(
+        raw,
+        source,
+        meta.scan_number,
+        include_profile,
+        event,
+        meta.scan_mode,
+    )?;
+    Some(SpectrumRecord {
+        index: meta.index,
+        scan_number: meta.scan_number,
+        ms_level: meta.ms_level,
+        is_ms1: meta.is_ms1,
+        is_dia: meta.is_dia,
+        is_wideband: meta.is_wideband,
+        polarity: meta.polarity,
+        scan_mode: effective_scan_mode,
+        filter: meta.filter,
+        retention_time_min: meta.retention_time_min,
+        total_ion_current: meta.total_ion_current,
+        base_peak_mz: meta.base_peak_mz,
+        base_peak_intensity: meta.base_peak_intensity,
+        low_mz: meta.low_mz,
+        high_mz: meta.high_mz,
+        ion_injection_time_ms: meta.ion_injection_time_ms,
+        faims_cv: meta.faims_cv,
+        precursor: meta.precursor,
         mz,
         intensity,
     })

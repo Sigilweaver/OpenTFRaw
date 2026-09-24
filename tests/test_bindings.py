@@ -202,6 +202,7 @@ def test_scan(raw_file):
         "is_wideband",
         "polarity",
         "scan_mode",
+        "analyzer",
         "retention_time",
         "filter_string",
         "total_ion_current",
@@ -210,10 +211,15 @@ def test_scan(raw_file):
         "low_mz",
         "high_mz",
         "ion_injection_time_ms",
+        "faims_cv",
         "charge",
         "precursor_mz",
+        "isolation_target_mz",
         "isolation_width",
         "collision_energy",
+        "collision_energy_is_nce",
+        "activation",
+        "master_scan_number",
         "mz",
         "intensity",
     }
@@ -229,6 +235,7 @@ def test_scan(raw_file):
         assert 0 <= scan[key] <= 0xFFFF
     assert isinstance(scan["data_size"], int)
     assert scan["data_size"] >= 0
+    assert isinstance(scan["collision_energy_is_nce"], bool)
     assert isinstance(scan["mz"], np.ndarray)
     assert isinstance(scan["intensity"], np.ndarray)
     assert scan["mz"].shape == scan["intensity"].shape
@@ -269,6 +276,59 @@ def test_scan_mode_consistent_with_filter(raw_file):
         assert scan["filter_string"].split()[2] == token[scan["scan_mode"]]
         checked += 1
     assert checked > 0
+
+
+def test_ms1_scans_have_no_precursor(raw_file):
+    """MS1 scans carry no precursor keys, whatever the trailer holds."""
+    precursor_keys = (
+        "charge",
+        "precursor_mz",
+        "isolation_target_mz",
+        "isolation_width",
+        "collision_energy",
+        "activation",
+        "master_scan_number",
+    )
+    for scan in raw_file.iter_scans():
+        if scan["ms_level"] != 1:
+            continue
+        for key in precursor_keys:
+            assert scan[key] is None, (scan["scan_number"], key)
+        assert scan["collision_energy_is_nce"] is False
+
+
+def test_scan_precursor_matches_mzml(raw_file, tmp_path):
+    """``scan()`` and ``to_mzml()`` share one derivation, so the precursor
+    m/z and collision energy they report for each scan must agree."""
+    out_path = tmp_path / "out.mzML"
+    raw_file.to_mzml(str(out_path))
+    ns = {"m": "http://psi.hupo.org/ms/mzml"}
+    from_mzml = {}
+    for spectrum in ET.parse(out_path).getroot().iterfind(".//m:spectrum", ns):
+        scan_number = int(spectrum.get("id").rsplit("scan=", 1)[1])
+        values = {}
+        for param in spectrum.iterfind("./m:precursorList//m:cvParam", ns):
+            if param.get("accession") == "MS:1000744":
+                values["precursor_mz"] = float(param.get("value"))
+            elif param.get("accession") == "MS:1000045":
+                values["collision_energy"] = float(param.get("value"))
+        from_mzml[scan_number] = values
+    # mzML writes m/z with 6 decimals and energies with 2.
+    tolerance = {"precursor_mz": 1e-6, "collision_energy": 1e-2}
+    checked = 0
+    for scan in raw_file.iter_scans():
+        if scan["ms_level"] < 2:
+            continue
+        expected = from_mzml[scan["scan_number"]]
+        for key, abs_tol in tolerance.items():
+            if key in expected:
+                assert scan[key] == pytest.approx(expected[key], abs=abs_tol), (
+                    scan["scan_number"],
+                    key,
+                )
+                checked += 1
+    if checked == 0:
+        pytest.skip("fixture file has no MS2 precursors")
 
 
 def test_iter_scans(raw_file):
