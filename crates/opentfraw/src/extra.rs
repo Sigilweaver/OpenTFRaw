@@ -248,6 +248,59 @@ mod tests {
         assert_eq!(keys.len(), EXTRA_FIELDS.len());
     }
 
+    /// Public accessor names in the `impl` block that opens with `header`.
+    fn accessors<'a>(source: &'a str, header: &str) -> Vec<&'a str> {
+        let start = source.find(header).expect("impl block not found");
+        let body = &source[start..];
+        let body = &body[..body.find("\n}\n").expect("impl block not closed")];
+        body.lines()
+            .filter_map(|line| line.strip_prefix("    pub fn "))
+            .map(|rest| &rest[..rest.find('(').unwrap()])
+            .collect()
+    }
+
+    /// Every typed trailer and status-log accessor must reach the outputs,
+    /// either as a first-class field (wired in `mzml.rs`) or as an extra
+    /// field registered above. Aliases and raw-record passthroughs are
+    /// listed explicitly. A new accessor fails this test until it is wired.
+    #[test]
+    fn every_typed_accessor_is_exposed() {
+        let reader = include_str!("reader.rs");
+        let wired = [include_str!("mzml.rs"), include_str!("extra.rs")].concat();
+        let cases: [(&str, &[&str]); 2] = [
+            (
+                "impl<'a> ScanParams<'a> {",
+                // record: raw passthrough. The rest alias accessors that are
+                // wired: orbitrap_resolution, number_of_lock_masses,
+                // lock_mass_correction_ppm.
+                &[
+                    "record",
+                    "ft_resolution",
+                    "number_of_lm_found",
+                    "lm_correction_ppm",
+                ],
+            ),
+            (
+                "impl<'a> StatusLogEntry<'a> {",
+                &["record", "get", "get_f64", "get_i32", "get_string"],
+            ),
+        ];
+        for (header, exempt) in cases {
+            let names = accessors(reader, header);
+            assert!(!names.is_empty(), "no accessors found for {header}");
+            for name in names {
+                if exempt.contains(&name) {
+                    continue;
+                }
+                assert!(
+                    wired.contains(&format!(".{name}(")),
+                    "{header} accessor `{name}` reaches no output: wire it in \
+                     mzml.rs (first-class field) or register it in extra.rs"
+                );
+            }
+        }
+    }
+
     #[test]
     fn selection() {
         let key = "opentfraw.resolution";

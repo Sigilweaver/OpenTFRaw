@@ -46,6 +46,12 @@ raw.profile(3)                            # (mz, intensity) from the raw profile
 raw.centroid_labels(3)                    # mz/intensity/resolution/noise/baseline/signal_to_noise
 ```
 
+`scan()` reads its metadata from the same derivation the mzML writer uses,
+so its precursor, collision-energy and scan-mode values match what
+`to_mzml()` writes. Its `extra` key holds every other decoded value the scan
+carries under normalized `opentfraw.*` keys; `opentfraw.extra_field_keys()`
+lists them all.
+
 ## Per-scan and acquisition metadata
 
 ```python
