@@ -23,5 +23,20 @@ every optional controlled-vocabulary annotation the schema permits; it
 covers the core scan and peak data plus the vendor metadata OpenTFRaw
 decodes directly from the binary.
 
+Each spectrum also carries the scan's acquisition event id and its
+`opentfraw.*` extra values (resolution, AGC, lock mass, instrument-status
+readings and so on; `opentfraw.extra_field_keys()` lists them) as
+`<userParam>` elements, and references an `instrumentConfiguration` for
+its mass analyzer. The extras add roughly 10-14% to the file on
+small-spectrum data. To choose them:
+
+```python
+raw.to_mzml("run.mzML", extra_fields=[])  # none
+raw.to_mzml("run.mzML", extra_fields=["opentfraw.resolution"])  # only these
+raw.to_mzml("run.mzML", exclude_extra_fields=["opentfraw.sps_masses"])  # all but these
+```
+
+From Rust, pass `ExtraFields` to `OpenTfRawSource::with_extra_fields`.
+
 OpenTFRaw's goal is direct, open access to the RAW binary and a
 faithful open-standard mzML rendering of it.

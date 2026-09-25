@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `scan_metadata()` and `ScanMetadata`: every per-scan field of a
+  `SpectrumRecord` except the peak arrays, plus the scan index's
+  `scan_event`, `scan_segment` and `data_size` and the scan's analyzer.
+  `extract_spectrum()` and the mzML writer are now built on it; mzML output is
+  unchanged.
+- Python `scan()`/`iter_scans()` dictionaries now carry `analyzer`,
+  `faims_cv`, `isolation_target_mz`, `collision_energy_is_nce`, `activation`
+  and `master_scan_number`.
+- `extra` module: every decoded per-scan value without a first-class
+  `openmassspec_core` field (resolution, AGC, lock mass, elapsed scan time,
+  SPS masses, conversion parameters, instrument-status values and more, 41
+  keys in all) is registered under a stable `opentfraw.*` key.
+  `OpenTfRawSource` fills `SpectrumRecord::extra` with them, selectable with
+  `OpenTfRawSource::with_extra_fields(ExtraFields::...)`. Python `scan()` carries
+  them as an `extra` dict, `to_mzml()` takes `extra_fields` /
+  `exclude_extra_fields`, and `opentfraw.extra_field_keys()` lists the keys.
+- Python `scan_table()`: the metadata of every scan as columns (one list
+  per `scan()` key, peak arrays excluded), ready for
+  `pandas.DataFrame(raw.scan_table())`. It reads no peak data, so it runs
+  about 9x faster than `iter_scans()` on the test fixture.
+- The `openmassspec_core` adapter now fills `SpectrumRecord::analyzer`,
+  `SpectrumRecord::acquisition_event_id` (from the scan index's scan event;
+  `None` for the 0xFFFF sentinel) and `RunMetadata::analyzers`.
+
+### Changed
+
+- mzML output now has one `instrumentConfiguration` per analyzer used, each
+  scan references its analyzer's configuration, and each spectrum carries an
+  `acquisition event id` user parameter plus its `opentfraw.*` extra values as
+  user parameters. With every extra field selected, mzML grows by roughly
+  10-14% on the small-spectrum test files; `to_mzml(extra_fields=[])` or
+  `ExtraFields::None` leaves the extras out.
+- Python `scan()`/`iter_scans()` now read their metadata from
+  `scan_metadata()`, the same derivation the mzML writer uses, so the two
+  report the same values:
+  - `collision_energy` falls back to the scan event's reaction energy when
+    the trailer has none, as mzML already did. On the PRIDE test fixture this
+    fills the value on all 894 MS2 scans, which were `None` before.
+  - `precursor_mz` falls back to the trailer's isolation target before the
+    scan event's reaction, as mzML already did.
+  - On MS1 scans `charge`, `precursor_mz`, `isolation_width` and
+    `collision_energy` are now `None`. They previously passed through trailer
+    values that do not describe a precursor.
+  - On SRM files `ms_level`, `polarity` and `scan_mode` now match mzML (2,
+    `"+"` and `"centroid"`) instead of defaulting from the missing scan event.
+
 ## [1.5.0] - 2026-09-24
 
 ### Added
