@@ -159,6 +159,7 @@ name = "opentfraw-py"
 version = "1.5.0"
 dependencies = [
  "numpy",
+ "openmassspec-core",
  "opentfraw",
  "pyo3",
 ]

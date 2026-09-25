@@ -18,8 +18,12 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use ::opentfraw::extra::{extra_field_keys, scan_extras};
 use ::opentfraw::generic_data::GenericValue;
-use ::opentfraw::{MsPower, Polarity, RawFileReader, ScanMode};
+use ::opentfraw::mzml::OpenTfRawSource;
+use ::opentfraw::scan_filter::activation_str;
+use ::opentfraw::ExtraFields;
+use ::opentfraw::{scan_metadata, Polarity, RawFileReader, ScanMetadata, ScanMode};
 use numpy::{PyArray1, ToPyArray};
 use pyo3::exceptions::{PyIOError, PyIndexError, PyValueError};
 use pyo3::prelude::*;
@@ -502,17 +506,23 @@ impl RawFile {
 
     /// Return a dict of per-scan metadata + peak arrays.
     ///
+    /// The metadata comes from the same derivation the mzML writer uses, so
+    /// values here match what :meth:`to_mzml` writes.
+    ///
     /// Keys
     /// ----
     /// scan_number : int
-    /// scan_event : int  (scan event index, as stored in the scan index)
-    /// scan_segment : int  (scan segment index, as stored in the scan index)
+    /// scan_event : int  (scan event index, as stored in the scan index;
+    ///     some files store 0xFFFF)
+    /// scan_segment : int  (scan segment index, as stored in the scan index;
+    ///     some files store 0xFFFF)
     /// data_size : int  (scan data packet size, as stored in the scan index)
     /// ms_level : int
     /// is_dia : bool
     /// is_wideband : bool
     /// polarity : str  ("+" or "-")
     /// scan_mode : str | None  ("centroid" or "profile")
+    /// analyzer : str | None  ("FTMS", "ITMS", ...)
     /// retention_time : float  (minutes)
     /// filter_string : str | None
     /// total_ion_current : float
@@ -521,108 +531,61 @@ impl RawFile {
     /// low_mz : float
     /// high_mz : float
     /// ion_injection_time_ms : float | None
+    /// faims_cv : float | None  (FAIMS compensation voltage, volts)
     /// charge : int | None
-    /// precursor_mz : float | None  (trailer monoisotopic m/z, falling back
-    ///     to the scan event's first reaction when the trailer value is
-    ///     absent or zero)
+    /// precursor_mz : float | None  (selected precursor: trailer
+    ///     monoisotopic m/z, falling back to the isolation target and then to
+    ///     the scan event's first reaction)
+    /// isolation_target_mz : float | None  (isolation window center)
     /// isolation_width : float | None
     /// collision_energy : float | None
+    /// collision_energy_is_nce : bool  (True when collision_energy is a
+    ///     normalized collision energy rather than eV)
+    /// activation : str | None  ("hcd", "cid", "etd", ...)
+    /// master_scan_number : int | None  (scan that triggered this one)
+    /// extra : dict[str, str]  (every other decoded ``opentfraw.*`` value
+    ///     the scan carries; see :func:`extra_field_keys`)
     /// mz : numpy.ndarray[float64]
     /// intensity : numpy.ndarray[float32]
+    ///
+    /// The precursor keys are None (and collision_energy_is_nce False) for
+    /// MS1 scans.
     fn scan<'py>(&self, py: Python<'py>, scan_number: u32) -> PyResult<Bound<'py, PyDict>> {
         let first = self.first_scan();
         let idx = scan_number.checked_sub(first).ok_or_else(|| {
             PyIndexError::new_err(format!("scan {scan_number} < first scan {first}"))
-        })? as usize;
-        if idx >= self.reader.scan_index.len() {
-            return Err(PyIndexError::new_err(format!(
-                "scan {scan_number} out of range"
-            )));
-        }
-        let entry = &self.reader.scan_index[idx];
-        let event = self.reader.scan_events.get(idx);
-        let params = self.reader.scan_params(scan_number);
-
-        let ms_level = event
-            .and_then(|e| e.preamble.ms_power())
-            .map(|p| match p {
-                MsPower::Ms1 | MsPower::Undefined => 1u32,
-                MsPower::Ms2 => 2,
-                MsPower::Ms3 => 3,
-                MsPower::Ms4 => 4,
-                MsPower::Ms5 => 5,
-                MsPower::Ms6 => 6,
-                MsPower::Ms7 => 7,
-                MsPower::Ms8 => 8,
-            })
-            .unwrap_or(1);
-        let polarity = match event.and_then(|e| e.preamble.polarity()) {
-            Some(Polarity::Positive) => "+",
-            Some(Polarity::Negative) => "-",
-            _ => "",
-        };
-        let scan_mode = event.and_then(|e| e.preamble.scan_mode()).map(|m| match m {
-            ScanMode::Centroid => "centroid",
-            ScanMode::Profile => "profile",
-        });
+        })?;
+        let meta = scan_metadata(&self.reader, idx)
+            .ok_or_else(|| PyIndexError::new_err(format!("scan {scan_number} out of range")))?;
 
         let (mz, intensity) = self.peaks(py, scan_number)?;
-
-        let d = PyDict::new(py);
-        d.set_item("scan_number", scan_number)?;
-        d.set_item("scan_event", entry.scan_event)?;
-        d.set_item("scan_segment", entry.scan_segment)?;
-        d.set_item("data_size", entry.data_size)?;
-        d.set_item("ms_level", ms_level)?;
-        d.set_item("is_dia", event.is_some_and(|e| e.preamble.is_dia()))?;
-        d.set_item(
-            "is_wideband",
-            event.is_some_and(|e| e.preamble.is_wideband()),
-        )?;
-        d.set_item("polarity", polarity)?;
-        d.set_item("scan_mode", scan_mode)?;
-        d.set_item("retention_time", entry.start_time)?;
-        d.set_item("filter_string", self.reader.scan_filter(scan_number))?;
-        d.set_item("total_ion_current", entry.total_current)?;
-        d.set_item("base_peak_mz", entry.base_mz)?;
-        d.set_item("base_peak_intensity", entry.base_intensity)?;
-        d.set_item("low_mz", entry.low_mz)?;
-        d.set_item("high_mz", entry.high_mz)?;
-        d.set_item(
-            "ion_injection_time_ms",
-            params.as_ref().and_then(|p| p.ion_injection_time_ms()),
-        )?;
-        d.set_item(
-            "charge",
-            params
-                .as_ref()
-                .and_then(|p| p.charge_state())
-                .filter(|&z| z > 0),
-        )?;
-        d.set_item(
-            "precursor_mz",
-            params
-                .as_ref()
-                .and_then(|p| p.monoisotopic_mz())
-                .filter(|&v| v > 0.0)
-                .or_else(|| {
-                    event
-                        .and_then(|e| e.reactions.first())
-                        .map(|r| r.precursor_mz)
-                        .filter(|&v| v > 0.0)
-                }),
-        )?;
-        d.set_item(
-            "isolation_width",
-            params.as_ref().and_then(|p| p.isolation_width_mz()),
-        )?;
-        d.set_item(
-            "collision_energy",
-            params.as_ref().and_then(|p| p.activation_energy()),
-        )?;
+        let d = metadata_dict(py, &self.reader, &meta)?;
         d.set_item("mz", mz)?;
         d.set_item("intensity", intensity)?;
         Ok(d)
+    }
+
+    /// Return the metadata of every scan as columns, without reading any
+    /// peak data.
+    ///
+    /// The result maps each :meth:`scan` key except ``mz`` and ``intensity``
+    /// to a list with one entry per scan, in scan order, so
+    /// ``pandas.DataFrame(raw.scan_table())`` gives one row per scan. It is
+    /// much faster than :meth:`iter_scans` when only metadata is needed.
+    fn scan_table<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let columns = PyDict::new(py);
+        for idx in 0..self.reader.num_scans {
+            let Some(meta) = scan_metadata(&self.reader, idx) else {
+                continue;
+            };
+            for (key, value) in metadata_dict(py, &self.reader, &meta)?.iter() {
+                match columns.get_item(&key)? {
+                    Some(column) => column.cast_into::<PyList>()?.append(value)?,
+                    None => columns.set_item(key, PyList::new(py, [value])?)?,
+                }
+            }
+        }
+        Ok(columns)
     }
 
     /// Iterate all scans. Yields dicts identical in shape to :meth:`scan`.
@@ -690,7 +653,35 @@ impl RawFile {
     }
 
     /// Write the entire file out as mzML 1.1.0 to `out_path`.
-    fn to_mzml(&self, out_path: &str) -> PyResult<()> {
+    ///
+    /// Each spectrum carries the file's ``opentfraw.*`` extra values (see
+    /// :func:`extra_field_keys`) as ``<userParam>`` elements. Pass
+    /// ``extra_fields`` to write only the listed keys, or
+    /// ``exclude_extra_fields`` to write all but the listed keys;
+    /// ``extra_fields=[]`` writes none.
+    #[pyo3(signature = (out_path, extra_fields=None, exclude_extra_fields=None))]
+    fn to_mzml(
+        &self,
+        out_path: &str,
+        extra_fields: Option<Vec<String>>,
+        exclude_extra_fields: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let selection = match (extra_fields, exclude_extra_fields) {
+            (Some(_), Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "pass extra_fields or exclude_extra_fields, not both",
+                ))
+            }
+            (Some(keys), None) => {
+                check_extra_keys(&keys)?;
+                ExtraFields::Only(keys)
+            }
+            (None, Some(keys)) => {
+                check_extra_keys(&keys)?;
+                ExtraFields::Except(keys)
+            }
+            (None, None) => ExtraFields::All,
+        };
         let out_file = File::create(out_path).map_err(|e| PyIOError::new_err(e.to_string()))?;
         let mut out = std::io::BufWriter::new(out_file);
         let mut src = self.locked_source()?;
@@ -699,16 +690,106 @@ impl RawFile {
             .file_name()
             .and_then(|s| s.to_str())
             .ok_or_else(|| PyValueError::new_err("non-UTF8 file name"))?;
-        ::opentfraw::write_mzml(&self.reader, &mut *src, &mut out, raw_filename, false)
-            .map_err(to_py_err)?;
+        let mut source = OpenTfRawSource::new(&self.reader, &mut *src, raw_filename, false)
+            .with_extra_fields(selection);
+        openmassspec_core::write_mzml(&mut source, &mut out)
+            .map_err(|e| PyIOError::new_err(e.to_string()))?;
         Ok(())
     }
+}
+
+/// The metadata keys of :meth:`RawFile.scan` for one scan (everything but
+/// the peak arrays).
+fn metadata_dict<'py>(
+    py: Python<'py>,
+    reader: &RawFileReader,
+    meta: &ScanMetadata,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    let polarity = match meta.polarity {
+        Some(Polarity::Positive) => "+",
+        Some(Polarity::Negative) => "-",
+        _ => "",
+    };
+    let scan_mode = meta.scan_mode.map(|m| match m {
+        ScanMode::Centroid => "centroid",
+        ScanMode::Profile => "profile",
+    });
+    let precursor = meta.precursor.as_ref();
+
+    d.set_item("scan_number", meta.scan_number)?;
+    d.set_item("scan_event", meta.scan_event)?;
+    d.set_item("scan_segment", meta.scan_segment)?;
+    d.set_item("data_size", meta.data_size)?;
+    d.set_item("ms_level", meta.ms_level)?;
+    d.set_item("is_dia", meta.is_dia)?;
+    d.set_item("is_wideband", meta.is_wideband)?;
+    d.set_item("polarity", polarity)?;
+    d.set_item("scan_mode", scan_mode)?;
+    d.set_item("analyzer", meta.analyzer.map(|a| a.as_str()))?;
+    d.set_item("retention_time", meta.retention_time_min)?;
+    d.set_item("filter_string", &meta.filter)?;
+    d.set_item("total_ion_current", meta.total_ion_current)?;
+    d.set_item("base_peak_mz", meta.base_peak_mz)?;
+    d.set_item("base_peak_intensity", meta.base_peak_intensity)?;
+    d.set_item("low_mz", meta.low_mz)?;
+    d.set_item("high_mz", meta.high_mz)?;
+    d.set_item("ion_injection_time_ms", meta.ion_injection_time_ms)?;
+    d.set_item("faims_cv", meta.faims_cv)?;
+    d.set_item("charge", precursor.and_then(|p| p.charge))?;
+    d.set_item("precursor_mz", precursor.and_then(|p| p.selected_mz))?;
+    d.set_item("isolation_target_mz", precursor.and_then(|p| p.target_mz))?;
+    d.set_item("isolation_width", precursor.and_then(|p| p.isolation_width))?;
+    d.set_item(
+        "collision_energy",
+        precursor.and_then(|p| p.collision_energy),
+    )?;
+    d.set_item(
+        "collision_energy_is_nce",
+        precursor.is_some_and(|p| p.ce_is_nce),
+    )?;
+    d.set_item(
+        "activation",
+        precursor.and_then(|p| p.activation.map(|a| activation_str(p.analyzer, a))),
+    )?;
+    d.set_item(
+        "master_scan_number",
+        precursor.and_then(|p| p.master_scan_number),
+    )?;
+    d.set_item("extra", scan_extras(reader, meta, &ExtraFields::All))?;
+    Ok(d)
+}
+
+fn check_extra_keys(keys: &[String]) -> PyResult<()> {
+    let unknown: Vec<&str> = keys
+        .iter()
+        .map(String::as_str)
+        .filter(|k| !extra_field_keys().any(|known| known == *k))
+        .collect();
+    if unknown.is_empty() {
+        Ok(())
+    } else {
+        Err(PyValueError::new_err(format!(
+            "unknown extra field(s): {}; see opentfraw.extra_field_keys()",
+            unknown.join(", ")
+        )))
+    }
+}
+
+/// Every ``opentfraw.*`` extra field key, in the order they are written.
+///
+/// These are the keys of :meth:`RawFile.scan`'s ``extra`` dict and of the
+/// per-spectrum ``<userParam>`` elements :meth:`RawFile.to_mzml` writes.
+#[pyfunction(name = "extra_field_keys")]
+fn py_extra_field_keys() -> Vec<&'static str> {
+    extra_field_keys().collect()
 }
 
 /// OpenTFRaw - Rust Thermo `.raw` file parser.
 #[pymodule]
 fn opentfraw(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RawFile>()?;
+    m.add_function(wrap_pyfunction!(py_extra_field_keys, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

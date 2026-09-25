@@ -28,6 +28,22 @@ For any PR:
 - Code is ASCII only and `#![forbid(unsafe_code)]` unless the crate
   explicitly opts in (none of the public crates currently do).
 
+### Exposing a decoded value
+
+A value the Rust core decodes should reach Python and the
+`openmassspec_core` adapter (and so mzML) through one path, not be wired
+into each by hand:
+
+- If `openmassspec_core::SpectrumRecord` has a field for it, derive it in
+  `scan_metadata()` (`crates/opentfraw/src/mzml.rs`), map it in
+  `to_msc_record()`, and add the key to Python `scan()`.
+- Otherwise, register it in `EXTRA_FIELDS` (`crates/opentfraw/src/extra.rs`)
+  under an `opentfraw.*` key. It then reaches `SpectrumRecord::extra`, mzML
+  `<userParam>`s and the Python `scan()["extra"]` dict with no further code.
+
+A unit test in `extra.rs` fails when a public `ScanParams` or
+`StatusLogEntry` accessor reaches neither.
+
 ## Vendor software and clean-room policy
 
 If you are contributing to the Thermo `.raw` reader, please make sure new
