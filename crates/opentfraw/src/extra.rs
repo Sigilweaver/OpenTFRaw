@@ -251,9 +251,10 @@ mod tests {
     /// Public accessor names in the `impl` block that opens with `header`.
     fn accessors<'a>(source: &'a str, header: &str) -> Vec<&'a str> {
         let start = source.find(header).expect("impl block not found");
-        let body = &source[start..];
-        let body = &body[..body.find("\n}\n").expect("impl block not closed")];
-        body.lines()
+        // `lines()` also strips the `\r` of a CRLF checkout (Windows).
+        source[start..]
+            .lines()
+            .take_while(|line| *line != "}")
             .filter_map(|line| line.strip_prefix("    pub fn "))
             .map(|rest| &rest[..rest.find('(').unwrap()])
             .collect()
