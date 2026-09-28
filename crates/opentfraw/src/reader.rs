@@ -237,6 +237,30 @@ impl<R: Read + Seek> BinaryReader<R> {
     }
 }
 
+/// Model strings from the InstID block that follows the MS controller's
+/// RunHeader (`docs/docs/format/03-raw-file-info.md` section 11), most
+/// specific first: `model[2]` always names the model, while `model[1]` is
+/// sometimes empty or a longer label.
+fn read_inst_id_models<R: Read + Seek>(r: &mut BinaryReader<R>, addr: u64) -> Result<Vec<String>> {
+    // Model names are short; a larger count means this is not an InstID block.
+    const MAX_MODEL_CHARS: u32 = 256;
+    r.seek_to(addr)?;
+    for _ in 0..3 {
+        r.read_u32()?;
+    }
+    let mut models = Vec::with_capacity(2);
+    for _ in 0..2 {
+        let start = r.position();
+        if r.read_u32()? > MAX_MODEL_CHARS {
+            return Ok(Vec::new());
+        }
+        r.seek_to(start)?;
+        models.push(r.read_pascal_string()?);
+    }
+    models.reverse();
+    Ok(models)
+}
+
 /// Compute the number of scans from the run header's declared first/last
 /// scan numbers.
 ///
@@ -386,7 +410,7 @@ impl RawFileReader {
         // Multi-controller files (e.g. UV + MS) have one RunHeader per controller.
         // The MS controller has ntrailer > 0 (v64+) or first_scan <= last_scan with
         // nsegs > 0 (v63 and earlier). We iterate all addresses and pick the best.
-        let run_header = {
+        let (run_header, run_header_end) = {
             let addrs = &raw_file_info.preamble.run_header_addrs;
             let mut chosen = None;
             for &addr in addrs {
@@ -408,16 +432,17 @@ impl RawFileReader {
                         && rh.nsegs > 0
                 };
                 if is_ms {
-                    chosen = Some(rh);
+                    chosen = Some((rh, r.position()));
                     break;
                 }
             }
             // Fall back to first address if no MS controller found
             match chosen {
-                Some(rh) => rh,
+                Some(found) => found,
                 None => {
                     r.seek_to(addrs[0])?;
-                    RunHeader::read(&mut r, version)?
+                    let rh = RunHeader::read(&mut r, version)?;
+                    (rh, r.position())
                 }
             }
         };
@@ -635,6 +660,14 @@ impl RawFileReader {
         } else {
             Vec::new()
         };
+        // Only needed when the metadata window names no model (#59); a failed
+        // read just leaves the model undetected, as before.
+        // Layout confirmed on v57, v64, and v66 files.
+        let inst_id_models = if version >= 57 {
+            read_inst_id_models(&mut r, run_header_end).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         // All BinaryReader operations are complete; reclaim the underlying source so
         // it can be used for on-demand reads (e.g. Q3 window table from scan records).
         let mut source = r.into_inner();
@@ -644,6 +677,11 @@ impl RawFileReader {
             &seq_row.inst_method,
             first_analyzer,
         );
+        let detected = match detected.model {
+            Some(_) => detected,
+            None => crate::device::DeviceFamily::detect_from_model_strings(&inst_id_models)
+                .unwrap_or(detected),
+        };
         let device_family = detected.family;
         let instrument_model = detected.model;
 
@@ -1691,6 +1729,31 @@ impl<'a> StatusLogEntry<'a> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    fn inst_id_block(model1: &str, model2: &str) -> Vec<u8> {
+        let mut bytes = vec![0u8; 12];
+        bytes.extend(crate::test_util::pascal_string(model1));
+        bytes.extend(crate::test_util::pascal_string(model2));
+        bytes.extend(crate::test_util::pascal_string("SN01234"));
+        bytes
+    }
+
+    #[test]
+    fn inst_id_models_prefer_second_string() {
+        let mut bytes = vec![0xAAu8; 8];
+        bytes.extend(inst_id_block("", "Orbitrap Exploris 120"));
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let models = read_inst_id_models(&mut r, 8).unwrap();
+        assert_eq!(models, ["Orbitrap Exploris 120", ""]);
+    }
+
+    #[test]
+    fn inst_id_models_reject_implausible_length() {
+        let mut bytes = vec![0u8; 12];
+        bytes.extend_from_slice(&100_000u32.to_le_bytes());
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert!(read_inst_id_models(&mut r, 0).unwrap().is_empty());
+    }
 
     // Regression tests for a fuzzer-found crash: with `first_scan = 0` and
     // `last_scan = u32::MAX`, the old `last_scan - first_scan + 1`

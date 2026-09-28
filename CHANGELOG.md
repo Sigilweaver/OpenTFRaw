@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run metadata and chromatograms. Run extras preserve decoded sample,
   injection, workstation, and method fields.
 
+### Changed
+
+- **Breaking (Rust):** adopts `openmassspec-core` 2.0.0 (arrow 60). Python
+  users are unaffected.
+
+### Fixed
+
+- `instrument_model` is now detected for files written without an embedded
+  instrument method. When the pre-scan-data window names no model, the
+  model strings of the InstID block that follows the MS RunHeader are
+  matched against the registry instead. Files that already detected a model
+  are unchanged. Layout confirmed on v57, v64, and v66 files. (#59)
+
 ## [1.6.0] - 2026-09-24
 
 ### Added
