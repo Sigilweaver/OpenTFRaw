@@ -809,8 +809,79 @@ fn run_analyzers(raw: &RawFileReader) -> Vec<msc::Analyzer> {
 
 impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
     fn run_metadata(&self) -> msc::RunMetadata {
+        let mut extra = ::std::collections::BTreeMap::new();
+        extra.insert("opentfraw.raw_version".into(), self.raw.version.to_string());
+        extra.insert(
+            "opentfraw.scan_format".into(),
+            format!("{:?}", self.raw.scan_format),
+        );
+        extra.insert(
+            "opentfraw.device_family".into(),
+            format!("{:?}", self.raw.device_family),
+        );
+        extra.insert(
+            "opentfraw.controller_count".into(),
+            self.raw.raw_file_info.preamble.controller_count.to_string(),
+        );
+        extra.insert(
+            "opentfraw.computer_name".into(),
+            self.raw.raw_file_info.computer_name.clone(),
+        );
+        let row = &self.raw.seq_row;
+        extra.insert("opentfraw.sample_id".into(), row.id.clone());
+        extra.insert("opentfraw.sample_comment".into(), row.comment.clone());
+        extra.insert("opentfraw.sample_vial".into(), row.vial.clone());
+        extra.insert(
+            "opentfraw.injection_row_number".into(),
+            row.injection.row_number.to_string(),
+        );
+        extra.insert(
+            "opentfraw.injection_vial".into(),
+            row.injection.vial.clone(),
+        );
+        extra.insert(
+            "opentfraw.injection_volume".into(),
+            row.injection.injection_volume.to_string(),
+        );
+        extra.insert(
+            "opentfraw.sample_weight".into(),
+            row.injection.sample_weight.to_string(),
+        );
+        extra.insert(
+            "opentfraw.sample_volume".into(),
+            row.injection.sample_volume.to_string(),
+        );
+        extra.insert(
+            "opentfraw.istd_amount".into(),
+            row.injection.istd_amount.to_string(),
+        );
+        extra.insert(
+            "opentfraw.dilution_factor".into(),
+            row.injection.dilution_factor.to_string(),
+        );
+        extra.insert(
+            "opentfraw.instrument_method_file".into(),
+            row.inst_method.clone(),
+        );
+        extra.insert(
+            "opentfraw.processing_method_file".into(),
+            row.proc_method.clone(),
+        );
+        extra.insert("opentfraw.original_file_name".into(), row.file_name.clone());
+        extra.insert("opentfraw.original_file_path".into(), row.path.clone());
+        for (i, (heading, value)) in self
+            .raw
+            .raw_file_info
+            .label_headings
+            .iter()
+            .zip(&row.user_labels)
+            .enumerate()
+        {
+            extra.insert(format!("opentfraw.user_label.{i}.heading"), heading.clone());
+            extra.insert(format!("opentfraw.user_label.{i}.value"), value.clone());
+        }
         msc::RunMetadata {
-            extra: ::std::collections::BTreeMap::new(),
+            extra,
             source_file_name: self.raw_filename.to_string(),
             source_file_format: source_file_format_cv(),
             native_id_format: native_id_format_cv(),
