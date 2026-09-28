@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Python can stream complete canonical spectrum records and read canonical
+  run metadata and chromatograms. Run extras preserve decoded sample,
+  injection, workstation, and method fields.
+
 ## [1.6.0] - 2026-09-24
 
 ### Added

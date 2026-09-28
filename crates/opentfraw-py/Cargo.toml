@@ -30,3 +30,5 @@ opentfraw.workspace = true
 openmassspec-core.workspace = true
 pyo3 = { workspace = true }
 numpy.workspace = true
+serde = "1"
+serde_json = "1"
