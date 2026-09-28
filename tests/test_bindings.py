@@ -27,6 +27,18 @@ def test_module_version():
     assert opentfraw.__version__
 
 
+def test_canonical_records(raw_file):
+    run = raw_file.run_info()
+    assert run["source_file_format"]["accession"]
+    assert run["source_file_name"]
+    record = next(raw_file.iter_records())
+    assert record["native_id"]
+    assert len(record["mz"]) == len(record["intensity"])
+    assert isinstance(record.get("extra", {}), dict)
+    for chrom in raw_file.read_chromatograms():
+        assert len(chrom["time_sec"]) == len(chrom["intensity"])
+
+
 def test_open_and_repr(raw_file):
     assert isinstance(raw_file, opentfraw.RawFile)
     r = repr(raw_file)
@@ -79,6 +91,8 @@ def test_sample_info(raw_file):
         "id",
         "comment",
         "vial",
+        "row_number",
+        "injection_vial",
         "injection_volume",
         "sample_weight",
         "sample_volume",

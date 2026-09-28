@@ -260,6 +260,23 @@ impl DeviceFamily {
         }
     }
 
+    /// Match InstID model strings (see `docs/docs/format/03-raw-file-info.md`
+    /// section 11) against the registry, in the order given. Used when the
+    /// pre-scan-data window names no model, e.g. files written without an
+    /// embedded instrument method (#59).
+    pub fn detect_from_model_strings(models: &[String]) -> Option<DetectedInstrument> {
+        models.iter().find_map(|model| {
+            let hay = utf16le(model);
+            MODEL_REGISTRY
+                .iter()
+                .find(|(name, _)| contains_word(&hay, &utf16le(name)))
+                .map(|(name, family)| DetectedInstrument {
+                    model: Some(name),
+                    family: *family,
+                })
+        })
+    }
+
     /// Keyword heuristic over audit-tag + method path, with analyzer-type
     /// fallback. Retained as a secondary path when no model string is found.
     pub fn detect_heuristic(
@@ -336,6 +353,18 @@ mod tests {
 
     fn encode(s: &str) -> Vec<u8> {
         utf16le(s)
+    }
+
+    #[test]
+    fn model_strings_match_registry_in_order() {
+        let models = vec![
+            "Q Exactive Plus Orbitrap".to_string(),
+            "Orbitrap Exploris 120".to_string(),
+        ];
+        let det = DeviceFamily::detect_from_model_strings(&models).unwrap();
+        assert_eq!(det.model, Some("Q Exactive Plus"));
+        assert_eq!(det.family, DeviceFamily::QOrbitrap);
+        assert!(DeviceFamily::detect_from_model_strings(&["".to_string()]).is_none());
     }
 
     #[test]
