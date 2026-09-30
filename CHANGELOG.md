@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Source CID energy now appears as `sid=<energy>` in scan filters when a
+  positive per-scan trailer value or an explicitly linked method XML scan event
+  supplies it. Source energy and its provenance also reach Python and mzML
+  extra fields. Unknown source-on flags remain unset; method settings are
+  never broadcast across unrelated scan events.
+
 ## [2.0.0] - 2026-09-28
 
 ### Added

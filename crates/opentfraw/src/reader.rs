@@ -334,6 +334,9 @@ pub struct RawFileReader {
     /// collision energy is read from per-scan parameters instead, so this map is
     /// empty for v66/TSQ Altis files.
     pub srm_ce_by_event: HashMap<u16, f64>,
+    /// Declared source CID energy (eV), keyed by the method XML's one-based
+    /// (segment, event) IDs. Applied only with explicit matching trailer IDs.
+    pub source_cid_by_method_event: std::collections::BTreeMap<(u16, u16), f64>,
 }
 
 // -- Multi-controller metadata --
@@ -792,7 +795,7 @@ impl RawFileReader {
             }
         };
 
-        Ok(Self {
+        let mut reader = Self {
             header,
             seq_row,
             raw_file_info,
@@ -814,7 +817,13 @@ impl RawFileReader {
             srm_q1_by_event,
             srm_q3_windows,
             srm_ce_by_event,
-        })
+            source_cid_by_method_event: Default::default(),
+        };
+        if let Some(text) = reader.instrument_method_text(&mut source) {
+            reader.source_cid_by_method_event =
+                crate::instrument_method::source_cid_settings(&text);
+        }
+        Ok(reader)
     }
 
     /// Open a RAW file from a path.
@@ -1104,13 +1113,48 @@ impl RawFileReader {
         let supplemental = params
             .as_ref()
             .and_then(|p| p.supplemental_activation_energy());
-        Some(crate::scan_filter::build_filter(
+        Some(crate::scan_filter::build_filter_with_source_cid(
             event,
             entry,
             precursor,
             energy,
             supplemental,
+            self.source_cid_energy_ev(scan_number),
         ))
+    }
+
+    /// Source CID energy (eV) from this scan's trailer, or from its explicitly
+    /// linked method XML event when the trailer has no source CID energy.
+    /// Method values are declared settings, not a decoded source-on flag.
+    pub fn source_cid_energy_ev(&self, scan_number: u32) -> Option<f64> {
+        self.source_cid_setting(scan_number)
+            .map(|(energy, _)| energy)
+    }
+
+    /// Provenance of [`Self::source_cid_energy_ev`]: `trailer` or `instrument_method`.
+    pub fn source_cid_energy_source(&self, scan_number: u32) -> Option<&'static str> {
+        self.source_cid_setting(scan_number)
+            .map(|(_, source)| source)
+    }
+
+    fn source_cid_setting(&self, scan_number: u32) -> Option<(f64, &'static str)> {
+        let params = self.scan_params(scan_number)?;
+        if let Some(energy) = params.source_cid_energy_ev() {
+            // Do not replace a present but invalid acquisition value with a method setting.
+            return (energy.is_finite() && energy >= 0.0).then_some((energy, "trailer"));
+        }
+        let record = params.record();
+        // A malformed source CID field is not evidence that the trailer lacks it.
+        if record.get("Source CID eV:").is_some() || record.get("API Source CID Energy:").is_some()
+        {
+            return None;
+        }
+        let segment = crate::instrument_method::trailer_id(record, "Scan Segment:")?;
+        let event = crate::instrument_method::trailer_id(record, "Scan Event:")?;
+        self.source_cid_by_method_event
+            .get(&(segment, event))
+            .copied()
+            .map(|energy| (energy, "instrument_method"))
     }
 
     /// Return all scan retention times (minutes) in scan order (1-based scan numbers).

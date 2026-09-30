@@ -57,6 +57,26 @@ pub fn build_filter(
     activation_energy: Option<f64>,
     supplemental_energy: Option<f64>,
 ) -> String {
+    build_filter_with_source_cid(
+        event,
+        index_entry,
+        precursor_mz,
+        activation_energy,
+        supplemental_energy,
+        None,
+    )
+}
+
+/// Build a filter with an explicitly sourced energy. Zero does not establish
+/// that source CID is off, so it is omitted rather than rendered as `!sid`.
+pub(crate) fn build_filter_with_source_cid(
+    event: &ScanEvent,
+    index_entry: &ScanIndexEntry,
+    precursor_mz: Option<f64>,
+    activation_energy: Option<f64>,
+    supplemental_energy: Option<f64>,
+    source_cid_energy_ev: Option<f64>,
+) -> String {
     let mut out = String::with_capacity(96);
     let p = &event.preamble;
     let analyzer = p.analyzer();
@@ -87,6 +107,11 @@ pub fn build_filter(
     if let Some(ion) = p.ionization() {
         out.push_str(ion.as_str());
         out.push(' ');
+    }
+
+    // Source CID follows the ionization tokens in the public filter grammar.
+    if let Some(energy) = source_cid_energy_ev.filter(|e| e.is_finite() && *e > 0.0) {
+        out.push_str(&format!("sid={energy:.2} "));
     }
 
     // Dependent-scan flag
@@ -290,6 +315,33 @@ mod tests {
             low_mz: low,
             high_mz: high,
             offset: 0,
+        }
+    }
+
+    #[test]
+    fn source_cid_token_placement_and_unknown_values() {
+        let ev = ScanEvent {
+            preamble: make_preamble(0, 1, 1, 2),
+            reactions: vec![],
+            fraction_collectors: vec![],
+            coefficients: vec![],
+        };
+        let idx = make_index(100.0, 200.0);
+        assert_eq!(
+            build_filter_with_source_cid(&ev, &idx, None, None, None, Some(20.0)),
+            "FTMS - p NSI sid=20.00 SIM ms [100.0000-200.0000]"
+        );
+        for energy in [
+            None,
+            Some(0.0),
+            Some(-1.0),
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+        ] {
+            assert_eq!(
+                build_filter_with_source_cid(&ev, &idx, None, None, None, energy),
+                build_filter(&ev, &idx, None, None, None)
+            );
         }
     }
 

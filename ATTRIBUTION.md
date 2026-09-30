@@ -32,6 +32,9 @@ Corpus files were downloaded from the [PRIDE Archive](https://www.ebi.ac.uk/prid
 
 ## Rust dependencies
 
+- [roxmltree](https://github.com/RazrFalcon/roxmltree) -- read-only parsing of
+  embedded method XML (Yevhenii Reizner, MIT/Apache-2.0).
+
 - [thiserror](https://github.com/dtolnay/thiserror) -- derive macro for Error impls (David Tolnay, MIT/Apache-2.0)
 - [pyo3](https://github.com/PyO3/pyo3) -- Rust/Python bindings (PyO3 contributors, MIT/Apache-2.0)
 - [numpy](https://github.com/PyO3/rust-numpy) -- PyO3 numpy integration (PyO3 contributors, BSD-2-Clause)
