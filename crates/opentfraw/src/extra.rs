@@ -47,6 +47,7 @@ impl ExtraFields {
 /// The values an extra field is read from.
 struct Scan<'a> {
     meta: &'a ScanMetadata,
+    raw: &'a RawFileReader,
     params: Option<ScanParams<'a>>,
     status: Option<StatusLogEntry<'a>>,
 }
@@ -159,7 +160,14 @@ const EXTRA_FIELDS: &[(&str, Getter)] = &[
         param(s, |p| p.reagent_ion_agc())
     }),
     ("opentfraw.source_cid_energy_ev", |s| {
-        param(s, |p| p.source_cid_energy_ev())
+        s.raw
+            .source_cid_energy_ev(s.meta.scan_number)
+            .map(|e| e.to_string())
+    }),
+    ("opentfraw.source_cid_energy_source", |s| {
+        s.raw
+            .source_cid_energy_source(s.meta.scan_number)
+            .map(str::to_owned)
     }),
     ("opentfraw.dynamic_rt_shift_min", |s| {
         param(s, |p| p.dynamic_rt_shift_min())
@@ -225,6 +233,7 @@ pub fn scan_extras(
     }
     let scan = Scan {
         meta,
+        raw,
         params: raw.scan_params(meta.scan_number),
         status: raw.status_log_entry(meta.scan_number),
     };

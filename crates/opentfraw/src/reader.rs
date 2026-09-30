@@ -334,6 +334,9 @@ pub struct RawFileReader {
     /// collision energy is read from per-scan parameters instead, so this map is
     /// empty for v66/TSQ Altis files.
     pub srm_ce_by_event: HashMap<u16, f64>,
+    /// Declared source CID energy (eV), keyed by the method XML's one-based
+    /// (segment, event) IDs. Applied only with explicit matching trailer IDs.
+    pub source_cid_by_method_event: std::collections::BTreeMap<(u16, u16), f64>,
 }
 
 // -- Multi-controller metadata --
@@ -382,6 +385,96 @@ pub struct ControllerInfo {
     pub start_time: f64,
     /// Acquisition end time (minutes).
     pub end_time: f64,
+}
+
+// Validate known variable-length v66 event families against every preamble and
+// the exact end of the trailer stream. Stream length alone is ambiguous: a
+// 232/288-byte Lumos DIA stream can also fit the older 232/344-byte equation.
+fn matches_v66_event_layout<R: Read + Seek>(
+    r: &mut BinaryReader<R>,
+    n_events: u32,
+    stream_end: u64,
+    body_primary: usize,
+    body_dependent: usize,
+) -> Result<bool> {
+    let start = r.position();
+    let result = (|| {
+        if stream_end > r.length()? {
+            return Ok(false);
+        }
+        let mut signature = None;
+        let mut preamble = [0u8; 136];
+        for _ in 0..n_events {
+            let position = r.position();
+            if stream_end.saturating_sub(position) < preamble.len() as u64 {
+                return Ok(false);
+            }
+            r.read_bytes_into(&mut preamble)?;
+            // Use the stable prefix from this file, plus all documented enum
+            // fields, to reject body bytes that merely resemble a scan level.
+            let prefix = [preamble[0], preamble[1], preamble[2], preamble[3]];
+            let expected = *signature.get_or_insert(prefix);
+            if prefix != expected
+                || crate::Polarity::from_byte(preamble[4]).is_none()
+                || crate::ScanMode::from_byte(preamble[5]).is_none()
+                || !(1..=8).contains(&preamble[6])
+                || !matches!(
+                    crate::ScanType::from_byte(preamble[7]),
+                    Some(scan_type) if scan_type != crate::ScanType::Undefined
+                )
+                || preamble[10] > 1
+                || crate::Ionization::from_byte(preamble[11]).is_none()
+                || crate::Analyzer::from_byte(preamble[40]).is_none()
+            {
+                return Ok(false);
+            }
+            let body = if preamble[6] == 1 && preamble[10] == 0 {
+                body_primary
+            } else {
+                body_dependent
+            };
+            if stream_end.saturating_sub(r.position()) < body as u64 {
+                return Ok(false);
+            }
+            r.seek_to(r.position() + body as u64)?;
+        }
+        Ok(r.position() == stream_end)
+    })();
+    r.seek_to(start)?;
+    result
+}
+
+fn known_v66_body_sizes<R: Read + Seek>(
+    r: &mut BinaryReader<R>,
+    n_events: u32,
+    stream_end: u64,
+) -> Result<Option<(usize, usize)>> {
+    let stream_bytes = stream_end.saturating_sub(r.position());
+    let n = u64::from(n_events);
+    const PRIMARY_EVENT: u64 = 232;
+    for dependent_event in [344u64, 288] {
+        let Some(numerator) = n
+            .checked_mul(dependent_event)
+            .and_then(|total| total.checked_sub(stream_bytes))
+        else {
+            continue;
+        };
+        let gap = dependent_event - PRIMARY_EVENT;
+        if numerator % gap != 0 {
+            continue;
+        }
+        let n_primary = numerator / gap;
+        // Uniform streams retain their existing size inference below.
+        if n_primary == 0 || n_primary >= n {
+            continue;
+        }
+        let body_primary = (PRIMARY_EVENT - 136) as usize;
+        let body_dependent = (dependent_event - 136) as usize;
+        if matches_v66_event_layout(r, n_events, stream_end, body_primary, body_dependent)? {
+            return Ok(Some((body_primary, body_dependent)));
+        }
+    }
+    Ok(None)
 }
 
 impl RawFileReader {
@@ -481,9 +574,9 @@ impl RawFileReader {
         // Tribrid instruments (Eclipse, Fusion Lumos): primary (MS1) scans and
         // dependent (MS2+) scans have different body layouts:
         //   Primary event:   232 bytes total (preamble 136 + body 96)
-        //   Dependent event: 344 bytes total (preamble 136 + body 208)
-        // Confirmed empirically across Orbitrap Eclipse (EThcD) and Fusion Lumos
-        // (DIA, MS3) files.
+        //   Dependent event: 288 or 344 bytes total (body 152 or 208)
+        // Lumos DIA (PXD031322) uses 232/288; Eclipse EThcD and other Lumos
+        // workflows use 232/344. Check boundaries before the historical inference.
         let preamble_size = ScanEventPreamble::size_for_version(version);
         let (v66_body_primary, v66_body_dependent): (usize, usize) =
             if version >= 66 && n_events > 0 {
@@ -492,7 +585,11 @@ impl RawFileReader {
                     .saturating_sub(run_header.scan_trailer_addr)
                     .saturating_sub(4);
                 let remainder = stream_bytes % n_events as u64;
-                if remainder == 0 {
+                if let Some(sizes) =
+                    known_v66_body_sizes(&mut r, n_events, run_header.scan_params_addr)?
+                {
+                    sizes
+                } else if remainder == 0 {
                     // Uniform event size (Q Exactive, Exploris, etc.)
                     let body = (stream_bytes / n_events as u64) as usize;
                     let body = body.saturating_sub(preamble_size);
@@ -792,7 +889,7 @@ impl RawFileReader {
             }
         };
 
-        Ok(Self {
+        let mut reader = Self {
             header,
             seq_row,
             raw_file_info,
@@ -814,7 +911,13 @@ impl RawFileReader {
             srm_q1_by_event,
             srm_q3_windows,
             srm_ce_by_event,
-        })
+            source_cid_by_method_event: Default::default(),
+        };
+        if let Some(text) = reader.instrument_method_text(&mut source) {
+            reader.source_cid_by_method_event =
+                crate::instrument_method::source_cid_settings(&text);
+        }
+        Ok(reader)
     }
 
     /// Open a RAW file from a path.
@@ -1104,13 +1207,48 @@ impl RawFileReader {
         let supplemental = params
             .as_ref()
             .and_then(|p| p.supplemental_activation_energy());
-        Some(crate::scan_filter::build_filter(
+        Some(crate::scan_filter::build_filter_with_source_cid(
             event,
             entry,
             precursor,
             energy,
             supplemental,
+            self.source_cid_energy_ev(scan_number),
         ))
+    }
+
+    /// Source CID energy (eV) from this scan's trailer, or from its explicitly
+    /// linked method XML event when the trailer has no source CID energy.
+    /// Method values are declared settings, not a decoded source-on flag.
+    pub fn source_cid_energy_ev(&self, scan_number: u32) -> Option<f64> {
+        self.source_cid_setting(scan_number)
+            .map(|(energy, _)| energy)
+    }
+
+    /// Provenance of [`Self::source_cid_energy_ev`]: `trailer` or `instrument_method`.
+    pub fn source_cid_energy_source(&self, scan_number: u32) -> Option<&'static str> {
+        self.source_cid_setting(scan_number)
+            .map(|(_, source)| source)
+    }
+
+    fn source_cid_setting(&self, scan_number: u32) -> Option<(f64, &'static str)> {
+        let params = self.scan_params(scan_number)?;
+        if let Some(energy) = params.source_cid_energy_ev() {
+            // Do not replace a present but invalid acquisition value with a method setting.
+            return (energy.is_finite() && energy >= 0.0).then_some((energy, "trailer"));
+        }
+        let record = params.record();
+        // A malformed source CID field is not evidence that the trailer lacks it.
+        if record.get("Source CID eV:").is_some() || record.get("API Source CID Energy:").is_some()
+        {
+            return None;
+        }
+        let segment = crate::instrument_method::trailer_id(record, "Scan Segment:")?;
+        let event = crate::instrument_method::trailer_id(record, "Scan Event:")?;
+        self.source_cid_by_method_event
+            .get(&(segment, event))
+            .copied()
+            .map(|energy| (energy, "instrument_method"))
     }
 
     /// Return all scan retention times (minutes) in scan order (1-based scan numbers).
@@ -1899,5 +2037,131 @@ mod tests {
         let bytes = 0u64.to_le_bytes().to_vec();
         let mut r = BinaryReader::new(Cursor::new(bytes));
         assert_eq!(r.read_windows_filetime().unwrap(), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod dia_layout_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn events(levels: &[u8], primary_body: usize, dependent_body: usize) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for (index, &level) in levels.iter().enumerate() {
+            let body_size = if level == 1 {
+                primary_body
+            } else {
+                dependent_body
+            };
+            let mut preamble = vec![0u8; 136];
+            preamble[..4].copy_from_slice(&[1, 1, 2, 1]);
+            preamble[4] = 1;
+            preamble[6] = level;
+            preamble[11] = 5;
+            preamble[40] = 4;
+            bytes.extend(preamble);
+            let mut body = vec![0u8; body_size];
+            if level > 1 {
+                body[..4].copy_from_slice(&1u32.to_le_bytes());
+                body[4..12].copy_from_slice(&(350.0 + index as f64).to_le_bytes());
+                body[12..20].copy_from_slice(&3.0f64.to_le_bytes());
+                body[20..28].copy_from_slice(&32.0f64.to_le_bytes());
+            }
+            let fc = match body_size {
+                96 => 8,
+                136 | 152 => 64,
+                208 => 120,
+                _ => unreachable!(),
+            };
+            body[fc..fc + 8].copy_from_slice(&200.0f64.to_le_bytes());
+            body[fc + 8..fc + 16].copy_from_slice(&2000.0f64.to_le_bytes());
+            bytes.extend(body);
+        }
+        bytes
+    }
+
+    #[test]
+    fn lumos_dia_layout_keeps_every_window_aligned() {
+        let levels = [1, 2, 2, 2, 2];
+        let bytes = events(&levels, 96, 152);
+        let end = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        // Both aggregate equations fit this stream, but only 232/288 aligns.
+        assert_eq!(
+            known_v66_body_sizes(&mut r, 5, end).unwrap(),
+            Some((96, 152))
+        );
+        assert_eq!(r.position(), 0);
+        for (index, level) in levels.into_iter().enumerate() {
+            let event = ScanEvent::read(&mut r, 66, 96, 152).unwrap();
+            assert_eq!(event.preamble.bytes[6], level);
+            if level == 2 {
+                assert_eq!(event.reactions.len(), 1);
+                assert_eq!(event.reactions[0].precursor_mz, 350.0 + index as f64);
+            }
+        }
+        assert_eq!(r.position(), end);
+    }
+
+    #[test]
+    fn eclipse_variable_layout_stays_232_344() {
+        let bytes = events(&[1, 2, 2, 3, 2], 96, 208);
+        let end = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(
+            known_v66_body_sizes(&mut r, 5, end).unwrap(),
+            Some((96, 208))
+        );
+        assert_eq!(r.position(), 0);
+    }
+
+    #[test]
+    fn variable_layout_is_not_mistaken_for_uniform_when_average_is_integral() {
+        let bytes = events(&[1, 2], 96, 152);
+        let end = bytes.len() as u64;
+        assert_eq!(end % 2, 0);
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(
+            known_v66_body_sizes(&mut r, 2, end).unwrap(),
+            Some((96, 152))
+        );
+    }
+
+    #[test]
+    fn q_exactive_uniform_layout_is_not_reinterpreted_as_variable() {
+        let bytes = events(&[1, 2, 2, 2, 2, 2, 2], 136, 136);
+        let end = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(known_v66_body_sizes(&mut r, 7, end).unwrap(), None);
+        assert_eq!(r.position(), 0);
+    }
+
+    #[test]
+    fn truncated_stream_cannot_validate_a_layout() {
+        let mut bytes = events(&[1, 2, 2, 2, 2], 96, 152);
+        let end = bytes.len() as u64;
+        bytes.pop();
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert!(!matches_v66_event_layout(&mut r, 5, end, 96, 152).unwrap());
+        assert_eq!(r.position(), 0);
+    }
+
+    #[test]
+    fn undefined_scan_type_does_not_validate_accidental_body_bytes() {
+        let mut bytes = events(&[1, 2, 2, 2, 2], 96, 152);
+        let end = bytes.len() as u64;
+        bytes[232 + 288 + 7] = crate::ScanType::Undefined as u8;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert!(!matches_v66_event_layout(&mut r, 5, end, 96, 152).unwrap());
+        assert_eq!(r.position(), 0);
+    }
+
+    #[test]
+    fn count_and_end_must_match_the_complete_stream() {
+        let bytes = events(&[1, 2, 2, 2, 2], 96, 152);
+        let end = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert!(!matches_v66_event_layout(&mut r, 4, end, 96, 152).unwrap());
+        assert_eq!(r.position(), 0);
     }
 }

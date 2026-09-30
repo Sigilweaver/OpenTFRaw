@@ -113,7 +113,34 @@ other scan parameters. Version-dependent size.
 | v63, v64 | 128 |
 | v66 | 136 |
 
-### 22.3 Filter Line Construction
+### 22.3 Source fragmentation energy
+
+The preamble's source-fragmentation flag remains undecoded. Source CID energy
+is obtained from `Source CID eV:` / `API Source CID Energy:` trailer fields.
+If those fields are absent, a supported embedded `InstrumentSetupMethod` XML
+can supply `Fragmentation_Source` with `unit="eV"`. The XML's one-based
+`Segment id` / `ScanEvent id` must match explicitly typed per-scan
+`Scan Segment:` / `Scan Event:` trailer IDs; the scan-index IDs are not used
+as a guessed fallback. Invalid or ambiguous XML is ignored, and unsupported
+XML namespaces are ignored.
+
+Positive finite energy renders as `sid=<energy>` after ionization, with two
+decimal places. A zero energy is preserved in metadata but does not establish
+an off flag, so neither `sid=0` nor `!sid` is inferred. The
+`opentfraw.source_cid_energy_ev` extra field carries the resolved value, and
+`opentfraw.source_cid_energy_source` records `trailer` or `instrument_method`.
+A method-derived value is the declared event setting, not an independently
+decoded source-on flag. Other method schemas or scans without explicit trailer
+IDs retain an unknown source energy.
+
+Evidence: the public PRIDE PXD068962 `insource-CID.raw` acquisition contains
+`Fragmentation_Source` 200 eV for segment 1 / event 1, matching all 3,047 scan
+trailers, which omit a source-CID energy field. The ignored Rust regression
+in `crates/opentfraw/tests/source_cid.rs` can be run with
+`OPENTFRAW_SOURCE_CID_RAW` pointing to that acquisition. The Python regression
+uses the same environment variable.
+
+### 22.4 Filter Line Construction
 
 A human-readable filter line can be constructed from the preamble:
 
