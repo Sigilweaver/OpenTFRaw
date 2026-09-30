@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fusion Lumos DIA scan events now validate the 232/288-byte layout before
+  choosing a variable-length event family. This keeps isolation windows aligned
+  across the complete PXD031322 event stream and preserves existing 232/344
+  and uniform event layouts. (#44)
 - Source CID energy now appears as `sid=<energy>` in scan filters when a
   positive per-scan trailer value or an explicitly linked method XML scan event
   supplies it. Source energy and its provenance also reach Python and mzML
