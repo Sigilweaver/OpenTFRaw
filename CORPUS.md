@@ -150,39 +150,40 @@ The selection heuristic - `ntrailer > 0` (v64+) or `nsegs > 0 && first_scan
 
 ## Open Issues
 
-### DIA isolation window m/z (Orbitrap Exploris 480 and similar)
+### DIA isolation-window centers (issue #44)
 
-For the Exploris 480 DIA files in corpus (PXD035500), the isolation window
-center m/z is currently absent from filter strings.  Investigation findings:
+A 2026-09-29 investigation of public PXD035500 Exploris 480 files
+`RN_SGLab_210301_DN_vDIA_01.raw` and
+`RN_SGLab_210301_DN_vDIA_15.raw`, and PXD031322 Fusion Lumos file
+`OFL001513-YLL-GPF-15K-1.raw`, corrected the earlier interpretation:
 
-- **Scan event body format**: DIA MS2 scan events use a uniform 136-byte body
-  (event size = 272 bytes total).  The body[8..12] f32 field holds a value in
-  the range ~3.8-5.0, which is in instrument frequency space, not m/z.  There
-  is no reaction structure (np = 0 at body[4..8]) and no m/z at any body offset.
+- The isolation center is an f64 at scan-event body offset 4, not a
+  frequency value. Reading only its high four bytes at body[8..12] as f32
+  produced the misleading values near 3.8-5.0. No frequency-to-m/z
+  conversion is needed for these centers. The existing offset-4 reaction
+  decoder recovers the Exploris centers.
+- Matching scan-parameter schemas are present close to the error log in
+  both Exploris files (332 and 1196 bytes from `error_log_addr`, respectively).
+  Each describes a 1004-byte record. The current 4 MiB forward-search cap
+  does not block recovery on these files. The Lumos schema describes a
+  567-byte record and is also recovered by the existing search.
+- The Lumos DIA file uses 232-byte primary events and 288-byte MS2 events,
+  rather than the 232/344-byte family used by other tribrid workflows.
+  Both size equations can fit its total event-stream length. The reader
+  now validates every preamble and the exact stream end before selecting
+  a known variable layout.
+- Decoding the complete Lumos event metadata yields 2308 MS1 and 150020
+  MS2 events, with an isolation center on every MS2. The first centers
+  (351.4096, 353.4105, 355.4114) agree with the file's embedded method table.
 
-- **Scan params**: The file has 1004 bytes/scan of scan params data starting at
-  `scan_params_addr`, but the GenericDataHeader (GDH) that describes the record
-  schema was not found anywhere in the 8 MB window between the error log and
-  scan_trailer that `find_forward` searches.  As a result `scan_parameters` is
-  empty for all scans in this file and `ScanParams` accessors return `None`.
-
-- **What is needed**: Locate the GDH for Exploris 480 scan params (it may be
-  outside the current search window, or use a different header format).  Once
-  the schema is found, the calibration coefficients (conversion parameters A, B,
-  C) inside the scan params record can be used to convert frequency to m/z and
-  recover the isolation window center.
-
-- **Workaround**: For instruments where the GDH is found correctly (Q Exactive,
-  Fusion Lumos, Eclipse), `ScanParams::isolation_width_mz()` and the
-  `monoisotopic_mz()` family already work.  Eclipse DIA files (PXD038440, once
-  downloaded) will clarify whether tribrid instruments store the isolation m/z
-  in the reaction structure (np > 0) as DDA scans do, bypassing the calibration
-  problem entirely.
+Evidence came from bounded HTTP byte ranges of the public RAW files,
+without vendor software or vendor-generated output. Full-spectrum export
+and whole-file decoding still require a complete target fixture.
 
 ### Acquisition modes not yet in corpus
 
 | Mode | Notes |
 | ---- | ----- |
-| Eclipse DIA | DIA on tribrid Orbitrap: needed to confirm whether tribrid instruments store isolation m/z in reaction structure (np>0) as DDA scans do. No confirmed Eclipse DIA PRIDE accession with accessible RAW files identified yet. The existing Fusion Lumos DIA files (PXD031322) show the same filter gap as Exploris 480, suggesting the isolation m/z is absent in the tribrid scan event body for DIA as well. |
+| Eclipse DIA | DIA on tribrid Orbitrap: needed to confirm whether tribrid instruments store isolation m/z in reaction structure (np>0) as DDA scans do. No confirmed Eclipse DIA PRIDE accession with accessible RAW files identified yet. Fusion Lumos DIA files (PXD031322) carry direct isolation centers at body offset 4; Eclipse DIA remains unverified. |
 | SPS-MS3 (TMT) | Synchronous precursor selection MS3 for isobaric quantification; differs from standard MS3 in the number of simultaneous precursor m/z in the scan event body. |
 | ECD / IRMPD | Both enum variants implemented; no corpus files yet. |
