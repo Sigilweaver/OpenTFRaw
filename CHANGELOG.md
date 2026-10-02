@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Separate matched and configured lock-mass counts in Rust accessors, Python
+  extras, canonical spectrum records, and mzML userParams, including status-log
+  variants. Missing matched counts stay absent rather than becoming the
+  configured count. The existing combined accessor and extra key retain their
+  compatibility fallback; `scan_filter()` still leaves the unproven `lock`
+  token unset. (#58)
+
 ### Fixed
 
 - Fusion Lumos DIA scan events now validate the 232/288-byte layout before
