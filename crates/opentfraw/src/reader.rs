@@ -1465,7 +1465,9 @@ impl<'a> ScanParams<'a> {
         self.orbitrap_resolution()
     }
 
-    /// Number of lock masses found / matched.
+    /// Compatibility alias for [`Self::number_of_lock_masses`], including its
+    /// configured-count fallback. Use [`Self::number_of_matched_lock_masses`]
+    /// when only actual matches are wanted.
     pub fn number_of_lm_found(&self) -> Option<i32> {
         self.number_of_lock_masses()
     }
@@ -1698,11 +1700,35 @@ impl<'a> ScanParams<'a> {
             .or_else(|| self.0.get_f64("LM m/z-Correction (ppm):"))
     }
 
-    /// Number of lock masses found.
+    /// Compatibility count: matched lock masses, falling back to the configured
+    /// count when the matched-count label is absent or has an unsupported type.
+    ///
+    /// The two labels describe different quantities. Prefer
+    /// [`Self::number_of_matched_lock_masses`] and
+    /// [`Self::number_of_configured_lock_masses`] for new code. This accessor
+    /// retains its historical fallback behavior.
     pub fn number_of_lock_masses(&self) -> Option<i32> {
         self.0
             .get_i32("Number of LM Found:")
             .or_else(|| self.0.get_i32("Number of Lock Masses:"))
+    }
+
+    /// Number of lock-mass peaks found in this record (`Number of LM Found:`).
+    ///
+    /// Does not fall back to the configured count. Absent, mistyped, or negative
+    /// counts return `None`; zero is preserved. Neither zero nor a positive
+    /// count establishes whether a correction was applied to this scan.
+    pub fn number_of_matched_lock_masses(&self) -> Option<i32> {
+        self.0.get_i32("Number of LM Found:").filter(|&n| n >= 0)
+    }
+
+    /// Number of configured lock masses (`Number of Lock Masses:`).
+    ///
+    /// Does not fall back to the matched count. Absent, mistyped, or negative
+    /// counts return `None`; zero is preserved. A configured count does not
+    /// establish whether any lock masses matched or correction was applied.
+    pub fn number_of_configured_lock_masses(&self) -> Option<i32> {
+        self.0.get_i32("Number of Lock Masses:").filter(|&n| n >= 0)
     }
 
     /// Orbitrap resolution setting (not measured, but requested).
@@ -1835,11 +1861,35 @@ impl<'a> StatusLogEntry<'a> {
             .or_else(|| self.0.get_f32("Capillary Temp:").map(f64::from))
     }
 
-    /// Number of lock masses found.
+    /// Compatibility count: matched lock masses, falling back to the configured
+    /// count when the matched-count label is absent or has an unsupported type.
+    ///
+    /// The two labels describe different quantities. Prefer
+    /// [`Self::number_of_matched_lock_masses`] and
+    /// [`Self::number_of_configured_lock_masses`] for new code. This accessor
+    /// retains its historical fallback behavior.
     pub fn number_of_lock_masses(&self) -> Option<i32> {
         self.0
             .get_i32("Number of LM Found:")
             .or_else(|| self.0.get_i32("Number of Lock Masses:"))
+    }
+
+    /// Number of lock-mass peaks found in this record (`Number of LM Found:`).
+    ///
+    /// Does not fall back to the configured count. Absent, mistyped, or negative
+    /// counts return `None`; zero is preserved. Neither zero nor a positive
+    /// count establishes whether a correction was applied to this scan.
+    pub fn number_of_matched_lock_masses(&self) -> Option<i32> {
+        self.0.get_i32("Number of LM Found:").filter(|&n| n >= 0)
+    }
+
+    /// Number of configured lock masses (`Number of Lock Masses:`).
+    ///
+    /// Does not fall back to the matched count. Absent, mistyped, or negative
+    /// counts return `None`; zero is preserved. A configured count does not
+    /// establish whether any lock masses matched or correction was applied.
+    pub fn number_of_configured_lock_masses(&self) -> Option<i32> {
+        self.0.get_i32("Number of Lock Masses:").filter(|&n| n >= 0)
     }
 
     /// Get any field by name (pass-through to the underlying record).

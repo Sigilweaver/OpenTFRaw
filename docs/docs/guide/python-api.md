@@ -53,6 +53,32 @@ so its precursor, collision-energy and scan-mode values match what
 carries under normalized `opentfraw.*` keys; `opentfraw.extra_field_keys()`
 lists them all.
 
+## Lock-mass counts
+
+`scan()["extra"]`, `iter_records()`, and mzML spectrum userParams distinguish
+these trailer fields:
+
+| Extra key | Trailer label | Meaning |
+| --- | --- | --- |
+| `opentfraw.number_of_matched_lock_masses` | `Number of LM Found:` | Peaks matched in this scan |
+| `opentfraw.number_of_configured_lock_masses` | `Number of Lock Masses:` | Lock masses configured for acquisition |
+
+The corresponding `opentfraw.status.*` keys read the instrument-status log.
+Missing, mistyped, or negative counts are omitted; an explicit zero is retained.
+The older `opentfraw.number_of_lock_masses` key retains its compatibility
+fallback from matched to configured count, so it must not be interpreted as a
+matched count when only configuration is available.
+
+Counts do not establish whether correction was applied. In the public
+[Q Exactive HF-X PXD071477](https://www.ebi.ac.uk/pride/archive/projects/PXD071477)
+and [Exploris 480 PXD064947](https://www.ebi.ac.uk/pride/archive/projects/PXD064947)
+acquisitions, zero-match scans retain the correction from the latest matched
+scan, including zero and positive matches within the same MS1 event.
+[Q Exactive Plus MTBLS5657](https://www.ebi.ac.uk/metabolights/MTBLS5657)
+provides a separate negative-mode positive-match control. `scan_filter()` does
+not yet render `lock`: a validated per-scan flag or equivalent correction-state
+interpretation is still needed, including inherited and valid zero corrections.
+
 ## Per-scan and acquisition metadata
 
 ```python
