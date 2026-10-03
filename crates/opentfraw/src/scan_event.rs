@@ -175,7 +175,8 @@ impl ScanEvent {
     ///   body[4..]:    n_reactions * 32-byte Reaction records
     ///   body[body_size-88..body_size-72]: FractionCollector (scan window)
     ///
-    /// In both cases nparam + coefficients live at body[body_size-64..].
+    /// Calibration follows the FractionCollector in uniform events and
+    /// 96-byte primary bodies; tribrid dependent bodies use body_size-64.
     fn read_v66<R: Read + Seek>(
         r: &mut BinaryReader<R>,
         preamble: ScanEventPreamble,
@@ -239,10 +240,19 @@ impl ScanEvent {
         // that is offset 80; the legacy `body_size - 64` only coincides with it
         // when body_size == 144 (e.g. Q Exactive), so Exploris (body_size 136)
         // came back with no coefficients and its profile m/z was mis-converted.
-        // Use the FC-relative offset for that family; other layouts keep the
-        // legacy offset.
+        // In the 96-byte primary layout (e.g. Fusion Lumos), FC is at offset 8
+        // and nparam is at 24, not body_size - 64 = 32. Limit this additional
+        // case to the observed body size: short ion-trap and tribrid dependent
+        // bodies have different tails and must keep their existing offsets.
         let np_off = match fc_offset {
             Some(64) => 80,
+            Some(8)
+                if body_size == 96
+                    && preamble.bytes.get(6).copied().unwrap_or(0) <= 1
+                    && !preamble.is_dependent() =>
+            {
+                24
+            }
             _ => body_size.saturating_sub(64),
         };
         let mut coefficients = Vec::new();
@@ -422,5 +432,117 @@ impl FractionCollector {
         let low_mz = r.read_f64()?;
         let high_mz = r.read_f64()?;
         Ok(Self { low_mz, high_mz })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scan_data::{Profile, ProfileChunk};
+    use std::io::Cursor;
+
+    fn read_body(body_size: usize, fc_offset: usize, np_offset: usize, tribrid: bool) -> ScanEvent {
+        let mut body = vec![0u8; body_size];
+        body[fc_offset..fc_offset + 8].copy_from_slice(&350.0_f64.to_le_bytes());
+        body[fc_offset + 8..fc_offset + 16].copy_from_slice(&1000.0_f64.to_le_bytes());
+        // Calibration recorded in the public PXD031322 Fusion Lumos file.
+        let coefficients = [
+            0.0,
+            0.0,
+            0.0,
+            211_782_331.2992454,
+            -270_234_696.3002101,
+            0.0,
+            0.0,
+        ];
+        let count = if body_size == 136 { 5 } else { 7 };
+        body[np_offset..np_offset + 4].copy_from_slice(&(count as u32).to_le_bytes());
+        for (i, value) in coefficients[..count].iter().enumerate() {
+            let off = np_offset + 4 + 8 * i;
+            body[off..off + 8].copy_from_slice(&f64::to_le_bytes(*value));
+        }
+        let mut reader = BinaryReader::new(Cursor::new(body));
+        let mut bytes = vec![0; 136];
+        bytes[6] = if tribrid { 2 } else { 1 };
+        ScanEvent::read_v66(&mut reader, ScanEventPreamble { bytes }, body_size, tribrid).unwrap()
+    }
+
+    #[test]
+    fn lumos_primary_profile_uses_calibration_after_offset8_window() {
+        let event = read_body(96, 8, 24, false);
+        assert_eq!(event.coefficients.len(), 7);
+        let profile = Profile {
+            first_value: 755.4335627526089,
+            step: 0.0,
+            peak_count: 1,
+            nbins: 1,
+            chunks: vec![ProfileChunk {
+                first_bin: 0,
+                signal: vec![42.0],
+                fudge: Some(0.0001),
+            }],
+        };
+        let (mz, intensity) = profile.to_mz_intensity(&event.coefficients)[0];
+        assert!(
+            (mz - 371.1045838664921).abs() < 1e-9,
+            "uncalibrated profile mass: {mz}"
+        );
+        assert_eq!(intensity, 42.0);
+    }
+
+    #[test]
+    fn uniform_offset64_calibration_preserved() {
+        for body_size in [136, 144] {
+            let event = read_body(body_size, 64, 80, false);
+            assert_eq!(
+                event.coefficients.len(),
+                if body_size == 136 { 5 } else { 7 }
+            );
+            assert_eq!(event.coefficients[3], 211_782_331.2992454);
+        }
+    }
+
+    #[test]
+    fn tribrid_dependent_calibration_keeps_eight_byte_gap() {
+        let event = read_body(208, 120, 144, true);
+        assert_eq!(event.coefficients.len(), 7);
+        assert_eq!(event.coefficients[3], 211_782_331.2992454);
+    }
+
+    #[test]
+    fn short_uncalibrated_ion_trap_body_stays_uncalibrated() {
+        let mut body = vec![0u8; 32];
+        body[8..16].copy_from_slice(&350.0_f64.to_le_bytes());
+        body[16..24].copy_from_slice(&1000.0_f64.to_le_bytes());
+        let mut reader = BinaryReader::new(Cursor::new(body));
+        let event = ScanEvent::read_v66(
+            &mut reader,
+            ScanEventPreamble {
+                bytes: vec![0; 136],
+            },
+            32,
+            false,
+        )
+        .unwrap();
+        assert!(event.coefficients.is_empty());
+    }
+
+    #[test]
+    fn lumos_coefficient_count_is_bounded_by_body() {
+        let mut body = vec![0u8; 96];
+        body[8..16].copy_from_slice(&350.0_f64.to_le_bytes());
+        body[16..24].copy_from_slice(&1000.0_f64.to_le_bytes());
+        body[24..28].copy_from_slice(&u32::MAX.to_le_bytes());
+        let mut reader = BinaryReader::new(Cursor::new(body));
+        let event = ScanEvent::read_v66(
+            &mut reader,
+            ScanEventPreamble {
+                bytes: vec![0; 136],
+            },
+            96,
+            false,
+        )
+        .unwrap();
+        assert_eq!(event.coefficients.len(), 8);
     }
 }

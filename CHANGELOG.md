@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Orbitrap MS1 profiles in 96-byte event bodies now use the calibration
+  coefficients after the acquisition window. This fixes frequency values
+  returned as m/z on Fusion Lumos, Eclipse and Orbitrap Elite files; centroid
+  spectra were unaffected.
 - Fusion Lumos DIA scan events now validate the 232/288-byte layout before
   choosing a variable-length event family. This keeps isolation windows aligned
   across the complete PXD031322 event stream and preserves existing 232/344
