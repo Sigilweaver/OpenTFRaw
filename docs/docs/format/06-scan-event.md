@@ -64,6 +64,19 @@ Version 66 has a significantly restructured ScanEvent layout:
 | 14 | UInt32 | nparam |
 | 15 | Float64[nparam] | coefficients |
 
+The fixed body layout varies by instrument family. These observed offsets are
+relative to the end of the 136-byte preamble:
+
+| Layout | Body bytes | Acquisition window offset | Coefficient count offset |
+|--------|------------|---------------------------|--------------------------|
+| Fusion Lumos primary (PXD031322) | 96 | 8 | 24 |
+| Q Exactive / Exploris uniform events | 136 / 144 | 64 | 80 |
+| Tribrid dependent events | 208 | 120 | 144 |
+
+For the 96-byte primary layout, using `body_size - 64` as the coefficient
+count offset reads the wrong field. Short ion-trap bodies and other dependent
+layouts retain their separate handling.
+
 **Tail (both cases in v66):**
 | Order | Type | Field |
 |-------|------|-------|
