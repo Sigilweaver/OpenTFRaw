@@ -187,3 +187,28 @@ and whole-file decoding still require a complete target fixture.
 | Eclipse DIA | DIA on tribrid Orbitrap: needed to confirm whether tribrid instruments store isolation m/z in reaction structure (np>0) as DDA scans do. No confirmed Eclipse DIA PRIDE accession with accessible RAW files identified yet. Fusion Lumos DIA files (PXD031322) carry direct isolation centers at body offset 4; Eclipse DIA remains unverified. |
 | SPS-MS3 (TMT) | Synchronous precursor selection MS3 for isobaric quantification; differs from standard MS3 in the number of simultaneous precursor m/z in the scan event body. |
 | ECD / IRMPD | Both enum variants implemented; no corpus files yet. |
+
+## Lock-mass count controls (#58)
+
+These intentionally published original acquisitions are used by the opt-in
+`public_lock_mass_counts_and_inherited_correction` test. Files remain outside
+version control; the test takes local paths through the variables below.
+
+| Variable | Public acquisition | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| `OPENTFRAW_LOCK_MASS_PLUS_RAW` | [MTBLS5657/20200612_01_Neg_DOPAEx2_ZH04.RAW](https://ftp.ebi.ac.uk/pub/databases/metabolights/studies/public/MTBLS5657/FILES/RAW_FILES/NEG/20200612_01_Neg_DOPAEx2_ZH04.RAW) | 5902616 | `83b38b0523361a6babcc21bcb2c112250aecd3a3a56fce5ab7f7b3f56a36bf42` |
+| `OPENTFRAW_LOCK_MASS_HFX_RAW` | [PXD071477/RS_300825_3.raw](https://ftp.pride.ebi.ac.uk/pride/data/archive/2026/03/PXD071477/RS_300825_3.raw) | 210873724 | `853a4291744a1ec93636073483ecc38fd67862a0e6baa8d2e9bde8eb121c2270` |
+| `OPENTFRAW_LOCK_MASS_EXPLORIS_RAW` | [PXD064947/X6212FD_2.raw](https://ftp.pride.ebi.ac.uk/pride/data/archive/2026/04/PXD064947/X6212FD_2.raw) | 655224569 | `7d686792c803e347bad482a733cab93012c75bbefe630dfd8672b06076d656a5` |
+
+MTBLS5657 contains 138 negative-mode Q Exactive Plus scans, each configured
+for nine lock masses and reporting one match with a nonzero correction.
+Its [study announcement](https://ftp.ebi.ac.uk/pub/databases/metabolights/studies/public/MTBLS5657/MTBLS5657.announcement.json)
+specifies EMBL-EBI Terms of Use. The two PRIDE project records specify CC0.
+
+PXD071477 has 27832 Q Exactive HF-X scans, of which 3559 report a match and
+24273 report zero matches. PXD064947 has 51254 Exploris 480 scans, of which
+16033 report a match and 35221 report zero matches. In both files every
+zero-match scan retains the latest matched scan's nonzero correction; their
+MS1 event also contains both matched and zero-match scans. These are count
+and correction controls, not proof of the exact `lock` filter-token meaning.
+No vendor software, SDK, or vendor output was used to validate them.

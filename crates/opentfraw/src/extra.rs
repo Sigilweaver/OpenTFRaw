@@ -126,6 +126,12 @@ const EXTRA_FIELDS: &[(&str, Getter)] = &[
     ("opentfraw.number_of_lock_masses", |s| {
         param(s, |p| p.number_of_lock_masses())
     }),
+    ("opentfraw.number_of_matched_lock_masses", |s| {
+        param(s, |p| p.number_of_matched_lock_masses())
+    }),
+    ("opentfraw.number_of_configured_lock_masses", |s| {
+        param(s, |p| p.number_of_configured_lock_masses())
+    }),
     ("opentfraw.supplemental_activation_energy", |s| {
         param(s, |p| p.supplemental_activation_energy())
     }),
@@ -213,6 +219,12 @@ const EXTRA_FIELDS: &[(&str, Getter)] = &[
     }),
     ("opentfraw.status.number_of_lock_masses", |s| {
         status(s, |l| l.number_of_lock_masses())
+    }),
+    ("opentfraw.status.number_of_matched_lock_masses", |s| {
+        status(s, |l| l.number_of_matched_lock_masses())
+    }),
+    ("opentfraw.status.number_of_configured_lock_masses", |s| {
+        status(s, |l| l.number_of_configured_lock_masses())
     }),
 ];
 
