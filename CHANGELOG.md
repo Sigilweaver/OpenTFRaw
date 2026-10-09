@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-04
+
+### Changed
+
+- **Breaking (Rust):** `RawFileReader` gains the public
+  `source_cid_by_method_event` map. Code that constructs this reader with a
+  struct literal must initialize the new field; exhaustive destructuring must
+  bind it or use `..`. Readers opened through `open_path` or `open` need no
+  caller changes. Python users keep the existing API.
+
 ### Added
 
 - Separate matched and configured lock-mass counts in Rust accessors, Python
@@ -31,6 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supplies it. Source energy and its provenance also reach Python and mzML
   extra fields. Unknown source-on flags remain unset; method settings are
   never broadcast across unrelated scan events.
+
+### Validation
+
+- Verify trailer-free source-CID recovery on all 6,674 scans of a public
+  negative-polarity Q Exactive Plus acquisition (GlycoPOST GPST000122).
+  The embedded method supplies 70 eV for its MS1 and MS2 events. The original
+  single-SIM 20 eV report remains unverified. (#57)
 
 ## [2.0.0] - 2026-09-28
 
