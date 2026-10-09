@@ -150,6 +150,29 @@ The selection heuristic - `ntrailer > 0` (v64+) or `nsegs > 0 && first_scan
 
 ## Open Issues
 
+### Source-CID method fallback (issue #57)
+
+The public GlycoPOST acquisition
+[`GPST000122.0/NGlycans_Serum_Fetuin_File1.raw`](https://glycopost.glycosmos.org/data/GPST000122.0/NGlycans_Serum_Fetuin_File1.raw)
+provides an additional original-byte regression for a Q Exactive Plus in
+negative NSI. The [study entry](https://glycopost.glycosmos.org/entry/GPST000122)
+is linked by the [research publication](https://doi.org/10.1038/s41467-023-37365-4).
+
+- Size: 28,102,388 bytes.
+- SHA-256: `ea19fe225a38e370f63dcdc7bba4d551706d61f06ec98dc2edc6b8334d7ab819`.
+- All 6,674 scan trailers lack a source-CID energy. Two explicitly linked
+  embedded method XML scan events each declare 70 eV.
+- All 419 MS1 and 6,255 MS2 scans resolve `instrument_method` provenance and
+  render `sid=70.00`. Rust extras, Python streamed scans and canonical records
+  are checked by the public-fixture tests.
+
+Run the ignored Rust regression and the optional Python regression with
+`OPENTFRAW_SOURCE_CID_PLUS_RAW` pointing to this acquisition. The fixture stays
+outside the repository; no acquisition bytes or converted vendor output are
+committed. This file verifies the reported instrument family, negative
+polarity and missing-trailer fallback, but does not reproduce the original
+single-SIM 20 eV acquisition. Do not treat that remaining case as verified.
+
 ### DIA isolation-window centers (issue #44)
 
 A 2026-09-29 investigation of public PXD035500 Exploris 480 files
