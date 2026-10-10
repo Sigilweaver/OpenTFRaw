@@ -545,8 +545,9 @@ impl RawFile {
     /// Read centroided peaks for `scan_number` and return
     /// `(mz: numpy.float64[:], intensity: numpy.float32[:])`.
     ///
-    /// Profile data is skipped for speed; use :meth:`peaks` to read
-    /// centroided peaks on any file type.
+    /// Works on every file type (Orbitrap/ion-trap and TSQ/SRM). Profile
+    /// data is skipped for speed; use :meth:`profile` for the raw profile
+    /// signal and :meth:`centroid_labels` for per-peak resolution and noise.
     fn peaks<'py>(
         &self,
         py: Python<'py>,
@@ -769,10 +770,11 @@ impl RawFile {
         Ok(columns)
     }
 
-    /// Iterate all scans. Yields dicts identical in shape to :meth:`scan`.
+    /// Return a list with one dict per scan, identical in shape to :meth:`scan`.
     ///
-    /// Equivalent to ``(raw.scan(n) for n in range(raw.first_scan, raw.last_scan+1))``
-    /// but avoids Python-level arithmetic in the hot loop.
+    /// Equivalent to ``[raw.scan(n) for n in range(raw.first_scan, raw.last_scan+1)]``
+    /// but avoids Python-level arithmetic in the hot loop. All scans are
+    /// decoded eagerly into memory; this is a list, not a lazy iterator.
     fn iter_scans<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let first = self.first_scan();
         let n = self.num_scans();
