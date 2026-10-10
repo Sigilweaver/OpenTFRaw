@@ -567,8 +567,10 @@ impl RawFile {
     ///
     /// The frequency-domain profile bins are converted to m/z using the scan
     /// event's calibration coefficients. Returns empty arrays for centroid-only
-    /// scans (no profile stored). This decodes the full profile, so it is slower
-    /// than :meth:`peaks`; use it only when the raw profile is needed.
+    /// scans (no profile stored). If the scan event carries a calibration
+    /// layout opentfraw does not recognise, the m/z values are ``NaN`` rather
+    /// than unconverted frequencies. This decodes the full profile, so it is
+    /// slower than :meth:`peaks`; use it only when the raw profile is needed.
     fn profile<'py>(
         &self,
         py: Python<'py>,

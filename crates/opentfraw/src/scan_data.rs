@@ -317,6 +317,9 @@ impl Profile {
 
 impl Profile {
     /// Convert profile bins to (mz, intensity) pairs using the conversion coefficients.
+    ///
+    /// When the coefficient count is not a known calibration layout (see
+    /// [`freq_to_mz`]), every m/z is `NaN`.
     pub fn to_mz_intensity(&self, coefficients: &[f64]) -> Vec<(f64, f64)> {
         // Size the allocation from the actually-parsed (and therefore already
         // bounded) chunk signal lengths, not from `self.nbins`: that field is
@@ -348,6 +351,10 @@ impl Profile {
 /// - nparam=4 (LTQ-FT/ICR): [unknown, A, B, C] → Mz = A + B/f + C/f²
 /// - nparam=5 (Orbitrap v66): [unk0, unk1, A, B, C] → Mz = A + B/f² + C/f⁴
 /// - nparam=7 (Orbitrap): [unknown, I, A, B, C, D, E] → Mz = A + B/f² + C/f⁴
+///
+/// Any other non-zero coefficient count is an unknown calibration layout and
+/// returns `f64::NAN`, so an unconverted frequency is never mistaken for m/z.
+/// Callers must treat non-finite results as "no m/z available".
 pub fn freq_to_mz(freq: f64, coefficients: &[f64]) -> f64 {
     if freq == 0.0 {
         return 0.0;
@@ -371,7 +378,7 @@ pub fn freq_to_mz(freq: f64, coefficients: &[f64]) -> f64 {
             let f2 = freq * freq;
             a + b / f2 + c / (f2 * f2)
         }
-        _ => freq,
+        _ => f64::NAN,
     }
 }
 
@@ -580,6 +587,25 @@ pub fn search_v63_transition(data: &[u8], q3_center_target: f64) -> Option<(f64,
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn freq_to_mz_passes_through_without_coefficients() {
+        assert_eq!(freq_to_mz(500.0, &[]), 500.0);
+        assert_eq!(freq_to_mz(0.0, &[1.0; 3]), 0.0);
+    }
+
+    #[test]
+    fn freq_to_mz_is_nan_for_unknown_coefficient_counts() {
+        for n in [1, 2, 3, 6, 8, 12] {
+            let coeffs = vec![1.0; n];
+            assert!(freq_to_mz(123_456.0, &coeffs).is_nan(), "nparam={n}");
+        }
+        // Known layouts stay finite.
+        for n in [4, 5, 7] {
+            let coeffs = vec![1.0; n];
+            assert!(freq_to_mz(123_456.0, &coeffs).is_finite(), "nparam={n}");
+        }
+    }
 
     fn header_with(
         descriptor_list_size: u32,
