@@ -19,7 +19,6 @@
 /// - `FTMS + p NSI Full ms [350.0000-1500.0000]`
 /// - `FTMS + c NSI d Full ms2 645.8311@hcd28.00 [150.0000-2000.0000]`
 /// - `ITMS + c NSI d Full ms2 520.2400@cid35.00 [135.0000-1060.0000]`
-/// - `FTMS + c NSI d Full ms2 649.1234@etd35.00@hcd28.00 [150.0000-2000.0000]` (EThcD)
 /// - `ITMS + c NSI d Full ms3 810.50@cid35.00 265.27@cid35.00 [100.0000-1000.0000]` (MS3)
 use crate::scan_event::ScanEvent;
 use crate::scan_index::ScanIndexEntry;
@@ -45,7 +44,6 @@ pub fn activation_str(analyzer: Option<Analyzer>, act: Activation) -> &'static s
 /// - `index_entry` - provides the authoritative m/z scan window
 /// - `precursor_mz` - final-stage precursor m/z from scan_params `Monoisotopic M/Z:`
 /// - `activation_energy` - primary activation energy (eV or NCE %) from scan_params
-/// - `supplemental_energy` - supplemental HCD energy for EThcD scans; `None` for all other types
 ///
 /// For MS2+ scans the function first attempts to build the full precursor chain
 /// from `event.reactions` (populated for both pre-v66 and v66 files). If reactions
@@ -55,16 +53,8 @@ pub fn build_filter(
     index_entry: &ScanIndexEntry,
     precursor_mz: Option<f64>,
     activation_energy: Option<f64>,
-    supplemental_energy: Option<f64>,
 ) -> String {
-    build_filter_with_source_cid(
-        event,
-        index_entry,
-        precursor_mz,
-        activation_energy,
-        supplemental_energy,
-        None,
-    )
+    build_filter_with_source_cid(event, index_entry, precursor_mz, activation_energy, None)
 }
 
 /// Build a filter with an explicitly sourced energy. Zero does not establish
@@ -74,7 +64,6 @@ pub(crate) fn build_filter_with_source_cid(
     index_entry: &ScanIndexEntry,
     precursor_mz: Option<f64>,
     activation_energy: Option<f64>,
-    supplemental_energy: Option<f64>,
     source_cid_energy_ev: Option<f64>,
 ) -> String {
     let mut out = String::with_capacity(96);
@@ -151,14 +140,16 @@ pub(crate) fn build_filter_with_source_cid(
 
     // Precursor chain (only for MSn scans)
     if n >= 2 {
-        let act = p.activation();
+        // An unrecognised activation code gets no `@<method>` clause.
+        let act = p
+            .activation()
+            .filter(|a| !matches!(a, Activation::Unknown(_)));
         let reactions = &event.reactions;
 
         // Detect EThcD from tribrid instruments (Eclipse, Fusion Lumos).
         // These encode EThcD as CID/HCD activation (byte 24 = 4 or 1) with
         // n_reactions = 2 in the body, where only the first reaction has a
-        // valid non-zero precursor m/z.  The preamble activation byte is
-        // never EThcD (12) for these instruments.
+        // valid non-zero precursor m/z.
         let n_valid_precursors = reactions.iter().filter(|r| r.precursor_mz > 0.0).count();
         let is_tribrid_ethcd = n == 2
             && reactions.len() >= 2
@@ -196,40 +187,24 @@ pub(crate) fn build_filter_with_source_cid(
                 if let Some(a) = act {
                     out.push('@');
                     let is_last = i == last;
-                    let is_ethcd = a == Activation::EThcD;
-
-                    // EThcD: final precursor gets two clauses (@etd<e>@hcd<se>).
-                    if is_last && is_ethcd {
-                        out.push_str("etd");
-                        if let Some(e) = activation_energy {
-                            out.push_str(&format!("{e:.2}"));
-                        }
-                        out.push('@');
-                        out.push_str("hcd");
-                        if let Some(se) = supplemental_energy {
-                            out.push_str(&format!("{se:.2}"));
-                        }
-                    } else {
-                        let astr = activation_str(analyzer, a);
-                        out.push_str(astr);
-                        let energy = if is_last {
-                            activation_energy.or({
-                                if rx.energy > 0.0 {
-                                    Some(rx.energy)
-                                } else {
-                                    None
-                                }
-                            })
-                        } else {
+                    out.push_str(activation_str(analyzer, a));
+                    let energy = if is_last {
+                        activation_energy.or({
                             if rx.energy > 0.0 {
                                 Some(rx.energy)
                             } else {
-                                activation_energy
+                                None
                             }
-                        };
-                        if let Some(e) = energy {
-                            out.push_str(&format!("{e:.2}"));
+                        })
+                    } else {
+                        if rx.energy > 0.0 {
+                            Some(rx.energy)
+                        } else {
+                            activation_energy
                         }
+                    };
+                    if let Some(e) = energy {
+                        out.push_str(&format!("{e:.2}"));
                     }
                 }
             }
@@ -239,21 +214,9 @@ pub(crate) fn build_filter_with_source_cid(
             out.push_str(&format!("{mz:.4}"));
             if let Some(a) = act {
                 out.push('@');
-                if a == Activation::EThcD {
-                    out.push_str("etd");
-                    if let Some(e) = activation_energy {
-                        out.push_str(&format!("{e:.2}"));
-                    }
-                    out.push('@');
-                    out.push_str("hcd");
-                    if let Some(se) = supplemental_energy {
-                        out.push_str(&format!("{se:.2}"));
-                    }
-                } else {
-                    out.push_str(activation_str(analyzer, a));
-                    if let Some(e) = activation_energy {
-                        out.push_str(&format!("{e:.2}"));
-                    }
+                out.push_str(activation_str(analyzer, a));
+                if let Some(e) = activation_energy {
+                    out.push_str(&format!("{e:.2}"));
                 }
             }
         }
@@ -328,7 +291,7 @@ mod tests {
         };
         let idx = make_index(100.0, 200.0);
         assert_eq!(
-            build_filter_with_source_cid(&ev, &idx, None, None, None, Some(20.0)),
+            build_filter_with_source_cid(&ev, &idx, None, None, Some(20.0)),
             "FTMS - p NSI sid=20.00 SIM ms [100.0000-200.0000]"
         );
         for energy in [
@@ -339,8 +302,8 @@ mod tests {
             Some(f64::INFINITY),
         ] {
             assert_eq!(
-                build_filter_with_source_cid(&ev, &idx, None, None, None, energy),
-                build_filter(&ev, &idx, None, None, None)
+                build_filter_with_source_cid(&ev, &idx, None, None, energy),
+                build_filter(&ev, &idx, None, None)
             );
         }
     }
@@ -357,7 +320,7 @@ mod tests {
             coefficients: vec![],
         };
         let idx = make_index(350.0, 1500.0);
-        let s = build_filter(&ev, &idx, None, None, None);
+        let s = build_filter(&ev, &idx, None, None);
         assert_eq!(s, "FTMS + p NSI Full ms [350.0000-1500.0000]");
     }
 
@@ -376,7 +339,7 @@ mod tests {
             coefficients: vec![],
         };
         let idx = make_index(150.0, 2000.0);
-        let s = build_filter(&ev, &idx, Some(645.8311), Some(28.0), None);
+        let s = build_filter(&ev, &idx, Some(645.8311), Some(28.0));
         assert_eq!(
             s,
             "FTMS + c NSI d Full ms2 645.8311@hcd28.00 [150.0000-2000.0000]"
@@ -406,7 +369,7 @@ mod tests {
             coefficients: vec![],
         };
         let idx = make_index(116.0, 892.0);
-        let s = build_filter(&ev, &idx, Some(440.254), Some(35.0), None);
+        let s = build_filter(&ev, &idx, Some(440.254), Some(35.0));
         // ITMS + CID code 4 → "cid"
         assert_eq!(
             s,
@@ -445,7 +408,7 @@ mod tests {
             coefficients: vec![],
         };
         let idx = make_index(100.0, 1000.0);
-        let s = build_filter(&ev, &idx, Some(265.27), Some(35.0), None);
+        let s = build_filter(&ev, &idx, Some(265.27), Some(35.0));
         assert_eq!(
             s,
             "ITMS + c NSI d Full ms3 810.5000@cid35.00 265.2700@cid35.00 [100.0000-1000.0000]"
@@ -453,11 +416,11 @@ mod tests {
     }
 
     #[test]
-    fn ethcd_filter() {
+    fn unknown_activation_omits_method_clause() {
         let mut pre = make_preamble(1, 0, 2, 0);
         pre.bytes[10] = 1; // dependent
         pre.bytes[40] = 4; // FTMS
-        pre.bytes[24] = 12; // EThcD
+        pre.bytes[24] = 12; // no established meaning
         let ev = ScanEvent {
             preamble: pre,
             reactions: vec![],
@@ -468,10 +431,8 @@ mod tests {
             coefficients: vec![],
         };
         let idx = make_index(150.0, 2000.0);
-        let s = build_filter(&ev, &idx, Some(649.12), Some(35.0), Some(28.0));
-        assert_eq!(
-            s,
-            "FTMS + c NSI d Full ms2 649.1200@etd35.00@hcd28.00 [150.0000-2000.0000]"
-        );
+        assert_eq!(ev.preamble.activation(), Some(Activation::Unknown(12)));
+        let s = build_filter(&ev, &idx, Some(649.12), Some(35.0));
+        assert_eq!(s, "FTMS + c NSI d Full ms2 649.1200 [150.0000-2000.0000]");
     }
 }

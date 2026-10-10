@@ -1217,15 +1217,11 @@ impl RawFileReader {
         let params = self.scan_params(scan_number);
         let precursor = params.as_ref().and_then(|p| p.monoisotopic_mz());
         let energy = params.as_ref().and_then(|p| p.activation_energy());
-        let supplemental = params
-            .as_ref()
-            .and_then(|p| p.supplemental_activation_energy());
         Some(crate::scan_filter::build_filter_with_source_cid(
             event,
             entry,
             precursor,
             energy,
-            supplemental,
             self.source_cid_energy_ev(scan_number),
         ))
     }
@@ -1540,10 +1536,10 @@ impl<'a> ScanParams<'a> {
     /// Activation energy (eV or %) for the primary activation step.
     ///
     /// Tries several label variants present across instrument families.
-    /// NCE (normalized collision energy) labels are checked first because
-    /// they reflect the user-set method value and are what reference tools
-    /// (ThermoRawFileParser, Proteome Discoverer) report.  eV labels are
-    /// used as a fallback when no NCE label is present.
+    /// NCE (normalized collision energy) labels are checked first, so a scan
+    /// that carries both reports its NCE value. eV labels are used only when
+    /// no NCE label is present. [`Self::activation_energy_is_nce`] says which
+    /// kind was found.
     ///
     /// Label priority:
     /// 1. `"HCD Energy:"` / `"HCD Energy V:"` / `"CE:"` - NCE string form

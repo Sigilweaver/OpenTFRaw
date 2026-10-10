@@ -17,6 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - mzML `<software>` now reports the real opentfraw version instead of a
   fixed `0.1.0`.
 - MSRV is now Rust 1.88, matching `openmassspec-core` 2.0.0.
+- **Breaking (Rust):** `Activation` names only the scan-event codes with
+  corpus evidence, `HCD` (1) and `CID` (4). Every other non-zero code
+  decodes as the new `Activation::Unknown(u8)`, which holds the raw byte.
+  The `MPID`, `ETD`, `ECD`, `IRMPD`, `PD`, `PQD`, `UVPD`, `SID` and
+  `EThcD` variants are removed: no public source documents those codes,
+  and every corpus scan that carries one has an implausible scan event
+  (for example EI ionization on a nanospray Orbitrap run). For an unknown
+  code the scan filter omits the `@<method>` clause, mzML has no decoded
+  activation (the writer then emits its default
+  collision-induced dissociation term), and Python `activation` is
+  `"unknown"`. Tribrid EThcD scans, which use codes 1 and 4, still render
+  as `@etd@hcd<energy>`.
+- **Breaking (Rust):** `scan_filter::build_filter` no longer takes a
+  `supplemental_energy` argument; it only fed the removed code-12 EThcD
+  clause. `ScanParams::supplemental_activation_energy` is unchanged.
 
 ### Fixed
 
