@@ -61,6 +61,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The instrument status log is decoded. It was never found: the reader
+  looked for its header at `inst_log_addr`, which addresses the first
+  record, and skipped v57-v63 files entirely. The header is now read after
+  the InstID block that follows the RunHeader, each record's leading
+  Float32 time is read, and the layout is checked against `inst_log_addr`
+  and `error_log_addr`. All 291 corpus files (v63, v64, v66) now decode,
+  828,554 records in total. A scan now gets the status-log record in effect
+  at its start time instead of the record with the scan's index, since the
+  log is written every few seconds rather than once per scan. Records on a
+  different clock (a pre-acquisition block on some Tribrid files, a
+  trailing zero-time record on a TSQ Quantum file) are kept but not matched
+  to scans.
+- A status log that cannot be decoded is reported instead of looking
+  empty: `RawFileReader::status_log_error`, Python
+  `RawFile.status_log_error`, and the mzML run-level
+  `opentfraw.status_log_error` userParam give the reason, and Python
+  `status_log()` raises `ValueError`.
+- **Breaking (Rust):** `RawFileReader::inst_log` is now
+  `Vec<StatusLogRecord>` (time in minutes plus the values), with the new
+  fields `inst_log_time_axis` and `status_log_error` and the new method
+  `status_log_record`.
+
 - SRM scan filters (TSQ files) no longer contain an ionization token. It
   was a fixed `NSI` for v63 files and `ESI` for v66 files, but these files
   have no scan event to read the ionization from, and the embedded methods

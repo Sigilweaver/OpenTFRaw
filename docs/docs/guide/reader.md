@@ -29,7 +29,9 @@ After `open_path` returns, the following fields are populated:
 | `scan_parameters`        | `Vec<GenericRecord>`             | Per-scan generic trailer values (`scan_parameters` in Python)                     |
 | `error_log`              | `Vec<ErrorEntry>`                | Instrument error/status messages; surfaced to Python as `error_log()`              |
 | `inst_log_header`        | `GenericDataHeader`              | Column layout for `inst_log`                                                      |
-| `inst_log`               | `Vec<GenericRecord>`             | Instrument status-log records; surfaced to Python as `status_log()`               |
+| `inst_log`               | `Vec<StatusLogRecord>`           | Instrument status-log records (time in minutes + values), in file order; surfaced to Python as `status_log()` |
+| `inst_log_time_axis`     | `Range<usize>`                   | The `inst_log` records on the acquisition's time axis; only these are matched to scans |
+| `status_log_error`       | `Option<String>`                 | Why the status log could not be decoded; `None` when it was                        |
 | `version`                | `u32`                            | Raw file format version                                                            |
 | `num_scans`              | `u32`                            | Scan count from the run header                                                    |
 | `data_addr`              | `u64`                            | Data stream base address (for computing absolute scan offsets)                    |

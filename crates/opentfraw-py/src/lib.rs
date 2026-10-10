@@ -334,6 +334,13 @@ impl RawFile {
         self.first_scan() + self.num_scans().saturating_sub(1)
     }
 
+    /// Why the instrument status log could not be decoded, or ``None`` when
+    /// it was.
+    #[getter]
+    fn status_log_error(&self) -> Option<String> {
+        self.reader.status_log_error().map(str::to_string)
+    }
+
     #[getter]
     fn instrument_model(&self) -> Option<String> {
         self.reader.instrument_model.map(|s| s.to_string())
@@ -517,19 +524,27 @@ impl RawFile {
         }
     }
 
-    /// Return the per-scan instrument status log for `scan_number` as a
-    /// ``{label: value}`` dict, or ``None`` if the scan has no status-log
-    /// record. This is the instrument-state-over-time log (temperatures,
-    /// voltages, pressures, ion counts, etc.), distinct from the
-    /// trailer-extra values returned by :meth:`scan_parameters`. Values keep
-    /// their stored type (str / int / float / bool / None for absent
-    /// entries). The core already decodes these; this surfaces them to
-    /// Python.
+    /// Return the instrument status-log record in effect for `scan_number`
+    /// as a ``{label: value}`` dict: the last record written at or before
+    /// the scan's start time. ``None`` if the scan is out of range or
+    /// precedes the first record. This is the instrument-state-over-time log
+    /// (temperatures, voltages, pressures, etc.), written every few seconds
+    /// rather than once per scan, and distinct from the trailer-extra values
+    /// returned by :meth:`scan_parameters`. Values keep their stored type
+    /// (str / int / float / bool / None for absent entries).
+    ///
+    /// Raises ``ValueError`` when the file's status log could not be decoded
+    /// (see :attr:`status_log_error`).
     fn status_log<'py>(
         &self,
         py: Python<'py>,
         scan_number: u32,
     ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        if let Some(e) = self.reader.status_log_error() {
+            return Err(PyValueError::new_err(format!(
+                "status log not decoded: {e}"
+            )));
+        }
         match self.reader.inst_log_record(scan_number) {
             None => Ok(None),
             Some(record) => {

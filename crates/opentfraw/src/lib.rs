@@ -32,6 +32,8 @@ pub use mzml::{
     extract_spectrum, iter_spectra, scan_metadata, write_indexed_mzml, write_mzml, PrecursorInfo,
     ScanMetadata, SpectrumRecord,
 };
-pub use reader::{ControllerInfo, ControllerType, RawFileReader, ScanParams, StatusLogEntry};
+pub use reader::{
+    ControllerInfo, ControllerType, RawFileReader, ScanParams, StatusLogEntry, StatusLogRecord,
+};
 pub use scan_format::ScanDataFormat;
 pub use types::*;
