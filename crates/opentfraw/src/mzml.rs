@@ -392,6 +392,8 @@ fn resolve_scan_arrays<R: Read + Seek>(
         if let Some(profile) = packet.profile {
             let coeffs = event.map(|e| e.coefficients.as_slice()).unwrap_or(&[]);
             let pairs = profile.to_mz_intensity(coeffs);
+            // `m > 0.0` also drops NaN m/z (unknown calibration layout, see
+            // `scan_data::freq_to_mz`), so unconverted bins never reach mzML.
             let mz: Vec<f64> = pairs
                 .iter()
                 .filter(|(m, _)| *m > 0.0)
