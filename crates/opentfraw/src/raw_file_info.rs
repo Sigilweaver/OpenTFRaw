@@ -196,7 +196,7 @@ impl RawFileInfoPreamble {
             //   [run_hdr[0]: u64] [u32] [u32]          -- controller 0
             //   [run_hdr[1]: u64] [u32] [u32]          -- controller 1
             //   ... (for every controller beyond 2, each entry is 16 bytes
-            //        and lives at the start of what used to be "unknown_area[2]")
+            //        and takes space at the start of "unknown_area[2]")
             //   [padding zeros to fill 1048-byte region]
             //
             // The total region (from data_addr through the skip) is 1048 bytes for
