@@ -14,6 +14,17 @@ use crate::scan_event::{ScanEvent, ScanEventPreamble};
 use crate::scan_index::ScanIndexEntry;
 use crate::seq_row::SeqRow;
 
+/// Decode little-endian UTF-16 code units from `raw` up to the first NUL
+/// (or the end). A trailing odd byte is ignored.
+fn utf16_units_until_nul(raw: &[u8]) -> Vec<u16> {
+    raw.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
+        .take_while(|&u| u != 0)
+        .collect()
+}
+
 /// Low-level binary reading helpers.
 pub(crate) struct BinaryReader<R> {
     inner: R,
@@ -197,16 +208,23 @@ impl<R: Read + Seek> BinaryReader<R> {
     pub fn read_utf16_fixed(&mut self, byte_len: usize) -> Result<String> {
         let pos = self.pos;
         let raw = self.read_bytes(byte_len)?;
-        if byte_len % 2 != 0 {
+        if !byte_len.is_multiple_of(2) {
             return Err(Error::InvalidUtf16(pos));
         }
-        let units: Vec<u16> = raw
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        // Find null terminator
-        let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
-        String::from_utf16(&units[..end]).map_err(|_| Error::InvalidUtf16(pos))
+        String::from_utf16(&utf16_units_until_nul(&raw)).map_err(|_| Error::InvalidUtf16(pos))
+    }
+
+    /// Like [`Self::read_utf16_fixed`], but replaces invalid UTF-16 (e.g.
+    /// unpaired surrogates) with U+FFFD instead of failing. Used for
+    /// free-text values such as trailer strings, where one bad character
+    /// should not make the whole file unreadable.
+    pub fn read_utf16_fixed_lossy(&mut self, byte_len: usize) -> Result<String> {
+        let pos = self.pos;
+        let raw = self.read_bytes(byte_len)?;
+        if !byte_len.is_multiple_of(2) {
+            return Err(Error::InvalidUtf16(pos));
+        }
+        Ok(String::from_utf16_lossy(&utf16_units_until_nul(&raw)))
     }
 
     /// Read a PascalStringWin32: UInt32 char count, then that many UTF-16-LE code units.
@@ -218,13 +236,7 @@ impl<R: Read + Seek> BinaryReader<R> {
         }
         let byte_len = char_count.checked_mul(2).ok_or(Error::InvalidUtf16(pos))?;
         let raw = self.read_bytes(byte_len)?;
-        let units: Vec<u16> = raw
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        // Strip trailing nulls
-        let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
-        String::from_utf16(&units[..end]).map_err(|_| Error::InvalidUtf16(pos))
+        String::from_utf16(&utf16_units_until_nul(&raw)).map_err(|_| Error::InvalidUtf16(pos))
     }
 
     /// Read a Windows FILETIME and return Unix timestamp as f64 seconds.
@@ -576,7 +588,8 @@ impl RawFileReader {
         //   Primary event:   232 bytes total (preamble 136 + body 96)
         //   Dependent event: 288 or 344 bytes total (body 152 or 208)
         // Lumos DIA (PXD031322) uses 232/288; Eclipse EThcD and other Lumos
-        // workflows use 232/344. Check boundaries before the historical inference.
+        // workflows use 232/344. Check those boundaries first, then infer the sizes
+        // from the stream length.
         let preamble_size = ScanEventPreamble::size_for_version(version);
         let (v66_body_primary, v66_body_dependent): (usize, usize) =
             if version >= 66 && n_events > 0 {
@@ -758,7 +771,7 @@ impl RawFileReader {
             Vec::new()
         };
         // Only needed when the metadata window names no model (#59); a failed
-        // read just leaves the model undetected, as before.
+        // read leaves the model undetected.
         // Layout confirmed on v57, v64, and v66 files.
         let inst_id_models = if version >= 57 {
             read_inst_id_models(&mut r, run_header_end).unwrap_or_default()
@@ -1569,7 +1582,7 @@ impl<'a> ScanParams<'a> {
             .filter(|&v| v > 0.0)
     }
 
-    /// Whether the value returned by [`activation_energy`] is a normalized
+    /// Whether the value returned by [`Self::activation_energy`] is a normalized
     /// collision energy (NCE, dimensionless %) rather than an absolute eV value.
     ///
     /// Returns `true` when `activation_energy` found a value from an NCE label
@@ -1705,8 +1718,8 @@ impl<'a> ScanParams<'a> {
     ///
     /// The two labels describe different quantities. Prefer
     /// [`Self::number_of_matched_lock_masses`] and
-    /// [`Self::number_of_configured_lock_masses`] for new code. This accessor
-    /// retains its historical fallback behavior.
+    /// [`Self::number_of_configured_lock_masses`] for new code; this accessor
+    /// returns whichever of the two labels is present.
     pub fn number_of_lock_masses(&self) -> Option<i32> {
         self.0
             .get_i32("Number of LM Found:")
@@ -1866,8 +1879,8 @@ impl<'a> StatusLogEntry<'a> {
     ///
     /// The two labels describe different quantities. Prefer
     /// [`Self::number_of_matched_lock_masses`] and
-    /// [`Self::number_of_configured_lock_masses`] for new code. This accessor
-    /// retains its historical fallback behavior.
+    /// [`Self::number_of_configured_lock_masses`] for new code; this accessor
+    /// returns whichever of the two labels is present.
     pub fn number_of_lock_masses(&self) -> Option<i32> {
         self.0
             .get_i32("Number of LM Found:")

@@ -3,8 +3,9 @@
 # Jobs:
 #   build         - cargo fmt --check, cargo clippy -D warnings, cargo test
 #                   (Linux, macOS, Windows). Downloads a small corpus fixture
-#                   ahead of `cargo test` so crates/opentfraw/tests/conformance.rs
-#                   exercises a real decode path instead of skipping - see
+#                   ahead of `cargo test` and sets REQUIRE_CORPUS=1 so the
+#                   corpus tests (conformance, scan-index agreement) fail
+#                   instead of skipping if it is missing - see
 #                   Sigilweaver/OpenMassSpec#5.
 #   validate-mzml - download a small public Thermo RAW file, convert it to
 #                   mzML, run scripts/validate_mzml.py for structural
@@ -34,17 +35,17 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
-  # Small LTQ FT file (~15 MB) from PRIDE PXD054004, used for the mzML
-  # validation job.  URL is stable because PRIDE uses year/month archive paths.
+  # Small LTQ FT file (~15 MB) from PRIDE PXD054004. URL is stable because
+  # PRIDE uses year/month archive paths. This one file is the shared fixture
+  # for every job: the Rust corpus tests (crates/opentfraw/tests/common/mod.rs),
+  # pytest (tests/conftest.py), mzML validation, and fuzz seeding. The name
+  # follows scripts/fetch_corpus.py's `{accession}_{instrument_label}_{filename}`
+  # convention; keep it in sync with CORPUS_FIXTURE_NAME in
+  # crates/opentfraw/tests/common/mod.rs and DEFAULT_PRIDE_RAW_NAME in
+  # tests/conftest.py.
   PRIDE_RAW_URL: >-
     https://ftp.pride.ebi.ac.uk/pride/data/archive/2025/05/PXD054004/20171113_Map_NS1_1to139_4deg_50uM_001.raw
-  PRIDE_RAW_NAME: test.raw
-  # Same file as PRIDE_RAW_URL above, cached under corpus/ using the naming
-  # convention scripts/fetch_corpus.py's shared fetcher uses
-  # (`{accession}_{instrument_label}_{filename}`), so a single download can
-  # serve as the conformance-test corpus fixture too. Keep this filename in
-  # sync with crates/opentfraw/tests/conformance.rs's fixture() candidates.
-  CORPUS_FIXTURE_NAME: PXD054004_LTQ_FT_20171113_Map_NS1_1to139_4deg_50uM_001.raw
+  PRIDE_RAW_NAME: PXD054004_LTQ_FT_20171113_Map_NS1_1to139_4deg_50uM_001.raw
 
 jobs:
   build:
@@ -78,11 +79,15 @@ jobs:
         shell: bash
         run: |
           mkdir -p corpus
-          dest="corpus/$CORPUS_FIXTURE_NAME"
+          dest="corpus/$PRIDE_RAW_NAME"
           curl -sSL --user-agent "OpenTFRaw-CI/1.0" -o "$dest" "$PRIDE_RAW_URL"
           echo "Downloaded $(du -sh "$dest" | cut -f1) corpus fixture"
 
       - name: cargo test
+        env:
+          # The fixture was downloaded above; fail rather than skip if the
+          # corpus tests cannot find it.
+          REQUIRE_CORPUS: "1"
         run: cargo test --workspace --all-targets
 
   validate-mzml:
@@ -222,6 +227,8 @@ jobs:
         run: uv run maturin develop --release
 
       - name: pytest
+        env:
+          REQUIRE_CORPUS: "1"
         run: uv run pytest tests -v
 
   docs:
