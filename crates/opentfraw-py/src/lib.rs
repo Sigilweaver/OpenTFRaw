@@ -446,9 +446,8 @@ impl RawFile {
     /// second/millisecond fields - a different decoded timestamp from
     /// :attr:`created` (which reads the Xcalibur audit tag/FILETIME). The two
     /// are expected to agree since they record the same acquisition event,
-    /// but come from independently-decoded fields; if they disagree on a
-    /// given file, treat `created` as the more established source (it mirrors
-    /// what the vendor reader surfaces as the file's creation time). Like
+    /// but come from independently-decoded fields, so a file may carry
+    /// different values in the two. Like
     /// `created`, this is the instrument's local wall-clock time with no
     /// timezone, so interpreting the value as UTC reproduces that local
     /// wall-clock rather than a true UTC instant.
@@ -495,9 +494,9 @@ impl RawFile {
 
     /// Return the per-scan generic ("trailer") parameters for `scan_number` as
     /// a ``{label: value}`` dict, or ``None`` if the scan has no parameter
-    /// record. Mirrors the vendor reader's trailer-extra information: keys are
-    /// the instrument's own labels (e.g. ``"HCD Energy V:"``,
-    /// ``"MS2 Isolation Width:"``, ``"Ion Injection Time (ms):"``) and values
+    /// record. Keys are the instrument's own labels as stored in the file
+    /// (e.g. ``"HCD Energy V:"``, ``"MS2 Isolation Width:"``,
+    /// ``"Ion Injection Time (ms):"``) and values
     /// keep their stored type (str / int / float / bool / None for absent entries). The core already
     /// decodes these; this surfaces them to Python.
     fn scan_parameters<'py>(
@@ -660,7 +659,7 @@ impl RawFile {
                 Some((nz, bl)) => {
                     noise.push(nz);
                     baseline.push(bl);
-                    // Matches the vendor reader's per-peak S:N definition.
+                    // S:N = (intensity - baseline) / (noise - baseline).
                     let denom = nz - bl;
                     signal_to_noise.push(if denom > 0.0 {
                         (p.abundance - bl) / denom
@@ -797,8 +796,8 @@ impl RawFile {
     /// ----
     /// index : int
     /// is_ms_controller : bool
-    /// controller_type : str  (``"Ms"``, ``"Analog"``, ``"Adc"``, ``"Pda"``,
-    ///     ``"Uv"``, or ``"Other"``)
+    /// controller_type : str  (``"Ms"`` or ``"Other"``; the kind of a non-MS
+    ///     controller is not decoded)
     /// first_scan : int
     /// last_scan : int
     /// start_time : float  (minutes)

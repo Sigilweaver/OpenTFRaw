@@ -1,5 +1,4 @@
-/// Scan filter string builder - reproduces Thermo's canonical scan filter
-/// syntax for interoperability with downstream tools.
+/// Scan filter string builder.
 ///
 /// A Thermo scan filter is a single-line textual summary of a scan's
 /// acquisition parameters. It is consumed by virtually every proteomics
@@ -9,17 +8,22 @@
 ///
 /// ## Grammar
 ///
+/// Token order follows the "filter line" that the Finnigan Perl module
+/// (Gene Selkov, <https://metacpan.org/dist/Finnigan>) renders from
+/// `Finnigan::ScanEventPreamble`, `Finnigan::Reaction` and
+/// `Finnigan::FractionCollector`.
+///
 /// ```text
 /// <analyzer> <polarity> <scan_mode> <ionization> [<dependent>] <scan_type>
 ///   ms<n>  [<precursor>@<method><energy> ...]  [<range>]
 /// ```
 ///
-/// ## Examples (verified against Thermo output)
+/// ## Examples
 ///
 /// - `FTMS + p NSI Full ms [350.0000-1500.0000]`
 /// - `FTMS + c NSI d Full ms2 645.8311@hcd28.00 [150.0000-2000.0000]`
 /// - `ITMS + c NSI d Full ms2 520.2400@cid35.00 [135.0000-1060.0000]`
-/// - `ITMS + c NSI d Full ms3 810.50@cid35.00 265.27@cid35.00 [100.0000-1000.0000]` (MS3)
+/// - `ITMS + c NSI d Full ms3 810.5000@cid35.00 265.2700@cid35.00 [100.0000-1000.0000]` (MS3)
 use crate::scan_event::ScanEvent;
 use crate::scan_index::ScanIndexEntry;
 use crate::types::{Activation, Analyzer, MsPower, ScanType};

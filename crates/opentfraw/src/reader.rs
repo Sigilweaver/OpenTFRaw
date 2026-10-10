@@ -353,23 +353,21 @@ pub struct RawFileReader {
 
 // -- Multi-controller metadata --
 
-/// Controller type codes as used in Thermo RAW files.
+/// Inferred controller kind. The reader decodes no controller-type code, so
+/// it only separates the MS controller from every other controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControllerType {
+    /// A controller whose run header has MS scan data.
     Ms,
-    Analog,
-    Adc,
-    Pda,
-    Uv,
+    /// Any other controller (for example a UV or analog detector channel).
     Other,
 }
 
 impl ControllerType {
     fn from_nsegs_ntrailer(ntrailer: u32, nsegs: u32) -> Self {
         // Heuristic: MS controller always has ntrailer > 0 (v64+) or nsegs > 0.
-        // Non-MS controllers (UV, analog, PDA) have ntrailer == 0 and nsegs == 1.
-        // We can't reliably distinguish between non-MS types without parsing
-        // the InstID/method block, so we fall back to Other for those.
+        // Non-MS controllers have ntrailer == 0 and nsegs == 1. No byte that
+        // names the kind of a non-MS controller is decoded, so those are Other.
         if ntrailer > 0 || nsegs > 1 {
             Self::Ms
         } else {
@@ -1180,13 +1178,12 @@ impl RawFileReader {
         if self.flat_peaks {
             let q1 = self.srm_q1_by_event.get(&entry.scan_event).copied()?;
             let windows = self.srm_q3_windows.get(&entry.scan_event)?;
-            // v63 (TSQ Quantum/Vantage): NSI ionization, @cid{CE:.2} after Q1.
-            // v66 (TSQ Quantiva/Altis): ESI ionization, no CE in filter.
+            // v63 (TSQ Quantum/Vantage): @cid{CE:.2} after Q1, CE decoded
+            // from the transition record. v66 (TSQ Quantiva/Altis): no CE.
+            // No ionization token: these files have no scan event, so the
+            // ionization byte is not available, matching `build_filter` when
+            // ionization is unknown.
             use crate::scan_format::ScanDataFormat;
-            let ionization = match self.scan_format {
-                ScanDataFormat::FlatV63 => "NSI",
-                _ => "ESI",
-            };
             let ce_part = if self.scan_format == ScanDataFormat::FlatV63 {
                 self.srm_ce_by_event
                     .get(&entry.scan_event)
@@ -1195,8 +1192,8 @@ impl RawFileReader {
             } else {
                 String::new()
             };
-            // Format: "+ c {ION} SRM ms2 {Q1:.3}{@cidCE} [{lo1:.3}-{hi1:.3}, ...]"
-            let mut s = format!("+ c {} SRM ms2 {:.3}{}", ionization, q1, ce_part);
+            // Format: "+ c SRM ms2 {Q1:.3}{@cidCE} [{lo1:.3}-{hi1:.3}, ...]"
+            let mut s = format!("+ c SRM ms2 {:.3}{}", q1, ce_part);
             if !windows.is_empty() {
                 s.push(' ');
                 s.push('[');
@@ -1410,15 +1407,9 @@ impl<'a> ScanParams<'a> {
         self.0
     }
 
-    /// Ion injection / fill time in milliseconds.
-    ///
-    /// Label varies: `"Ion Injection Time (ms):"` (Orbitrap family) vs
-    /// `"Ion Inject Time (ms):"` (older LTQ variants).
+    /// Ion injection / fill time in milliseconds (`"Ion Injection Time (ms):"`).
     pub fn ion_injection_time_ms(&self) -> Option<f64> {
-        // Try canonical label first; fall back to legacy label.
-        self.0
-            .get_f64("Ion Injection Time (ms):")
-            .or_else(|| self.0.get_f64("Ion Inject Time (ms):"))
+        self.0.get_f64("Ion Injection Time (ms):")
     }
 
     /// Precursor charge state (0 = unknown / MS1 scan).
@@ -1434,21 +1425,11 @@ impl<'a> ScanParams<'a> {
             })
     }
 
-    /// Monoisotopic precursor m/z (0 = not determined).
+    /// Monoisotopic precursor m/z (`"Monoisotopic M/Z:"`).
     ///
-    /// Tries multiple label variants for compatibility across instrument families:
-    ///
-    /// - `"Monoisotopic M/Z:"` - most common (Q Exactive, Orbitrap Fusion)
-    /// - `"MS2 Isolation M/Z:"` - some older LTQ firmware
-    ///
-    /// Returns `None` when the value is absent or zero (not determined).
+    /// Returns `None` when the value is absent or zero (no value determined).
     pub fn monoisotopic_mz(&self) -> Option<f64> {
-        let v = self
-            .0
-            .get_f64("Monoisotopic M/Z:")
-            .or_else(|| self.0.get_f64("MS2 Isolation M/Z:"))
-            .or_else(|| self.0.get_f64("Isolation Center M/Z:"))
-            .or_else(|| self.0.get_f64("Precursor M/Z:"))?;
+        let v = self.0.get_f64("Monoisotopic M/Z:")?;
         if v > 0.0 {
             Some(v)
         } else {
@@ -1510,16 +1491,9 @@ impl<'a> ScanParams<'a> {
         self.0.get_f64("Max. Ion Time (ms):")
     }
 
-    /// MSn isolation window width in m/z.
-    ///
-    /// Label varies: `"MS2 Isolation Width:"` (most common), `"MSn Isolation Width:"`,
-    /// or `"Isolation Width (M/Z):"` on some firmware.
+    /// MSn isolation window width in m/z (`"MS2 Isolation Width:"`).
     pub fn isolation_width_mz(&self) -> Option<f64> {
-        self.0
-            .get_f64("MS2 Isolation Width:")
-            .or_else(|| self.0.get_f64("MSn Isolation Width:"))
-            .or_else(|| self.0.get_f64("Isolation Width (M/Z):"))
-            .or_else(|| self.0.get_f64("MS2 Isolation Width (M/Z):"))
+        self.0.get_f64("MS2 Isolation Width:")
     }
 
     /// MSn isolation window target m/z (the center of the isolation window).
@@ -1528,115 +1502,52 @@ impl<'a> ScanParams<'a> {
     /// absent, callers should fall back to [`Self::monoisotopic_mz`] or to
     /// the event's first reaction `precursor_mz`.
     pub fn isolation_target_mz(&self) -> Option<f64> {
-        self.0
-            .get_f64("MS2 Isolation Offset:")
-            .or_else(|| self.0.get_f64("Target M/Z:"))
+        self.0.get_f64("MS2 Isolation Offset:")
     }
 
     /// Activation energy (eV or %) for the primary activation step.
     ///
-    /// Tries several label variants present across instrument families.
     /// NCE (normalized collision energy) labels are checked first, so a scan
-    /// that carries both reports its NCE value. eV labels are used only when
+    /// that carries both reports its NCE value. The eV label is used only when
     /// no NCE label is present. [`Self::activation_energy_is_nce`] says which
-    /// kind was found.
+    /// kind was found. Zero is skipped as "not set".
     ///
     /// Label priority:
-    /// 1. `"HCD Energy:"` / `"HCD Energy V:"` / `"CE:"` - NCE string form
-    /// 2. `"Normalized Collision Energy:"` - ion-trap CID NCE
-    /// 3. `"HCD Energy (eV):"` - explicit eV label (Q Exactive HF-X, Exploris)
-    /// 4. `"HCD Energy eV:"` - eV variant
-    /// 5. `"Collision Energy (eV):"` - ITMS CID eV
+    /// 1. `"HCD Energy:"` / `"HCD Energy V:"` - NCE, string form
+    /// 2. `"HCD Energy eV:"` - eV
     pub fn activation_energy(&self) -> Option<f64> {
-        // NCE labels: preferred because they match the user-set method value.
-        // Skip 0.0 (sentinel for "not set").
-        for label in &["HCD Energy:", "HCD Energy V:", "CE:"] {
-            if let Some(s) = self.0.get_string(label) {
-                if let Ok(v) = s.trim().trim_end_matches('%').parse::<f64>() {
-                    if v > 0.0 {
-                        return Some(v);
-                    }
-                }
-            }
-        }
-        if let Some(v) = self
-            .0
-            .get_f64("Normalized Collision Energy:")
-            .filter(|&v| v > 0.0)
-        {
+        if let Some(v) = self.nce() {
             return Some(v);
         }
-        // eV labels: used when no NCE label is available.
-        if let Some(v) = self.0.get_f64("HCD Energy (eV):").filter(|&v| v > 0.0) {
-            return Some(v);
-        }
-        if let Some(v) = self.0.get_f64("HCD Energy eV:").filter(|&v| v > 0.0) {
-            return Some(v);
-        }
-        self.0
-            .get_f64("Collision Energy (eV):")
-            .filter(|&v| v > 0.0)
+        self.0.get_f64("HCD Energy eV:").filter(|&v| v > 0.0)
     }
 
     /// Whether the value returned by [`Self::activation_energy`] is a normalized
     /// collision energy (NCE, dimensionless %) rather than an absolute eV value.
     ///
     /// Returns `true` when `activation_energy` found a value from an NCE label
-    /// (`HCD Energy:`, `HCD Energy V:`, `CE:`, or `Normalized Collision Energy:`).
-    /// Returns `false` when only eV labels were present or no energy was found.
+    /// (`HCD Energy:` or `HCD Energy V:`). Returns `false` when only the eV
+    /// label was present or no energy was found.
     pub fn activation_energy_is_nce(&self) -> bool {
-        // Returns true if activation_energy() took the NCE path.
-        for label in &["HCD Energy:", "HCD Energy V:", "CE:"] {
-            if let Some(s) = self.0.get_string(label) {
-                if let Ok(v) = s.trim().trim_end_matches('%').parse::<f64>() {
-                    if v > 0.0 {
-                        return true;
-                    }
-                }
-            }
-        }
-        self.0
-            .get_f64("Normalized Collision Energy:")
-            .filter(|&v| v > 0.0)
-            .is_some()
+        self.nce().is_some()
     }
 
-    /// Supplemental activation energy for EThcD scans (the HCD component).
-    ///
-    /// Returns `None` for non-EThcD scans.
-    pub fn supplemental_activation_energy(&self) -> Option<f64> {
-        if let Some(v) = self.0.get_f64("Supplemental Activation CE:") {
-            return Some(v);
-        }
-        if let Some(s) = self.0.get_string("Supplemental Activation:") {
-            return s.trim().trim_end_matches('%').parse::<f64>().ok();
-        }
-        None
+    /// First positive NCE value from the string-typed NCE labels.
+    fn nce(&self) -> Option<f64> {
+        ["HCD Energy:", "HCD Energy V:"].iter().find_map(|label| {
+            self.0
+                .get_string(label)
+                .and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
+                .filter(|&v| v > 0.0)
+        })
     }
 
-    /// All possible charge states reported by the precursor selection algorithm.
-    ///
-    /// Returns `None` when the instrument did not report possible charges.
-    /// Some firmware stores them as a space-delimited string (e.g. `"2 3"`);
-    /// others use a typed integer for the single selected charge.
+    /// Selected precursor charge as a one-element list, or `None` when
+    /// [`Self::charge_state`] is absent or not positive.
     pub fn possible_charge_states(&self) -> Option<Vec<u32>> {
-        // String variant: "2 3 4"
-        if let Some(s) = self.0.get_string("Possible Charge States:") {
-            let v: Vec<u32> = s
-                .split_whitespace()
-                .filter_map(|t| t.parse::<u32>().ok())
-                .collect();
-            if !v.is_empty() {
-                return Some(v);
-            }
-        }
-        // Integer variant (single charge)
-        if let Some(c) = self.charge_state() {
-            if c > 0 {
-                return Some(vec![c as u32]);
-            }
-        }
-        None
+        self.charge_state()
+            .filter(|&c| c > 0)
+            .map(|c| vec![c as u32])
     }
 
     /// FAIMS compensation voltage in V (Orbitrap Fusion/Lumos with FAIMS Pro).
@@ -1660,7 +1571,7 @@ impl<'a> ScanParams<'a> {
         self.0.get_f64("S-Lens RF Level:")
     }
 
-    /// AGC fill percentage (0.0-1.0), reported on Q Exactive HF family.
+    /// AGC fill value (`"AGC Fill:"`).
     pub fn agc_fill(&self) -> Option<f64> {
         self.0.get_f64("AGC Fill:")
     }
@@ -1670,7 +1581,7 @@ impl<'a> ScanParams<'a> {
         self.0.get_f64("Analyzer Temperature:")
     }
 
-    /// PS injection time in milliseconds (pre-scan injection for Q Exactive).
+    /// `"PS Inj. Time (ms):"` value in milliseconds.
     pub fn ps_injection_time_ms(&self) -> Option<f64> {
         self.0.get_f64("PS Inj. Time (ms):")
     }
@@ -1697,7 +1608,7 @@ impl<'a> ScanParams<'a> {
             .or_else(|| self.0.get_f32("API Source CID Energy:").map(f64::from))
     }
 
-    /// Dynamic retention time shift in minutes (Q Exactive HF-X AutoQC).
+    /// Dynamic retention time shift in minutes (`"Dynamic RT Shift (min):"`).
     pub fn dynamic_rt_shift_min(&self) -> Option<f64> {
         self.0.get_f64("Dynamic RT Shift (min):")
     }
@@ -1770,12 +1681,12 @@ impl<'a> ScanParams<'a> {
         self.0.get_f64("Conversion Parameter C:")
     }
 
-    /// Raw over-fill time T (used for AGC computation).
+    /// `"RawOvFtT:"` value, as stored. Its meaning is not decoded.
     pub fn raw_ovft(&self) -> Option<f64> {
         self.0.get_f64("RawOvFtT:")
     }
 
-    /// Error in the isotopic envelope fit (used for charge-state scoring).
+    /// `"Error in isotopic envelope fit:"` value, as stored.
     pub fn isotopic_fit_error(&self) -> Option<f64> {
         self.0.get_f64("Error in isotopic envelope fit:")
     }
@@ -1814,11 +1725,9 @@ impl<'a> StatusLogEntry<'a> {
         self.0
     }
 
-    /// Ion injection time in milliseconds (present on Orbitrap family).
+    /// Ion injection time in milliseconds (`"Ion Injection Time (ms):"`).
     pub fn ion_injection_time_ms(&self) -> Option<f64> {
-        self.0
-            .get_f64("Ion Injection Time (ms):")
-            .or_else(|| self.0.get_f64("Ion Inject Time (ms):"))
+        self.0.get_f64("Ion Injection Time (ms):")
     }
 
     /// Orbitrap / FT resolving power setting.
@@ -1847,27 +1756,11 @@ impl<'a> StatusLogEntry<'a> {
             .or_else(|| self.0.get_f32("Analyzer Temperature:").map(f64::from))
     }
 
-    /// API (spray) source voltage (V).
-    pub fn spray_voltage(&self) -> Option<f64> {
-        self.0
-            .get_f64("Spray Voltage (V):")
-            .or_else(|| self.0.get_f64("Spray Voltage:"))
-            .or_else(|| self.0.get_f32("Spray Voltage:").map(f64::from))
-    }
-
     /// Lock mass reference correction (ppm).
     pub fn lock_mass_correction_ppm(&self) -> Option<f64> {
         self.0
             .get_f64("LM Correction (ppm):")
             .or_else(|| self.0.get_f64("LM m/z-Correction (ppm):"))
-    }
-
-    /// Capillary temperature (°C).
-    pub fn capillary_temperature(&self) -> Option<f64> {
-        self.0
-            .get_f64("Capillary Temp (°C):")
-            .or_else(|| self.0.get_f64("Capillary Temp:"))
-            .or_else(|| self.0.get_f32("Capillary Temp:").map(f64::from))
     }
 
     /// Compatibility count: matched lock masses, falling back to the configured

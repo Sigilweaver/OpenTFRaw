@@ -31,9 +31,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as `@etd@hcd<energy>`.
 - **Breaking (Rust):** `scan_filter::build_filter` no longer takes a
   `supplemental_energy` argument; it only fed the removed code-12 EThcD
-  clause. `ScanParams::supplemental_activation_energy` is unchanged.
+  clause.
+- **Breaking:** typed trailer and status-log accessors read only labels
+  that occur in the reference corpus. These label fallbacks are removed,
+  and none of them occurs in any of the 291 corpus files, so no decoded
+  value changes:
+  - `monoisotopic_mz`: `MS2 Isolation M/Z:`, `Isolation Center M/Z:`,
+    `Precursor M/Z:`
+  - `activation_energy` and `activation_energy_is_nce`: `CE:`,
+    `Normalized Collision Energy:`, `HCD Energy (eV):`,
+    `Collision Energy (eV):`. Energy now comes from `HCD Energy:` or
+    `HCD Energy V:` (NCE), else `HCD Energy eV:` (eV).
+  - `isolation_width_mz`: `MSn Isolation Width:`, `Isolation Width (M/Z):`,
+    `MS2 Isolation Width (M/Z):`; `isolation_target_mz`: `Target M/Z:`
+  - `ion_injection_time_ms` (trailer and status log): `Ion Inject Time (ms):`
+  - `possible_charge_states`: `Possible Charge States:`. It now returns the
+    selected charge (`Charge State:`) as a one-element list.
+- **Breaking:** `ScanParams::supplemental_activation_energy`,
+  `StatusLogEntry::spray_voltage`, `StatusLogEntry::capillary_temperature`
+  and the extra fields `opentfraw.supplemental_activation_energy`,
+  `opentfraw.status.spray_voltage` and
+  `opentfraw.status.capillary_temperature` are removed. None of the labels
+  they read occurs in any corpus file, so none of them ever returned a
+  value there. Any such label in another file is still returned by
+  `scan_parameters` / `status_log` under its own name.
+- **Breaking (Rust):** `ControllerType` has only `Ms` and `Other`. The
+  `Analog`, `Adc`, `Pda` and `Uv` variants were never produced: no byte that
+  names a non-MS controller's kind is decoded.
 
 ### Fixed
+
+- SRM scan filters (TSQ files) no longer contain an ionization token. It
+  was a fixed `NSI` for v63 files and `ESI` for v66 files, but these files
+  have no scan event to read the ionization from, and the embedded methods
+  disagree with the fixed value (PXD056439 records an NSI source and
+  PXD041995 an H-ESI source; both got `ESI`). Filters now read, for example,
+  `+ c SRM ms2 356.690@cid15.44 [311.827-312.527, ...]`.
 
 - mzML instrument CV terms: 13 models had a wrong accession or name,
   including Orbitrap Astral (was `MS:1003355`, "bottom-up proteomics") and

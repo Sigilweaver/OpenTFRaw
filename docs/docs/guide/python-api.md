@@ -91,8 +91,8 @@ raw.instrument_method_text()  # best-effort UTF-16LE text/XML acquisition method
 
 `status_log` and `scan_parameters` are both per-scan generic-record
 streams decoded from the file, but distinct ones: `scan_parameters`
-mirrors the vendor reader's trailer-extra values, while `status_log` is
-the instrument-state-over-time log.
+holds the per-scan trailer values, while `status_log` is the
+instrument-state-over-time log.
 
 `controllers()` returns a one-element list for the common single-MS-
 controller case; multi-detector files (UV, PDA, Analog channels
