@@ -427,10 +427,9 @@ fn resolve_scan_arrays<R: Read + Seek>(
 use openmassspec_core as msc;
 
 const SOFTWARE_NAME: &str = "opentfraw";
-// Pinned for byte-identical output across crate version bumps. The mzML
-// `<software version=...>` is informational; downstream tools do not key off
-// it. If you change this, also update the conformance baseline.
-const SOFTWARE_VERSION: &str = "0.1.0";
+// Written to mzML `<software version=...>` so converted files record the
+// opentfraw release that produced them.
+const SOFTWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// PSI-MS CV term for the source file format (Thermo RAW).
 fn source_file_format_cv() -> msc::CvTerm {
@@ -442,65 +441,117 @@ fn native_id_format_cv() -> msc::CvTerm {
     msc::CvTerm::new("MS:1000768", "Thermo nativeID format")
 }
 
-/// Resolve the instrument CV term for `raw` (lookup mirrors the historical
-/// in-crate writer; expands as new Thermo models appear in the corpus).
+/// PSI-MS generic parent term used when a detected model has no specific
+/// instrument-model term (the model name then goes into the
+/// `opentfraw.instrument_model` run userParam).
+const GENERIC_THERMO_INSTRUMENT: (&str, &str) =
+    ("MS:1000483", "Thermo Fisher Scientific instrument model");
+
+/// Detected model name (exactly as produced by `device::MODEL_REGISTRY`) to
+/// PSI-MS instrument-model term. Checked against psi-ms.obo by
+/// `tests::instrument_table_matches_psi_ms_obo`. Registry names with no
+/// specific PSI-MS term are deliberately absent and fall back to
+/// [`GENERIC_THERMO_INSTRUMENT`].
+const THERMO_INSTRUMENT_MODELS: &[(&str, &str, &str)] = &[
+    ("Orbitrap Astral", "MS:1003378", "Orbitrap Astral"),
+    ("Orbitrap Ascend", "MS:1003356", "Orbitrap Ascend"),
+    (
+        "Orbitrap Fusion Lumos",
+        "MS:1002732",
+        "Orbitrap Fusion Lumos",
+    ),
+    ("Orbitrap Eclipse", "MS:1003029", "Orbitrap Eclipse"),
+    ("Orbitrap Fusion", "MS:1002416", "Orbitrap Fusion"),
+    (
+        "Orbitrap Exploris 480",
+        "MS:1003028",
+        "Orbitrap Exploris 480",
+    ),
+    (
+        "Orbitrap Exploris 240",
+        "MS:1003094",
+        "Orbitrap Exploris 240",
+    ),
+    (
+        "Orbitrap Exploris 120",
+        "MS:1003095",
+        "Orbitrap Exploris 120",
+    ),
+    (
+        "Orbitrap Exploris GC 240",
+        "MS:1003423",
+        "Orbitrap Exploris GC 240",
+    ),
+    ("Q Exactive HF-X", "MS:1002877", "Q Exactive HF-X"),
+    ("Q Exactive UHMR", "MS:1003245", "Q Exactive UHMR"),
+    ("Q Exactive Plus", "MS:1002634", "Q Exactive Plus"),
+    ("Q Exactive HF", "MS:1002523", "Q Exactive HF"),
+    ("Q Exactive GC", "MS:1003395", "Q Exactive GC Orbitrap"),
+    ("Q Exactive Focus", "MS:1002993", "Q Exactive Focus"),
+    ("Q Exactive", "MS:1001911", "Q Exactive"),
+    ("LTQ Orbitrap Velos Pro", "MS:1003096", "Orbitrap Velos Pro"),
+    (
+        "LTQ Orbitrap Velos ETD",
+        "MS:1003499",
+        "LTQ Orbitrap Velos/ETD",
+    ),
+    ("LTQ Orbitrap Velos", "MS:1001742", "LTQ Orbitrap Velos"),
+    ("LTQ Orbitrap Elite", "MS:1001910", "Orbitrap Elite"),
+    (
+        "LTQ Orbitrap Discovery",
+        "MS:1000555",
+        "LTQ Orbitrap Discovery",
+    ),
+    ("LTQ Orbitrap XL ETD", "MS:1000639", "LTQ Orbitrap XL ETD"),
+    ("LTQ Orbitrap XL", "MS:1000556", "LTQ Orbitrap XL"),
+    ("LTQ Orbitrap", "MS:1000449", "LTQ Orbitrap"),
+    ("Orbitrap Elite", "MS:1001910", "Orbitrap Elite"),
+    ("Orbitrap Velos Pro", "MS:1003096", "Orbitrap Velos Pro"),
+    ("Orbitrap Velos", "MS:1001742", "LTQ Orbitrap Velos"),
+    ("Orbitrap Discovery", "MS:1000555", "LTQ Orbitrap Discovery"),
+    ("Orbitrap XL", "MS:1000556", "LTQ Orbitrap XL"),
+    ("LTQ FT Ultra", "MS:1000557", "LTQ FT Ultra"),
+    ("LTQ FT", "MS:1000448", "LTQ FT"),
+    ("LTQ Velos Pro", "MS:1003495", "Velos Pro"),
+    ("LTQ Velos ETD", "MS:1000856", "LTQ Velos/ETD"),
+    ("LTQ Velos", "MS:1000855", "LTQ Velos"),
+    ("LTQ XL ETD", "MS:1000638", "LTQ XL ETD"),
+    ("LTQ XL", "MS:1000854", "LTQ XL"),
+    ("LTQ", "MS:1000447", "LTQ"),
+    ("LCQ Fleet", "MS:1000578", "LCQ Fleet"),
+    ("LCQ Advantage", "MS:1000167", "LCQ Advantage"),
+    ("LCQ Deca XP Plus", "MS:1000169", "LCQ Deca XP Plus"),
+    ("LCQ Deca", "MS:1000554", "LCQ Deca"),
+    ("LCQ Classic", "MS:1000168", "LCQ Classic"),
+    ("TSQ Quantiva", "MS:1002418", "TSQ Quantiva"),
+    ("TSQ Quantum Ultra AM", "MS:1000743", "TSQ Quantum Ultra AM"),
+    ("TSQ Quantum Ultra", "MS:1000751", "TSQ Quantum Ultra"),
+    ("TSQ Quantum Access", "MS:1000644", "TSQ Quantum Access"),
+    ("TSQ Quantum", "MS:1000199", "TSQ Quantum"),
+    ("TSQ Vantage", "MS:1001510", "TSQ Vantage"),
+    ("TSQ Endura", "MS:1002419", "TSQ Endura"),
+    ("TSQ Altis Plus", "MS:1003292", "TSQ Altis Plus"),
+    ("TSQ Altis", "MS:1002874", "TSQ Altis"),
+    ("TSQ 8000 Evo", "MS:1002525", "TSQ 8000 Evo"),
+    ("TSQ 9000", "MS:1002876", "TSQ 9000"),
+];
+
+/// Look up the specific PSI-MS term for a detected model name.
+fn instrument_term(model: &str) -> Option<(&'static str, &'static str)> {
+    THERMO_INSTRUMENT_MODELS
+        .iter()
+        .find(|(m, _, _)| *m == model)
+        .map(|(_, acc, name)| (*acc, *name))
+}
+
+/// Resolve the instrument CV term for `raw`. Unknown or undetected models get
+/// the generic Thermo Fisher Scientific term.
 fn instrument_cv(raw: &RawFileReader) -> msc::CvTerm {
-    if let Some(model) = raw.instrument_model {
-        let known: &[(&str, &str, &str)] = &[
-            ("Orbitrap Astral", "MS:1003355", "Orbitrap Astral"),
-            ("Orbitrap Ascend", "MS:1003028", "Orbitrap Ascend"),
-            ("Orbitrap Eclipse", "MS:1003029", "Orbitrap Eclipse"),
-            (
-                "Orbitrap Fusion Lumos",
-                "MS:1002732",
-                "Orbitrap Fusion Lumos",
-            ),
-            ("Orbitrap Fusion", "MS:1002416", "Orbitrap Fusion"),
-            (
-                "Orbitrap Exploris 480",
-                "MS:1003028",
-                "Orbitrap Exploris 480",
-            ),
-            (
-                "Orbitrap Exploris 240",
-                "MS:1003098",
-                "Orbitrap Exploris 240",
-            ),
-            (
-                "Orbitrap Exploris 120",
-                "MS:1003199",
-                "Orbitrap Exploris 120",
-            ),
-            ("Q Exactive HF-X", "MS:1002877", "Q Exactive HF-X"),
-            ("Q Exactive HF", "MS:1002523", "Q Exactive HF"),
-            ("Q Exactive Plus", "MS:1002634", "Q Exactive Plus"),
-            ("Q Exactive UHMR", "MS:1003245", "Q Exactive UHMR"),
-            ("Q Exactive", "MS:1001911", "Q Exactive"),
-            ("LTQ Orbitrap Velos Pro", "MS:1001742", "LTQ Orbitrap Velos"),
-            ("LTQ Orbitrap Velos", "MS:1001742", "LTQ Orbitrap Velos"),
-            ("LTQ Orbitrap Elite", "MS:1001910", "LTQ Orbitrap Elite"),
-            ("LTQ Orbitrap XL", "MS:1000556", "LTQ Orbitrap XL"),
-            ("LTQ Orbitrap", "MS:1000449", "LTQ Orbitrap"),
-            ("LTQ Velos Pro", "MS:1001096", "LTQ Velos Pro"),
-            ("LTQ Velos", "MS:1000855", "LTQ Velos"),
-            ("LTQ XL", "MS:1000854", "LTQ XL"),
-            ("LTQ FT", "MS:1000448", "LTQ FT"),
-            ("LTQ", "MS:1000447", "LTQ"),
-            ("TSQ Altis", "MS:1003108", "TSQ Altis"),
-            ("TSQ Quantiva", "MS:1002498", "TSQ Quantiva"),
-            ("TSQ Endura", "MS:1002497", "TSQ Endura"),
-            ("TSQ Vantage", "MS:1001510", "TSQ Vantage"),
-            ("LCQ Classic", "MS:1000443", "LCQ Classic"),
-            ("LCQ Deca", "MS:1000446", "LCQ Deca"),
-            ("LCQ Advantage", "MS:1000590", "LCQ Advantage"),
-        ];
-        for (prefix, acc, name) in known {
-            if model.starts_with(prefix) {
-                return msc::CvTerm::new(acc, *name);
-            }
-        }
-    }
-    msc::CvTerm::new("MS:1000483", "Thermo Fisher Scientific instrument model")
+    let (acc, name) = raw
+        .instrument_model
+        .and_then(instrument_term)
+        .unwrap_or(GENERIC_THERMO_INSTRUMENT);
+    msc::CvTerm::new(acc, name)
 }
 
 /// Acquisition start timestamp (RFC 3339), when the RAW file's info
@@ -767,6 +818,7 @@ pub struct OpenTfRawSource<'a, R: Read + Seek> {
     raw_filename: &'a str,
     include_profile: bool,
     extra_fields: ExtraFields,
+    acquisition_paths: bool,
 }
 
 impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
@@ -782,7 +834,22 @@ impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
             raw_filename,
             include_profile,
             extra_fields: ExtraFields::All,
+            acquisition_paths: false,
         }
+    }
+
+    /// Include acquisition-workstation details in the run metadata: the
+    /// acquisition computer name (`opentfraw.computer_name`), the original
+    /// directory (`opentfraw.original_file_path`), and full original paths in
+    /// `opentfraw.original_file_name` and the method-file entries.
+    ///
+    /// Off by default: those values identify the source machine and its
+    /// directory layout (often including user or project names), so by
+    /// default only file names are written. The same values stay available
+    /// on [`RawFileReader`] (`raw_file_info.computer_name`, `seq_row`).
+    pub fn with_acquisition_paths(mut self, include: bool) -> Self {
+        self.acquisition_paths = include;
+        self
     }
 
     /// Choose which `opentfraw.*` values go into each spectrum's `extra`
@@ -792,6 +859,24 @@ impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
         self.extra_fields = fields;
         self
     }
+}
+
+impl<R: Read + Seek> OpenTfRawSource<'_, R> {
+    /// A stored acquisition path, reduced to its file name unless
+    /// [`Self::with_acquisition_paths`] is on.
+    fn path_value(&self, path: &str) -> String {
+        if self.acquisition_paths {
+            path.to_string()
+        } else {
+            file_name_only(path).to_string()
+        }
+    }
+}
+
+/// Final component of a Windows or POSIX path (both separators accepted,
+/// since RAW files store the acquisition PC's Windows paths).
+fn file_name_only(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
 /// Distinct analyzers across the file's scan events, in first-seen order.
@@ -823,10 +908,17 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
             "opentfraw.controller_count".into(),
             self.raw.raw_file_info.preamble.controller_count.to_string(),
         );
-        extra.insert(
-            "opentfraw.computer_name".into(),
-            self.raw.raw_file_info.computer_name.clone(),
-        );
+        if self.acquisition_paths {
+            extra.insert(
+                "opentfraw.computer_name".into(),
+                self.raw.raw_file_info.computer_name.clone(),
+            );
+        }
+        if let Some(model) = self.raw.instrument_model {
+            if instrument_term(model).is_none() {
+                extra.insert("opentfraw.instrument_model".into(), model.to_string());
+            }
+        }
         let row = &self.raw.seq_row;
         extra.insert("opentfraw.sample_id".into(), row.id.clone());
         extra.insert("opentfraw.sample_comment".into(), row.comment.clone());
@@ -861,14 +953,19 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
         );
         extra.insert(
             "opentfraw.instrument_method_file".into(),
-            row.inst_method.clone(),
+            self.path_value(&row.inst_method),
         );
         extra.insert(
             "opentfraw.processing_method_file".into(),
-            row.proc_method.clone(),
+            self.path_value(&row.proc_method),
         );
-        extra.insert("opentfraw.original_file_name".into(), row.file_name.clone());
-        extra.insert("opentfraw.original_file_path".into(), row.path.clone());
+        extra.insert(
+            "opentfraw.original_file_name".into(),
+            self.path_value(&row.file_name),
+        );
+        if self.acquisition_paths {
+            extra.insert("opentfraw.original_file_path".into(), row.path.clone());
+        }
         for (i, (heading, value)) in self
             .raw
             .raw_file_info
@@ -1098,5 +1195,203 @@ mod tests {
             recs[0].id, recs[1].id,
             "ids feed the indexed-mzML offset index and must stay unique"
         );
+    }
+
+    /// Every PSI-MS term under MS:1000483 "Thermo Fisher Scientific
+    /// instrument model" (including the parent itself), as (accession, name).
+    /// Extracted from psi-ms.obo data-version 4.1.249 (non-obsolete terms
+    /// only). Regenerate when the table needs a term added after that release.
+    const PSI_MS_THERMO_INSTRUMENT_TERMS: &[(&str, &str)] = &[
+        ("MS:1000125", "Thermo Finnigan instrument model"),
+        ("MS:1000153", "DELTA plusAdvantage"),
+        ("MS:1000154", "DELTAplusXP"),
+        ("MS:1000167", "LCQ Advantage"),
+        ("MS:1000168", "LCQ Classic"),
+        ("MS:1000169", "LCQ Deca XP Plus"),
+        ("MS:1000172", "MAT253"),
+        ("MS:1000173", "MAT900XP"),
+        ("MS:1000174", "MAT900XP Trap"),
+        ("MS:1000175", "MAT95XP"),
+        ("MS:1000176", "MAT95XP Trap"),
+        ("MS:1000179", "neptune"),
+        ("MS:1000185", "PolarisQ"),
+        ("MS:1000193", "Surveyor MSQ"),
+        ("MS:1000196", "TEMPUS TOF"),
+        ("MS:1000197", "TRACE DSQ"),
+        ("MS:1000198", "TRITON"),
+        ("MS:1000199", "TSQ Quantum"),
+        ("MS:1000447", "LTQ"),
+        ("MS:1000448", "LTQ FT"),
+        ("MS:1000449", "LTQ Orbitrap"),
+        ("MS:1000450", "LXQ"),
+        ("MS:1000483", "Thermo Fisher Scientific instrument model"),
+        ("MS:1000492", "Thermo Electron instrument model"),
+        ("MS:1000493", "Finnigan MAT instrument model"),
+        ("MS:1000494", "Thermo Scientific instrument model"),
+        ("MS:1000554", "LCQ Deca"),
+        ("MS:1000555", "LTQ Orbitrap Discovery"),
+        ("MS:1000556", "LTQ Orbitrap XL"),
+        ("MS:1000557", "LTQ FT Ultra"),
+        ("MS:1000558", "GC Quantum"),
+        ("MS:1000578", "LCQ Fleet"),
+        ("MS:1000622", "Surveyor PDA"),
+        ("MS:1000623", "Accela PDA"),
+        ("MS:1000634", "DSQ"),
+        ("MS:1000635", "ITQ 700"),
+        ("MS:1000636", "ITQ 900"),
+        ("MS:1000637", "ITQ 1100"),
+        ("MS:1000638", "LTQ XL ETD"),
+        ("MS:1000639", "LTQ Orbitrap XL ETD"),
+        ("MS:1000640", "DFS"),
+        ("MS:1000641", "DSQ II"),
+        ("MS:1000642", "MALDI LTQ XL"),
+        ("MS:1000643", "MALDI LTQ Orbitrap"),
+        ("MS:1000644", "TSQ Quantum Access"),
+        ("MS:1000645", "Element XR"),
+        ("MS:1000646", "Element 2"),
+        ("MS:1000647", "Element GD"),
+        ("MS:1000648", "GC IsoLink"),
+        ("MS:1000649", "Exactive"),
+        ("MS:1000743", "TSQ Quantum Ultra AM"),
+        ("MS:1000748", "SSQ 7000"),
+        ("MS:1000749", "TSQ 7000"),
+        ("MS:1000750", "TSQ"),
+        ("MS:1000751", "TSQ Quantum Ultra"),
+        ("MS:1000854", "LTQ XL"),
+        ("MS:1000855", "LTQ Velos"),
+        ("MS:1000856", "LTQ Velos/ETD"),
+        ("MS:1001510", "TSQ Vantage"),
+        ("MS:1001742", "LTQ Orbitrap Velos"),
+        ("MS:1001908", "ISQ"),
+        ("MS:1001909", "Velos Plus"),
+        ("MS:1001910", "Orbitrap Elite"),
+        ("MS:1001911", "Q Exactive"),
+        ("MS:1002416", "Orbitrap Fusion"),
+        ("MS:1002417", "Orbitrap Fusion ETD"),
+        ("MS:1002418", "TSQ Quantiva"),
+        ("MS:1002419", "TSQ Endura"),
+        ("MS:1002523", "Q Exactive HF"),
+        ("MS:1002525", "TSQ 8000 Evo"),
+        ("MS:1002526", "Exactive Plus"),
+        ("MS:1002634", "Q Exactive Plus"),
+        ("MS:1002732", "Orbitrap Fusion Lumos"),
+        ("MS:1002835", "LTQ Orbitrap Classic"),
+        ("MS:1002874", "TSQ Altis"),
+        ("MS:1002875", "TSQ Quantis"),
+        ("MS:1002876", "TSQ 9000"),
+        ("MS:1002877", "Q Exactive HF-X"),
+        ("MS:1002992", "Orbitrap Exploris GC-MS"),
+        ("MS:1002993", "Q Exactive Focus"),
+        ("MS:1002994", "Orbitrap Excedion Pro"),
+        ("MS:1003028", "Orbitrap Exploris 480"),
+        ("MS:1003029", "Orbitrap Eclipse"),
+        ("MS:1003094", "Orbitrap Exploris 240"),
+        ("MS:1003095", "Orbitrap Exploris 120"),
+        ("MS:1003096", "Orbitrap Velos Pro"),
+        ("MS:1003112", "Orbitrap ID-X"),
+        ("MS:1003245", "Q Exactive UHMR"),
+        ("MS:1003292", "TSQ Altis Plus"),
+        ("MS:1003356", "Orbitrap Ascend"),
+        ("MS:1003378", "Orbitrap Astral"),
+        ("MS:1003395", "Q Exactive GC Orbitrap"),
+        ("MS:1003409", "Stellar"),
+        ("MS:1003411", "Orbitrap IQ-X"),
+        ("MS:1003423", "Orbitrap Exploris GC 240"),
+        ("MS:1003442", "Orbitrap Astral Zoom"),
+        ("MS:1003449", "ISQ 7000"),
+        ("MS:1003495", "Velos Pro"),
+        ("MS:1003496", "MALDI LTQ Orbitrap XL"),
+        ("MS:1003497", "MALDI LTQ Orbitrap Discovery"),
+        ("MS:1003498", "TSQ Quantum Access MAX"),
+        ("MS:1003499", "LTQ Orbitrap Velos/ETD"),
+        ("MS:1003500", "ISQ LT"),
+        ("MS:1003501", "ITQ"),
+        ("MS:1003502", "TSQ Quantum XLS"),
+        ("MS:1003503", "TSQ 8000"),
+        ("MS:1003504", "DeltaPlus IRMS"),
+        ("MS:1003554", "ThermoQuest Voyager"),
+        ("MS:1003800", "TSQ Certis"),
+    ];
+
+    fn obo_name(accession: &str) -> Option<&'static str> {
+        PSI_MS_THERMO_INSTRUMENT_TERMS
+            .iter()
+            .find(|(acc, _)| *acc == accession)
+            .map(|(_, name)| *name)
+    }
+
+    #[test]
+    fn instrument_table_matches_psi_ms_obo() {
+        let mut bad = Vec::new();
+        for (model, acc, name) in THERMO_INSTRUMENT_MODELS {
+            match obo_name(acc) {
+                Some(n) if n == *name => {}
+                Some(n) => bad.push(format!("{model}: {acc} is {n:?}, table says {name:?}")),
+                None => bad.push(format!(
+                    "{model}: {acc} is not a Thermo instrument model term"
+                )),
+            }
+        }
+        let (acc, name) = GENERIC_THERMO_INSTRUMENT;
+        if obo_name(acc) != Some(name) {
+            bad.push(format!("generic term {acc} {name:?} not in OBO list"));
+        }
+        assert!(
+            bad.is_empty(),
+            "instrument table errors:\n{}",
+            bad.join("\n")
+        );
+    }
+
+    #[test]
+    fn instrument_table_has_unique_models_from_the_registry() {
+        let registry: Vec<&str> = crate::device::MODEL_REGISTRY
+            .iter()
+            .map(|(name, _)| *name)
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        for (model, _, _) in THERMO_INSTRUMENT_MODELS {
+            assert!(seen.insert(*model), "duplicate table row for {model}");
+            assert!(
+                registry.contains(model),
+                "{model} is never produced by device::MODEL_REGISTRY"
+            );
+        }
+    }
+
+    #[test]
+    fn unmatched_models_fall_back_to_generic_term() {
+        // Registry names with no specific PSI-MS term.
+        for model in [
+            "Orbitrap Exploris MX",
+            "Orbitrap Exploris",
+            "LCQ Deca XP",
+            "LCQ DUO",
+            "LCQ",
+            "TSQ Quantum Discovery",
+            "TSQ",
+        ] {
+            assert_eq!(instrument_term(model), None, "{model}");
+        }
+        assert_eq!(
+            instrument_term("Orbitrap Astral"),
+            Some(("MS:1003378", "Orbitrap Astral"))
+        );
+    }
+
+    #[test]
+    fn file_name_only_strips_windows_and_posix_dirs() {
+        assert_eq!(
+            file_name_only(r"D:\DATA2021\Some User\run-1.raw"),
+            "run-1.raw"
+        );
+        assert_eq!(file_name_only("F:/Methods/x/method.meth"), "method.meth");
+        assert_eq!(file_name_only("plain.raw"), "plain.raw");
+        assert_eq!(file_name_only(""), "");
+    }
+
+    #[test]
+    fn software_version_tracks_crate_version() {
+        assert_eq!(SOFTWARE_VERSION, env!("CARGO_PKG_VERSION"));
     }
 }

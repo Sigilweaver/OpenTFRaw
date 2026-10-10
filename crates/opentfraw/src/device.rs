@@ -75,7 +75,7 @@ impl DeviceFamily {
 /// Ordered such that longer (more specific) names come BEFORE any name that
 /// is a proper prefix, so e.g. "Orbitrap Fusion Lumos" is matched in
 /// preference to "Orbitrap Fusion" when both appear in the scan window.
-const MODEL_REGISTRY: &[(&str, DeviceFamily)] = &[
+pub(crate) const MODEL_REGISTRY: &[(&str, DeviceFamily)] = &[
     // --- Orbitrap Astral ---
     ("Orbitrap Astral", DeviceFamily::OrbitrapAstral),
     // --- Tribrid Orbitrap ---
