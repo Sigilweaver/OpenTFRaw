@@ -27,8 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Scientific term plus an `opentfraw.instrument_model` userParam. A test
   checks the table against psi-ms.obo.
 - Profile m/z for an unrecognised calibration layout is now NaN instead of
-  the raw frequency. mzML drops such points; Python `profile()` returns
-  NaN.
+  the raw frequency. mzML drops such points and records how many in the
+  spectrum's `opentfraw.unconverted_profile_bins` userParam; Python
+  `profile()` returns NaN.
 - An invalid UTF-16 character in a trailer or status-log string no longer
   fails the whole file open; the value decodes with replacement characters.
 - README and docs-site Rust examples buffer scan reads and compile against
