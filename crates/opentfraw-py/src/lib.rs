@@ -469,8 +469,9 @@ impl RawFile {
         )
     }
 
-    /// Return the canonical Thermo scan filter string for `scan_number`, or
-    /// `None` if the scan is out of range.
+    /// Return the scan filter string for `scan_number`, or `None` if the
+    /// scan is out of range. The grammar is documented in the format
+    /// reference (Scan Event, Filter Line Construction).
     fn scan_filter(&self, scan_number: u32) -> Option<String> {
         self.reader.scan_filter(scan_number)
     }
@@ -721,7 +722,8 @@ impl RawFile {
     /// isolation_width : float | None
     /// collision_energy : float | None
     /// collision_energy_is_nce : bool  (True when collision_energy is a
-    ///     normalized collision energy rather than eV)
+    ///     normalized collision energy rather than eV; when a scan stores
+    ///     both, the NCE value is reported)
     /// activation : str | None  ("hcd", "cid", "etd", ...)
     /// master_scan_number : int | None  (scan that triggered this one)
     /// extra : dict[str, str]  (every other decoded ``opentfraw.*`` value

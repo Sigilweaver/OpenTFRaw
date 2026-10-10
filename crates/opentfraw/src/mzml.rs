@@ -29,7 +29,8 @@ use crate::RawFileReader;
 /// list. `target_mz` is the isolation-window center; `selected_mz` is the
 /// monoisotopic-resolved precursor (when available). `collision_energy` is
 /// either an absolute eV value or, when `ce_is_nce == true`, a normalized
-/// collision energy.
+/// collision energy. When a scan stores both, the NCE value is reported (see
+/// [`crate::ScanParams::activation_energy`]).
 #[derive(Debug, Clone, Default)]
 pub struct PrecursorInfo {
     pub target_mz: Option<f64>,

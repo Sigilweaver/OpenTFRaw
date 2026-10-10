@@ -1,37 +1,66 @@
-/// Scan filter string builder.
-///
-/// A Thermo scan filter is a single-line textual summary of a scan's
-/// acquisition parameters. It is consumed by virtually every proteomics
-/// tool (Proteome Discoverer, MSFragger, MaxQuant, DIA-NN, Skyline,
-/// pyteomics, ...) and is the natural key for correlating peptide
-/// identifications back to source scans.
-///
-/// ## Grammar
-///
-/// Token order follows the "filter line" that the Finnigan Perl module
-/// (Gene Selkov, <https://metacpan.org/dist/Finnigan>) renders from
-/// `Finnigan::ScanEventPreamble`, `Finnigan::Reaction` and
-/// `Finnigan::FractionCollector`.
-///
-/// ```text
-/// <analyzer> <polarity> <scan_mode> <ionization> [<dependent>] <scan_type>
-///   ms<n>  [<precursor>@<method><energy> ...]  [<range>]
-/// ```
-///
-/// ## Examples
-///
-/// - `FTMS + p NSI Full ms [350.0000-1500.0000]`
-/// - `FTMS + c NSI d Full ms2 645.8311@hcd28.00 [150.0000-2000.0000]`
-/// - `ITMS + c NSI d Full ms2 520.2400@cid35.00 [135.0000-1060.0000]`
-/// - `ITMS + c NSI d Full ms3 810.5000@cid35.00 265.2700@cid35.00 [100.0000-1000.0000]` (MS3)
+//! Scan filter string builder.
+//!
+//! A scan filter is a single-line textual summary of a scan's acquisition
+//! parameters. Downstream proteomics tools use it as a key for correlating
+//! identifications back to source scans.
+//!
+//! ## Grammar
+//!
+//! ```text
+//! <analyzer> <polarity> <scan_mode> <ionization> [sid=<eV>] [d] <scan_type>
+//!   ms<n>  [<precursor>@<method><energy> ...]  [<low>-<high>]
+//! ```
+//!
+//! Token order follows the filter line rendered by the `stringify` methods
+//! of the Finnigan Perl module (Gene Selkov, release 0.0206 on CPAN,
+//! <https://metacpan.org/dist/Finnigan>):
+//!
+//! - `lib/Finnigan/ScanEventPreamble.pm`, `stringify`: analyzer, polarity,
+//!   scan mode, ionization, dependent flag `d`, scan type, `ms<n>`
+//!   (<https://metacpan.org/release/SELKOVJR/Finnigan-0.0206/source/lib/Finnigan/ScanEventPreamble.pm#L558>)
+//! - `lib/Finnigan/ScanEvent.pm`, `stringify`: preamble, then precursors,
+//!   then the m/z range
+//!   (<https://metacpan.org/release/SELKOVJR/Finnigan-0.0206/source/lib/Finnigan/ScanEvent.pm#L197>)
+//! - `lib/Finnigan/Reaction.pm`, `stringify`: `<precursor>@<method><energy>`
+//!   (<https://metacpan.org/release/SELKOVJR/Finnigan-0.0206/source/lib/Finnigan/Reaction.pm#L36>)
+//! - `lib/Finnigan/FractionCollector.pm`, `stringify`: `[<low>-<high>]`
+//!   (<https://metacpan.org/release/SELKOVJR/Finnigan-0.0206/source/lib/Finnigan/FractionCollector.pm#L30>)
+//!
+//! ## Project conventions
+//!
+//! The following are this project's conventions, not taken from the Finnigan
+//! module:
+//!
+//! - Numeric precision: precursor m/z and the m/z range use 4 decimals,
+//!   energies use 2 decimals. SRM filters (built in
+//!   [`crate::RawFileReader::scan_filter`]) use 3 decimals for Q1 and the Q3
+//!   windows.
+//! - Activation code 4 renders as `hcd` on an FTMS analyzer and `cid`
+//!   otherwise (see [`activation_str`]).
+//! - A tribrid FTMS MS2 event with two reactions and one non-zero precursor
+//!   renders a single `<precursor>@etd@hcd<energy>` clause.
+//! - SRM filters always start with a fixed `+` polarity, because those files
+//!   have no scan event to read polarity from.
+//! - Multiple precursors are separated by a space.
+//! - `sid=<eV>` is rendered after ionization when a positive source CID
+//!   energy is known.
+//! - Missing values fall back to `MS` for the analyzer, `+` for polarity and
+//!   `Full` for the scan type; an unknown activation code omits the
+//!   `@<method>` clause.
+//!
+//! ## Examples
+//!
+//! - `FTMS + p NSI Full ms [350.0000-1500.0000]`
+//! - `FTMS + c NSI d Full ms2 645.8311@hcd28.00 [150.0000-2000.0000]`
+//! - `ITMS + c NSI d Full ms2 520.2400@cid35.00 [135.0000-1060.0000]`
+//! - `ITMS + c NSI d Full ms3 810.5000@cid35.00 265.2700@cid35.00 [100.0000-1000.0000]` (MS3)
 use crate::scan_event::ScanEvent;
 use crate::scan_index::ScanIndexEntry;
 use crate::types::{Activation, Analyzer, MsPower, ScanType};
 
 /// Resolve the activation filter-string token for a given activation code and
-/// analyzer. On FTMS instruments, both `CID` (code 4) and `HCD` (code 1) render
-/// as "hcd" because they are all beam-type collisions; on ITMS, code 4 renders
-/// as "cid".
+/// analyzer. Code 1 renders as "hcd". Code 4 renders as "hcd" on an FTMS
+/// analyzer and "cid" on any other analyzer; this is a project convention.
 pub fn activation_str(analyzer: Option<Analyzer>, act: Activation) -> &'static str {
     match act {
         Activation::CID => match analyzer {
@@ -42,12 +71,15 @@ pub fn activation_str(analyzer: Option<Analyzer>, act: Activation) -> &'static s
     }
 }
 
-/// Build the canonical Thermo scan filter string for a single scan event.
+/// Build the scan filter string for a single scan event, in the grammar
+/// described in the module documentation.
 ///
 /// - `event` - the scan event record (provides analyzer, polarity, activation, etc.)
 /// - `index_entry` - provides the authoritative m/z scan window
 /// - `precursor_mz` - final-stage precursor m/z from scan_params `Monoisotopic M/Z:`
-/// - `activation_energy` - primary activation energy (eV or NCE %) from scan_params
+/// - `activation_energy` - primary activation energy from scan_params, as
+///   returned by [`crate::ScanParams::activation_energy`] (NCE when
+///   an NCE label is present, otherwise eV)
 ///
 /// For MS2+ scans the function first attempts to build the full precursor chain
 /// from `event.reactions` (populated for both pre-v66 and v66 files). If reactions

@@ -1162,8 +1162,8 @@ impl RawFileReader {
         self.inst_log_record(scan_number).map(StatusLogEntry)
     }
 
-    /// Return the canonical Thermo scan filter string for a given scan
-    /// (1-based scan number), or `None` if the scan is out of range.
+    /// Return the scan filter string for a given scan (1-based scan number),
+    /// or `None` if the scan is out of range.
     ///
     /// Example output: `"FTMS + p NSI Full ms [350.0000-1500.0000]"`.
     ///
@@ -1505,12 +1505,15 @@ impl<'a> ScanParams<'a> {
         self.0.get_f64("MS2 Isolation Offset:")
     }
 
-    /// Activation energy (eV or %) for the primary activation step.
+    /// Activation energy for the primary activation step, as NCE (normalized
+    /// collision energy) or eV.
     ///
-    /// NCE (normalized collision energy) labels are checked first, so a scan
-    /// that carries both reports its NCE value. The eV label is used only when
-    /// no NCE label is present. [`Self::activation_energy_is_nce`] says which
-    /// kind was found. Zero is skipped as "not set".
+    /// Both kinds of value are read from labels stored in the file's scan
+    /// parameters. When a scan carries both an NCE label and an eV label,
+    /// this reader reports the NCE value; this priority is a project choice.
+    /// The eV label is used only when no NCE label is present.
+    /// [`Self::activation_energy_is_nce`] says which kind was returned. Zero
+    /// is skipped as "not set".
     ///
     /// Label priority:
     /// 1. `"HCD Energy:"` / `"HCD Energy V:"` - NCE, string form

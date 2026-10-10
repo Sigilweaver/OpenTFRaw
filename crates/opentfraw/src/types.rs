@@ -252,10 +252,10 @@ impl Activation {
         }
     }
 
-    /// Short identifier used in Thermo scan filter strings (e.g. "hcd", "cid").
+    /// Short identifier used in scan filter strings (e.g. "hcd", "cid").
     ///
-    /// For [`Activation::CID`] on FTMS instruments the filter string conventionally
-    /// uses "hcd" instead; callers should substitute via
+    /// For [`Activation::CID`] on FTMS instruments this project's filter
+    /// string uses "hcd" instead; callers should substitute via
     /// [`crate::scan_filter::activation_str`]. [`Activation::Unknown`] returns
     /// "unknown"; the scan filter builder omits the activation clause for it.
     pub fn as_str(&self) -> &'static str {
