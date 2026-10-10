@@ -190,9 +190,13 @@ fn main() {
             }
 
             // Instrument log schema
+            if let Some(e) = raw.status_log_error() {
+                println!("--- Instrument Log: NOT DECODED: {e} ---");
+            }
             println!(
-                "--- Instrument Log Schema ({} fields) ---",
-                raw.inst_log_header.fields.len()
+                "--- Instrument Log Schema ({} fields, {} records) ---",
+                raw.inst_log_header.fields.len(),
+                raw.inst_log.len()
             );
             for desc in &raw.inst_log_header.fields {
                 println!("  {:?}: \"{}\"", desc.field_type, desc.label);

@@ -63,7 +63,6 @@ these trailer fields:
 | `opentfraw.number_of_matched_lock_masses` | `Number of LM Found:` | Peaks matched in this scan |
 | `opentfraw.number_of_configured_lock_masses` | `Number of Lock Masses:` | Lock masses configured for acquisition |
 
-The corresponding `opentfraw.status.*` keys read the instrument-status log.
 Missing, mistyped, or negative counts are omitted; an explicit zero is retained.
 The older `opentfraw.number_of_lock_masses` key retains its compatibility
 fallback from matched to configured count, so it must not be interpreted as a
@@ -83,16 +82,20 @@ interpretation is still needed, including inherited and valid zero corrections.
 
 ```python
 raw.scan_parameters(3)        # {label: value} trailer-extra dict, or None
-raw.status_log(3)             # {label: value} instrument status log (temps, voltages, ...), or None
+raw.status_log(3)             # {label: value} status-log record in effect for the scan, or None
+raw.status_log_error          # why the status log could not be decoded, or None
 raw.error_log()               # [{"time": ..., "message": ...}, ...] in log order
 raw.controllers()             # [{"index", "is_ms_controller", "controller_type", ...}, ...]
 raw.instrument_method_text()  # best-effort UTF-16LE text/XML acquisition method blob, or None
 ```
 
-`status_log` and `scan_parameters` are both per-scan generic-record
-streams decoded from the file, but distinct ones: `scan_parameters`
-holds the per-scan trailer values, while `status_log` is the
-instrument-state-over-time log.
+`status_log` and `scan_parameters` are distinct generic-record streams:
+`scan_parameters` holds one trailer record per scan, while `status_log`
+reads the instrument-state-over-time log, written every few seconds, and
+returns the last record written at or before the scan's start time. Scans
+before the first record return `None`. If the file's status log could not
+be decoded, `status_log` raises `ValueError` and `status_log_error` says
+why.
 
 `controllers()` returns a one-element list for the common single-MS-
 controller case; multi-detector files (UV, PDA, Analog channels

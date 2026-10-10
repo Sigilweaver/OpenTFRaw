@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking (Rust):** `scan_filter::build_filter` no longer takes a
   `supplemental_energy` argument; it only fed the removed code-12 EThcD
   clause.
-- **Breaking:** typed trailer and status-log accessors read only labels
+- **Breaking:** typed trailer accessors read only labels
   that occur in the reference corpus. These label fallbacks are removed,
   and none of them occurs in any of the 291 corpus files, so no decoded
   value changes:
@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `HCD Energy V:` (NCE), else `HCD Energy eV:` (eV).
   - `isolation_width_mz`: `MSn Isolation Width:`, `Isolation Width (M/Z):`,
     `MS2 Isolation Width (M/Z):`; `isolation_target_mz`: `Target M/Z:`
-  - `ion_injection_time_ms` (trailer and status log): `Ion Inject Time (ms):`
+  - `ion_injection_time_ms`: `Ion Inject Time (ms):`
   - `possible_charge_states`: `Possible Charge States:`. It now returns the
     selected charge (`Charge State:`) as a one-element list.
 - **Breaking:** `ScanParams::supplemental_activation_energy`,
@@ -59,7 +59,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Analog`, `Adc`, `Pda` and `Uv` variants were never produced: no byte that
   names a non-MS controller's kind is decoded.
 
+### Removed
+
+- **Breaking:** the 9 `opentfraw.status.*` extra fields and the
+  `StatusLogEntry` accessors that fed them (`ion_injection_time_ms`,
+  `ft_resolution`, `faims_cv`, `s_lens_rf_level`, `analyzer_temperature`,
+  `lock_mass_correction_ppm` and the three lock-mass counts) are removed.
+  Their labels do not occur in any status log, so they were always empty;
+  the same values are emitted per scan from scan parameters. The decoded
+  status log is still available through Rust `status_log_record` and
+  Python `status_log()`.
+
 ### Fixed
+
+- The instrument status log is decoded. It was never found: the reader
+  looked for its header at `inst_log_addr`, which addresses the first
+  record, and skipped v57-v63 files entirely. The header is now read after
+  the InstID block that follows the RunHeader, each record's leading
+  Float32 time is read, and the layout is checked against `inst_log_addr`
+  and `error_log_addr`. All 291 corpus files (v63, v64, v66) now decode,
+  828,554 records in total. A scan now gets the status-log record in effect
+  at its start time instead of the record with the scan's index, since the
+  log is written every few seconds rather than once per scan. Records on a
+  different clock (a pre-acquisition block on some Tribrid files, a
+  trailing zero-time record on a TSQ Quantum file) are kept but not matched
+  to scans.
+- A status log that cannot be decoded is reported instead of looking
+  empty: `RawFileReader::status_log_error`, Python
+  `RawFile.status_log_error`, and the mzML run-level
+  `opentfraw.status_log_error` userParam give the reason, and Python
+  `status_log()` raises `ValueError`.
+- **Breaking (Rust):** `RawFileReader::inst_log` is now
+  `Vec<StatusLogRecord>` (time in minutes plus the values), with the new
+  fields `inst_log_time_axis` and `status_log_error` and the new method
+  `status_log_record`.
 
 - SRM scan filters (TSQ files) no longer contain an ionization token. It
   was a fixed `NSI` for v63 files and `ESI` for v66 files, but these files
