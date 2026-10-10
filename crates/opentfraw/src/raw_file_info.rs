@@ -43,7 +43,7 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
 /// Return the number of days in `month` of `year`, or `None` if either
 /// value is out of its valid range (month 1-12).
 fn days_in_month(year: u16, month: u16) -> Option<u16> {
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => Some(31),
         4 | 6 | 9 | 11 => Some(30),

@@ -14,6 +14,17 @@ use crate::scan_event::{ScanEvent, ScanEventPreamble};
 use crate::scan_index::ScanIndexEntry;
 use crate::seq_row::SeqRow;
 
+/// Decode little-endian UTF-16 code units from `raw` up to the first NUL
+/// (or the end). A trailing odd byte is ignored.
+fn utf16_units_until_nul(raw: &[u8]) -> Vec<u16> {
+    raw.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
+        .take_while(|&u| u != 0)
+        .collect()
+}
+
 /// Low-level binary reading helpers.
 pub(crate) struct BinaryReader<R> {
     inner: R,
@@ -197,16 +208,10 @@ impl<R: Read + Seek> BinaryReader<R> {
     pub fn read_utf16_fixed(&mut self, byte_len: usize) -> Result<String> {
         let pos = self.pos;
         let raw = self.read_bytes(byte_len)?;
-        if byte_len % 2 != 0 {
+        if !byte_len.is_multiple_of(2) {
             return Err(Error::InvalidUtf16(pos));
         }
-        let units: Vec<u16> = raw
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        // Find null terminator
-        let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
-        String::from_utf16(&units[..end]).map_err(|_| Error::InvalidUtf16(pos))
+        String::from_utf16(&utf16_units_until_nul(&raw)).map_err(|_| Error::InvalidUtf16(pos))
     }
 
     /// Like [`Self::read_utf16_fixed`], but replaces invalid UTF-16 (e.g.
@@ -216,15 +221,10 @@ impl<R: Read + Seek> BinaryReader<R> {
     pub fn read_utf16_fixed_lossy(&mut self, byte_len: usize) -> Result<String> {
         let pos = self.pos;
         let raw = self.read_bytes(byte_len)?;
-        if byte_len % 2 != 0 {
+        if !byte_len.is_multiple_of(2) {
             return Err(Error::InvalidUtf16(pos));
         }
-        let units: Vec<u16> = raw
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
-        Ok(String::from_utf16_lossy(&units[..end]))
+        Ok(String::from_utf16_lossy(&utf16_units_until_nul(&raw)))
     }
 
     /// Read a PascalStringWin32: UInt32 char count, then that many UTF-16-LE code units.
@@ -236,13 +236,7 @@ impl<R: Read + Seek> BinaryReader<R> {
         }
         let byte_len = char_count.checked_mul(2).ok_or(Error::InvalidUtf16(pos))?;
         let raw = self.read_bytes(byte_len)?;
-        let units: Vec<u16> = raw
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        // Strip trailing nulls
-        let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
-        String::from_utf16(&units[..end]).map_err(|_| Error::InvalidUtf16(pos))
+        String::from_utf16(&utf16_units_until_nul(&raw)).map_err(|_| Error::InvalidUtf16(pos))
     }
 
     /// Read a Windows FILETIME and return Unix timestamp as f64 seconds.
