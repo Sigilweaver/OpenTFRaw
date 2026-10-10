@@ -25,7 +25,9 @@ DEFAULT_PRIDE_RAW_URL = (
     "https://ftp.pride.ebi.ac.uk/pride/data/archive/2025/05/PXD054004/"
     "20171113_Map_NS1_1to139_4deg_50uM_001.raw"
 )
-DEFAULT_PRIDE_RAW_NAME = "test.raw"
+# Same cache name the Rust corpus tests look for
+# (crates/opentfraw/tests/common/mod.rs CORPUS_FIXTURE_NAME).
+DEFAULT_PRIDE_RAW_NAME = "PXD054004_LTQ_FT_20171113_Map_NS1_1to139_4deg_50uM_001.raw"
 
 PRIDE_RAW_URL = os.environ.get("PRIDE_RAW_URL", DEFAULT_PRIDE_RAW_URL)
 PRIDE_RAW_NAME = os.environ.get("PRIDE_RAW_NAME", DEFAULT_PRIDE_RAW_NAME)
