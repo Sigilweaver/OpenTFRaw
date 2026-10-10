@@ -192,9 +192,8 @@ def test_centroid_labels(raw_file):
         "resolution",
         "noise",
         "baseline",
-        "signal_to_noise",
     }
-    assert expected_keys <= labels.keys()
+    assert set(labels.keys()) == expected_keys
     n = len(labels["mz"])
     for key in expected_keys:
         assert isinstance(labels[key], np.ndarray)

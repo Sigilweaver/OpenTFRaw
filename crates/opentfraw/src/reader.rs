@@ -1015,7 +1015,7 @@ impl RawFileReader {
     }
 
     /// Read a single scan packet's centroid peaks and FT label data
-    /// (resolution / noise / baseline), skipping the profile signal for speed.
+    /// (resolution and the stored noise / baseline nodes), skipping the profile signal for speed.
     ///
     /// Only valid for PacketHeader-format files; TSQ/SRM scans carry no FT
     /// label data.

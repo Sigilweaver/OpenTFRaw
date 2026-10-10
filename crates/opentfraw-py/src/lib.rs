@@ -547,7 +547,7 @@ impl RawFile {
     ///
     /// Works on every file type (Orbitrap/ion-trap and TSQ/SRM). Profile
     /// data is skipped for speed; use :meth:`profile` for the raw profile
-    /// signal and :meth:`centroid_labels` for per-peak resolution and noise.
+    /// signal and :meth:`centroid_labels` for per-peak label data.
     fn peaks<'py>(
         &self,
         py: Python<'py>,
@@ -621,12 +621,17 @@ impl RawFile {
     /// - ``resolution`` : float32
     /// - ``noise`` : float32
     /// - ``baseline`` : float32
-    /// - ``signal_to_noise`` : float32
-    ///   (``(intensity - baseline) / (noise - baseline)``)
     ///
-    /// ``resolution`` / ``noise`` / ``baseline`` / ``signal_to_noise`` are
-    /// ``NaN`` for scans that carry no FT label data (e.g. ion-trap scans).
-    /// The profile signal is skipped for speed.
+    /// ``noise`` and ``baseline`` are the second and third f32 of each
+    /// ``(m/z, noise, baseline)`` node in the scan's triplet stream, which
+    /// follows the centroid peak list. The per-peak value is the linear
+    /// interpolation of those nodes at the peak m/z. The names are an
+    /// unconfirmed reading of the stored values: no public source documents
+    /// what they measure, so treat them as raw stored values.
+    ///
+    /// ``resolution`` / ``noise`` / ``baseline`` are ``NaN`` for scans that
+    /// carry no FT label data (e.g. ion-trap scans). The profile signal is
+    /// skipped for speed.
     fn centroid_labels<'py>(
         &self,
         py: Python<'py>,
@@ -646,7 +651,6 @@ impl RawFile {
         let mut resolution = Vec::with_capacity(n);
         let mut noise = Vec::with_capacity(n);
         let mut baseline = Vec::with_capacity(n);
-        let mut signal_to_noise = Vec::with_capacity(n);
 
         for (i, p) in pkt.peaks.iter().enumerate() {
             mz.push(p.mz);
@@ -660,18 +664,10 @@ impl RawFile {
                 Some((nz, bl)) => {
                     noise.push(nz);
                     baseline.push(bl);
-                    // S:N = (intensity - baseline) / (noise - baseline).
-                    let denom = nz - bl;
-                    signal_to_noise.push(if denom > 0.0 {
-                        (p.abundance - bl) / denom
-                    } else {
-                        f32::NAN
-                    });
                 }
                 None => {
                     noise.push(f32::NAN);
                     baseline.push(f32::NAN);
-                    signal_to_noise.push(f32::NAN);
                 }
             }
         }
@@ -682,7 +678,6 @@ impl RawFile {
         d.set_item("resolution", resolution.to_pyarray(py))?;
         d.set_item("noise", noise.to_pyarray(py))?;
         d.set_item("baseline", baseline.to_pyarray(py))?;
-        d.set_item("signal_to_noise", signal_to_noise.to_pyarray(py))?;
         Ok(d)
     }
 

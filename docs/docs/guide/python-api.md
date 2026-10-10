@@ -44,8 +44,15 @@ for scan in raw.iter_scans():             # equivalent to scan(n) for n in range
 raw.scan_table()                          # {key: [one value per scan]} for every scan() key but mz/intensity; no peak reads
 raw.scan_filter(3)                        # scan filter string, or None
 raw.profile(3)                            # (mz, intensity) from the raw profile signal
-raw.centroid_labels(3)                    # mz/intensity/resolution/noise/baseline/signal_to_noise
+raw.centroid_labels(3)                    # mz/intensity/resolution/noise/baseline arrays
 ```
+
+`centroid_labels()` `noise` and `baseline` are the second and third f32 of
+each `(m/z, noise, baseline)` node in the scan's triplet stream, which
+follows the centroid peak list, linearly interpolated at each peak m/z. The
+names are an unconfirmed reading: no public source documents what these
+values measure, so treat them as raw stored values. All three label arrays
+are `NaN` for scans without FT label data.
 
 `scan()` reads its metadata from the same derivation the mzML writer uses,
 so its precursor, collision-energy and scan-mode values match what
