@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- mzML and canonical run metadata no longer include the acquisition
+  computer name or the original directory, and original file and method
+  paths are reduced to file names. Call
+  `OpenTfRawSource::with_acquisition_paths(true)` to restore the full
+  values; `RawFileReader` still exposes them directly.
+- mzML `<software>` now reports the real opentfraw version instead of a
+  fixed `0.1.0`.
+- MSRV is now Rust 1.88, matching `openmassspec-core` 2.0.0.
+
+### Fixed
+
+- mzML instrument CV terms: 13 models had a wrong accession or name,
+  including Orbitrap Astral (was `MS:1003355`, "bottom-up proteomics") and
+  Orbitrap Ascend (was the Exploris 480 term). Every detected model with a
+  PSI-MS term now maps to it; others get the generic Thermo Fisher
+  Scientific term plus an `opentfraw.instrument_model` userParam. A test
+  checks the table against psi-ms.obo.
+- Profile m/z for an unrecognised calibration layout is now NaN instead of
+  the raw frequency. mzML drops such points; Python `profile()` returns
+  NaN.
+- An invalid UTF-16 character in a trailer or status-log string no longer
+  fails the whole file open; the value decodes with replacement characters.
+- README and docs-site Rust examples buffer scan reads and compile against
+  the current `read_scan_peaks` return type.
+- Python docstrings for `peaks()` and `iter_scans()`; two broken rustdoc
+  links.
+
+### Validation
+
+- New corpus test checks, for every scan of the CI fixture, that the most
+  intense decoded centroid matches the scan-index base peak and that every
+  centroid lies inside the scan window. Also passes on all 152,328 scans of
+  PXD031322 (Fusion Lumos).
+- CI sets `REQUIRE_CORPUS=1`, so corpus tests fail instead of skipping when
+  the fixture is missing, and Rust and pytest share one fixture name.
+
 ## [3.0.0] - 2026-10-04
 
 ### Changed
