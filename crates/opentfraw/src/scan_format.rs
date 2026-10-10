@@ -2,7 +2,7 @@
 //!
 //! Thermo RAW files use one of three distinct scan-data layouts depending on
 //! the file version and instrument type. This module classifies those layouts
-//! and provides a single entry point ([`RawFileReader::read_scan_peaks`]) that
+//! and provides a single entry point ([`RawFileReader::read_scan_peaks`](crate::RawFileReader::read_scan_peaks)) that
 //! dispatches to the correct decoder.
 //!
 //! # Format matrix

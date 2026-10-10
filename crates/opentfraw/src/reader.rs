@@ -1587,7 +1587,7 @@ impl<'a> ScanParams<'a> {
             .filter(|&v| v > 0.0)
     }
 
-    /// Whether the value returned by [`activation_energy`] is a normalized
+    /// Whether the value returned by [`Self::activation_energy`] is a normalized
     /// collision energy (NCE, dimensionless %) rather than an absolute eV value.
     ///
     /// Returns `true` when `activation_energy` found a value from an NCE label
