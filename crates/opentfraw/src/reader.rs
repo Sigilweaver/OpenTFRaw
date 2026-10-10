@@ -209,6 +209,24 @@ impl<R: Read + Seek> BinaryReader<R> {
         String::from_utf16(&units[..end]).map_err(|_| Error::InvalidUtf16(pos))
     }
 
+    /// Like [`Self::read_utf16_fixed`], but replaces invalid UTF-16 (e.g.
+    /// unpaired surrogates) with U+FFFD instead of failing. Used for
+    /// free-text values such as trailer strings, where one bad character
+    /// should not make the whole file unreadable.
+    pub fn read_utf16_fixed_lossy(&mut self, byte_len: usize) -> Result<String> {
+        let pos = self.pos;
+        let raw = self.read_bytes(byte_len)?;
+        if byte_len % 2 != 0 {
+            return Err(Error::InvalidUtf16(pos));
+        }
+        let units: Vec<u16> = raw
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
+        Ok(String::from_utf16_lossy(&units[..end]))
+    }
+
     /// Read a PascalStringWin32: UInt32 char count, then that many UTF-16-LE code units.
     pub fn read_pascal_string(&mut self) -> Result<String> {
         let pos = self.pos;
