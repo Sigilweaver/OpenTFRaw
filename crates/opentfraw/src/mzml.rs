@@ -284,7 +284,9 @@ pub fn extract_spectrum<R: Read + Seek>(
     idx: u32,
     include_profile: bool,
 ) -> Option<SpectrumRecord> {
-    let (meta, mz, intensity, effective_scan_mode) =
+    // `SpectrumRecord` has no field for the unconverted-bin count; the
+    // `openmassspec_core` adapter reports it in `extra`.
+    let (meta, mz, intensity, effective_scan_mode, _unconverted_mz_bins) =
         extract_parts(raw, source, idx, include_profile)?;
     Some(SpectrumRecord {
         index: meta.index,
@@ -310,8 +312,16 @@ pub fn extract_spectrum<R: Read + Seek>(
     })
 }
 
-/// A scan's metadata, its peak arrays and the scan mode those arrays are in.
-type ScanParts = (ScanMetadata, Vec<f64>, Vec<f32>, Option<crate::ScanMode>);
+/// A scan's metadata, its peak arrays, the scan mode those arrays are in,
+/// and the number of profile bins dropped because their m/z could not be
+/// computed (unknown calibration layout).
+type ScanParts = (
+    ScanMetadata,
+    Vec<f64>,
+    Vec<f32>,
+    Option<crate::ScanMode>,
+    usize,
+);
 
 fn extract_parts<R: Read + Seek>(
     raw: &RawFileReader,
@@ -321,7 +331,7 @@ fn extract_parts<R: Read + Seek>(
 ) -> Option<ScanParts> {
     let meta = scan_metadata(raw, idx)?;
     let event = raw.scan_events.get(idx as usize);
-    let (mz, intensity, effective_scan_mode) = resolve_scan_arrays(
+    let (mz, intensity, effective_scan_mode, unconverted) = resolve_scan_arrays(
         raw,
         source,
         meta.scan_number,
@@ -329,7 +339,7 @@ fn extract_parts<R: Read + Seek>(
         event,
         meta.scan_mode,
     )?;
-    Some((meta, mz, intensity, effective_scan_mode))
+    Some((meta, mz, intensity, effective_scan_mode, unconverted))
 }
 
 /// Iterate every scan in `raw` as a [`SpectrumRecord`].
@@ -371,12 +381,18 @@ fn ms_level(power: MsPower) -> u32 {
     }
 }
 
+/// m/z, intensity, effective scan mode, and unconverted profile-bin count.
+type ScanArrays = (Vec<f64>, Vec<f32>, Option<crate::ScanMode>, usize);
+
 /// Resolve the m/z and intensity arrays for a single scan.
 ///
 /// When `include_profile=true` AND the scan packet contains profile data, the
 /// profile signal is decoded and returned as the primary arrays (with
 /// `effective_scan_mode = Some(ScanMode::Profile)`). Otherwise the centroid
 /// peak list is used.
+///
+/// The last element counts profile bins dropped because their m/z is `NaN`
+/// (unknown calibration layout, see `scan_data::freq_to_mz`).
 ///
 /// Returns `None` when the scan cannot be read (caller should skip it).
 fn resolve_scan_arrays<R: Read + Seek>(
@@ -386,14 +402,15 @@ fn resolve_scan_arrays<R: Read + Seek>(
     include_profile: bool,
     event: Option<&ScanEvent>,
     nominal_scan_mode: Option<crate::ScanMode>,
-) -> Option<(Vec<f64>, Vec<f32>, Option<crate::ScanMode>)> {
+) -> Option<ScanArrays> {
     if include_profile && !raw.flat_peaks {
         let packet = raw.read_scan(source, scan_number).ok()?;
         if let Some(profile) = packet.profile {
             let coeffs = event.map(|e| e.coefficients.as_slice()).unwrap_or(&[]);
             let pairs = profile.to_mz_intensity(coeffs);
-            // `m > 0.0` also drops NaN m/z (unknown calibration layout, see
-            // `scan_data::freq_to_mz`), so unconverted bins never reach mzML.
+            // `m > 0.0` also drops NaN m/z (unknown calibration layout), so
+            // unconverted bins never reach mzML. They are counted instead.
+            let unconverted = pairs.iter().filter(|(m, _)| m.is_nan()).count();
             let mz: Vec<f64> = pairs
                 .iter()
                 .filter(|(m, _)| *m > 0.0)
@@ -404,31 +421,33 @@ fn resolve_scan_arrays<R: Read + Seek>(
                 .filter(|(m, _)| *m > 0.0)
                 .map(|(_, i)| *i as f32)
                 .collect();
-            return Some((mz, int, Some(crate::ScanMode::Profile)));
+            return Some((mz, int, Some(crate::ScanMode::Profile), unconverted));
         }
         let mz: Vec<f64> = packet.peaks.iter().map(|p| p.mz).collect();
         let int: Vec<f32> = packet.peaks.iter().map(|p| p.abundance).collect();
-        return Some((mz, int, nominal_scan_mode));
+        return Some((mz, int, nominal_scan_mode, 0));
     }
     let peaks = raw.read_peaks_only(source, scan_number).ok()?;
     let mz: Vec<f64> = peaks.iter().map(|p| p.mz).collect();
     let int: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
-    Some((mz, int, nominal_scan_mode))
+    Some((mz, int, nominal_scan_mode, 0))
 }
 
 // -- Adapter / canonical writer wrappers --
 //
 // The mzML emission machinery itself lives in `openmassspec_core`. Here we
 // define a `SpectrumSource` adapter that pulls Thermo scans through
-// `extract_spectrum` and converts each opentfraw `SpectrumRecord` into the
-// vendor-neutral `openmassspec_core::SpectrumRecord` the canonical writer
-// consumes. This keeps opentfraw's public mzML API stable and byte-identical
-// to the pre-migration output, while sharing the writer with the other
-// vendors.
+// `extract_parts` and converts each into the vendor-neutral
+// `openmassspec_core::SpectrumRecord` the canonical writer consumes, so the
+// writer is shared with the other vendors.
 
 use openmassspec_core as msc;
 
 const SOFTWARE_NAME: &str = "opentfraw";
+/// Spectrum `extra` key holding the number of profile bins dropped because
+/// the scan's calibration layout is unknown and their m/z is `NaN`. Written
+/// regardless of [`ExtraFields`], since it reports lost data.
+const UNCONVERTED_PROFILE_BINS_KEY: &str = "opentfraw.unconverted_profile_bins";
 // Written to mzML `<software version=...>` so converted files record the
 // opentfraw release that produced them.
 const SOFTWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -614,7 +633,7 @@ fn to_msc_record(
     parts: ScanParts,
     extra: ::std::collections::BTreeMap<String, String>,
 ) -> msc::SpectrumRecord {
-    let (meta, mz, intensity, scan_mode) = parts;
+    let (meta, mz, intensity, scan_mode, _) = parts;
     let precursor = meta.precursor.map(|p| msc::PrecursorInfo {
         target_mz: p.target_mz,
         selected_mz: p.selected_mz,
@@ -1008,7 +1027,10 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
                 let cur = idx;
                 idx += 1;
                 if let Some(parts) = extract_parts(raw, source, cur, include_profile) {
-                    let extra = scan_extras(raw, &parts.0, extra_fields);
+                    let mut extra = scan_extras(raw, &parts.0, extra_fields);
+                    if parts.4 > 0 {
+                        extra.insert(UNCONVERTED_PROFILE_BINS_KEY.into(), parts.4.to_string());
+                    }
                     return Some(to_msc_record(parts, extra));
                 }
             }
@@ -1027,7 +1049,7 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
     }
 }
 
-// -- Public mzML entry points (unchanged signatures) --
+// -- Public mzML entry points --
 
 /// Write the contents of `raw` as mzML 1.1.0 to `out`.
 ///
