@@ -14,10 +14,7 @@ LEGACY = "opentfraw.number_of_lock_masses"
 def test_lock_mass_extra_keys_are_registered():
     keys = set(opentfraw.extra_field_keys())
     assert {MATCHED, CONFIGURED} <= keys
-    assert {
-        "opentfraw.status.number_of_matched_lock_masses",
-        "opentfraw.status.number_of_configured_lock_masses",
-    } <= keys
+    assert not any(k.startswith("opentfraw.status.") for k in keys)
 
 
 @pytest.mark.parametrize(

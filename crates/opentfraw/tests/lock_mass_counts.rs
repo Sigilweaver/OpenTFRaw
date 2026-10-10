@@ -1,8 +1,5 @@
 use opentfraw::generic_data::{GenericRecord, GenericValue};
-use opentfraw::{
-    extra::scan_extras, scan_metadata, ExtraFields, RawFileReader, ScanParams, StatusLogEntry,
-    StatusLogRecord,
-};
+use opentfraw::{extra::scan_extras, scan_metadata, ExtraFields, RawFileReader, ScanParams};
 
 fn record(matched: Option<GenericValue>, configured: Option<GenericValue>) -> GenericRecord {
     let mut values = Vec::new();
@@ -26,10 +23,6 @@ fn assert_counts(
     assert_eq!(p.number_of_configured_lock_masses(), configured);
     assert_eq!(p.number_of_lock_masses(), legacy);
     assert_eq!(p.number_of_lm_found(), legacy);
-    let s = StatusLogEntry(r);
-    assert_eq!(s.number_of_matched_lock_masses(), matched);
-    assert_eq!(s.number_of_configured_lock_masses(), configured);
-    assert_eq!(s.number_of_lock_masses(), legacy);
 }
 
 #[test]
@@ -210,8 +203,8 @@ fn public_lock_mass_counts_and_inherited_correction() {
         assert_eq!(ms1_zero, expected_ms1_zero);
 
         // A configured-only record must not leak configuration into the strict
-        // matched extra. Exercise the registered trailer and status-log paths,
-        // while retaining the established compatibility key.
+        // matched extra. Exercise the registered trailer path, while retaining
+        // the established compatibility key.
         for (matched, configured, want_m, want_c) in [
             (None, Some(GenericValue::Int32(9)), None, Some("9")),
             (
@@ -223,39 +216,27 @@ fn public_lock_mass_counts_and_inherited_correction() {
             (Some(GenericValue::Int32(1)), None, Some("1"), None),
             (None, None, None, None),
         ] {
-            let rec = record(matched, configured);
-            raw.scan_parameters[0] = GenericRecord {
-                values: rec.values.clone(),
-            };
-            // A single record written at time zero is in effect for scan 0.
-            raw.inst_log = vec![StatusLogRecord {
-                time: 0.0,
-                record: rec,
-            }];
-            raw.inst_log_time_axis = 0..1;
-            raw.status_log_error = None;
+            raw.scan_parameters[0] = record(matched, configured);
             let meta = scan_metadata(&raw, 0).unwrap();
             let extras = scan_extras(&raw, &meta, &ExtraFields::All);
-            for prefix in ["opentfraw.", "opentfraw.status."] {
-                assert_eq!(
-                    extras
-                        .get(&format!("{prefix}number_of_matched_lock_masses"))
-                        .map(String::as_str),
-                    want_m
-                );
-                assert_eq!(
-                    extras
-                        .get(&format!("{prefix}number_of_configured_lock_masses"))
-                        .map(String::as_str),
-                    want_c
-                );
-                assert_eq!(
-                    extras
-                        .get(&format!("{prefix}number_of_lock_masses"))
-                        .map(String::as_str),
-                    want_m.or(want_c)
-                );
-            }
+            assert_eq!(
+                extras
+                    .get("opentfraw.number_of_matched_lock_masses")
+                    .map(String::as_str),
+                want_m
+            );
+            assert_eq!(
+                extras
+                    .get("opentfraw.number_of_configured_lock_masses")
+                    .map(String::as_str),
+                want_c
+            );
+            assert_eq!(
+                extras
+                    .get("opentfraw.number_of_lock_masses")
+                    .map(String::as_str),
+                want_m.or(want_c)
+            );
         }
     }
 }

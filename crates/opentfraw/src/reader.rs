@@ -1295,8 +1295,8 @@ impl RawFileReader {
 
     /// Return a typed [`StatusLogEntry`] view for the given scan number.
     ///
-    /// This wraps [`Self::inst_log_record`] and provides named, type-safe
-    /// accessors for common instrument-status fields.
+    /// This wraps [`Self::inst_log_record`]; read fields by their
+    /// status-log label.
     pub fn status_log_entry(&self, scan_number: u32) -> Option<StatusLogEntry<'_>> {
         self.inst_log_record(scan_number).map(StatusLogEntry)
     }
@@ -1863,7 +1863,7 @@ pub struct StatusLogRecord {
     pub record: GenericRecord,
 }
 
-/// Typed accessor for a per-scan instrument-status log entry.
+/// The instrument-status log entry in effect for a scan.
 ///
 /// The instrument log records instrument-state values (temperatures, voltages,
 /// pressures, etc.) over time; a scan sees the last record written at or
@@ -1875,75 +1875,6 @@ impl<'a> StatusLogEntry<'a> {
     #[inline]
     pub fn record(&self) -> &GenericRecord {
         self.0
-    }
-
-    /// Ion injection time in milliseconds (`"Ion Injection Time (ms):"`).
-    pub fn ion_injection_time_ms(&self) -> Option<f64> {
-        self.0.get_f64("Ion Injection Time (ms):")
-    }
-
-    /// Orbitrap / FT resolving power setting.
-    pub fn ft_resolution(&self) -> Option<i32> {
-        self.0
-            .get_i32("Orbitrap Resolution:")
-            .or_else(|| self.0.get_i32("FT Resolution:"))
-    }
-
-    /// FAIMS compensation voltage (V).
-    pub fn faims_cv(&self) -> Option<f64> {
-        self.0
-            .get_f64("FAIMS CV:")
-            .or_else(|| self.0.get_f32("FAIMS CV:").map(f64::from))
-    }
-
-    /// S-Lens RF level (V).
-    pub fn s_lens_rf_level(&self) -> Option<f64> {
-        self.0.get_f64("S-Lens RF Level:")
-    }
-
-    /// Orbitrap / analyzer temperature (°C).
-    pub fn analyzer_temperature(&self) -> Option<f64> {
-        self.0
-            .get_f64("Analyzer Temperature:")
-            .or_else(|| self.0.get_f32("Analyzer Temperature:").map(f64::from))
-    }
-
-    /// Lock mass reference correction (ppm).
-    pub fn lock_mass_correction_ppm(&self) -> Option<f64> {
-        self.0
-            .get_f64("LM Correction (ppm):")
-            .or_else(|| self.0.get_f64("LM m/z-Correction (ppm):"))
-    }
-
-    /// Compatibility count: matched lock masses, falling back to the configured
-    /// count when the matched-count label is absent or has an unsupported type.
-    ///
-    /// The two labels describe different quantities. Prefer
-    /// [`Self::number_of_matched_lock_masses`] and
-    /// [`Self::number_of_configured_lock_masses`] for new code; this accessor
-    /// returns whichever of the two labels is present.
-    pub fn number_of_lock_masses(&self) -> Option<i32> {
-        self.0
-            .get_i32("Number of LM Found:")
-            .or_else(|| self.0.get_i32("Number of Lock Masses:"))
-    }
-
-    /// Number of lock-mass peaks found in this record (`Number of LM Found:`).
-    ///
-    /// Does not fall back to the configured count. Absent, mistyped, or negative
-    /// counts return `None`; zero is preserved. Neither zero nor a positive
-    /// count establishes whether a correction was applied to this scan.
-    pub fn number_of_matched_lock_masses(&self) -> Option<i32> {
-        self.0.get_i32("Number of LM Found:").filter(|&n| n >= 0)
-    }
-
-    /// Number of configured lock masses (`Number of Lock Masses:`).
-    ///
-    /// Does not fall back to the matched count. Absent, mistyped, or negative
-    /// counts return `None`; zero is preserved. A configured count does not
-    /// establish whether any lock masses matched or correction was applied.
-    pub fn number_of_configured_lock_masses(&self) -> Option<i32> {
-        self.0.get_i32("Number of Lock Masses:").filter(|&n| n >= 0)
     }
 
     /// Get any field by name (pass-through to the underlying record).
