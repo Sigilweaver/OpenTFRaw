@@ -555,9 +555,9 @@ Exploris 480, TSQ Vantage, TSQ Quantiva, TSQ Altis).
 
 - CI migrated from WarpBuild runners to standard GitHub-hosted
   (`ubuntu-latest`, `macos-latest`, `windows-latest`).
-- Removed the `tools/` vendor SDK tree and `corpus/mzml/` binary corpus
-  from repository history (git history rewritten; total size reduced from
-  ~1.5 GB to ~660 KB).
+- Removed files that did not belong in the repository, including the
+  `corpus/mzml/` binary corpus, from history (git history rewritten; total
+  size reduced from ~1.5 GB to ~660 KB).
 - Removed "Pure-Rust" marketing language from `README.md` and related
   documentation (Python bindings use PyO3/maturin which pulls in a C
   compiler at build time).
