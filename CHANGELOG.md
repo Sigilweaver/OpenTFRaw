@@ -488,10 +488,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mz`/`intensity`/`resolution`/`noise`/`baseline`/`signal_to_noise` arrays.
   (@oskarsari)
 - `RawFile.scan_parameters(scan_number)` (Python): returns the per-scan generic
-  ("trailer") parameters as a `{label: value}` dict (or `None`), mirroring the
-  vendor reader's trailer-extra information. Keys are the instrument's own
-  labels (e.g. `"HCD Energy V:"`, `"MS2 Isolation Width:"`); values keep their
-  stored type. The Rust core already decoded these (`scan_parameters` /
+  ("trailer") parameters as a `{label: value}` dict (or `None`). Keys are the
+  instrument's own labels (e.g. `"HCD Energy V:"`, `"MS2 Isolation Width:"`);
+  values keep their stored type. The Rust core already decoded these (`scan_parameters` /
   `GenericRecord`); this surfaces them to Python. (@oskarsari)
 - `RawFile.created`: file creation (acquisition start) time as a Unix timestamp
   in seconds, read from the Xcalibur audit tag (a Windows FILETIME). The Rust
