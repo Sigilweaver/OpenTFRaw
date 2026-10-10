@@ -588,7 +588,8 @@ impl RawFileReader {
         //   Primary event:   232 bytes total (preamble 136 + body 96)
         //   Dependent event: 288 or 344 bytes total (body 152 or 208)
         // Lumos DIA (PXD031322) uses 232/288; Eclipse EThcD and other Lumos
-        // workflows use 232/344. Check boundaries before the historical inference.
+        // workflows use 232/344. Check those boundaries first, then infer the sizes
+        // from the stream length.
         let preamble_size = ScanEventPreamble::size_for_version(version);
         let (v66_body_primary, v66_body_dependent): (usize, usize) =
             if version >= 66 && n_events > 0 {
@@ -770,7 +771,7 @@ impl RawFileReader {
             Vec::new()
         };
         // Only needed when the metadata window names no model (#59); a failed
-        // read just leaves the model undetected, as before.
+        // read leaves the model undetected.
         // Layout confirmed on v57, v64, and v66 files.
         let inst_id_models = if version >= 57 {
             read_inst_id_models(&mut r, run_header_end).unwrap_or_default()
@@ -1717,8 +1718,8 @@ impl<'a> ScanParams<'a> {
     ///
     /// The two labels describe different quantities. Prefer
     /// [`Self::number_of_matched_lock_masses`] and
-    /// [`Self::number_of_configured_lock_masses`] for new code. This accessor
-    /// retains its historical fallback behavior.
+    /// [`Self::number_of_configured_lock_masses`] for new code; this accessor
+    /// returns whichever of the two labels is present.
     pub fn number_of_lock_masses(&self) -> Option<i32> {
         self.0
             .get_i32("Number of LM Found:")
@@ -1878,8 +1879,8 @@ impl<'a> StatusLogEntry<'a> {
     ///
     /// The two labels describe different quantities. Prefer
     /// [`Self::number_of_matched_lock_masses`] and
-    /// [`Self::number_of_configured_lock_masses`] for new code. This accessor
-    /// retains its historical fallback behavior.
+    /// [`Self::number_of_configured_lock_masses`] for new code; this accessor
+    /// returns whichever of the two labels is present.
     pub fn number_of_lock_masses(&self) -> Option<i32> {
         self.0
             .get_i32("Number of LM Found:")
