@@ -1,6 +1,7 @@
 use opentfraw::generic_data::{GenericRecord, GenericValue};
 use opentfraw::{
     extra::scan_extras, scan_metadata, ExtraFields, RawFileReader, ScanParams, StatusLogEntry,
+    StatusLogRecord,
 };
 
 fn record(matched: Option<GenericValue>, configured: Option<GenericValue>) -> GenericRecord {
@@ -226,11 +227,13 @@ fn public_lock_mass_counts_and_inherited_correction() {
             raw.scan_parameters[0] = GenericRecord {
                 values: rec.values.clone(),
             };
-            if raw.inst_log.is_empty() {
-                raw.inst_log.push(rec);
-            } else {
-                raw.inst_log[0] = rec;
-            }
+            // A single record written at time zero is in effect for scan 0.
+            raw.inst_log = vec![StatusLogRecord {
+                time: 0.0,
+                record: rec,
+            }];
+            raw.inst_log_time_axis = 0..1;
+            raw.status_log_error = None;
             let meta = scan_metadata(&raw, 0).unwrap();
             let extras = scan_extras(&raw, &meta, &ExtraFields::All);
             for prefix in ["opentfraw.", "opentfraw.status."] {

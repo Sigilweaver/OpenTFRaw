@@ -47,13 +47,14 @@ Offset 0x0000:
   │     ├── GenericDataHeader
   │     └── GenericRecord[0..n]
   │
-  ├── [inst_log_addr]
-  │     ├── GenericDataHeader
-  │     └── GenericRecord[0..n]
-  │
   └── [error_log_addr]
         └── Error[0..n]
 ```
+
+The instrument log directly follows the MS controller's RunHeader: an
+InstID block, then the instrument log's GenericDataHeader, which ends at
+`inst_log_addr`, then the records from `inst_log_addr` up to
+`error_log_addr` (see Instrument Log).
 
 ### 3.1 Validated Offsets (Version 66)
 
