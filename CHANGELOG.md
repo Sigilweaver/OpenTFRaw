@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking (Rust):** `scan_filter::build_filter` no longer takes a
   `supplemental_energy` argument; it only fed the removed code-12 EThcD
   clause.
-- **Breaking:** typed trailer and status-log accessors read only labels
+- **Breaking:** typed trailer accessors read only labels
   that occur in the reference corpus. These label fallbacks are removed,
   and none of them occurs in any of the 291 corpus files, so no decoded
   value changes:
@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `HCD Energy V:` (NCE), else `HCD Energy eV:` (eV).
   - `isolation_width_mz`: `MSn Isolation Width:`, `Isolation Width (M/Z):`,
     `MS2 Isolation Width (M/Z):`; `isolation_target_mz`: `Target M/Z:`
-  - `ion_injection_time_ms` (trailer and status log): `Ion Inject Time (ms):`
+  - `ion_injection_time_ms`: `Ion Inject Time (ms):`
   - `possible_charge_states`: `Possible Charge States:`. It now returns the
     selected charge (`Charge State:`) as a one-element list.
 - **Breaking:** `ScanParams::supplemental_activation_energy`,
@@ -58,6 +58,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking (Rust):** `ControllerType` has only `Ms` and `Other`. The
   `Analog`, `Adc`, `Pda` and `Uv` variants were never produced: no byte that
   names a non-MS controller's kind is decoded.
+
+### Removed
+
+- **Breaking:** the 9 `opentfraw.status.*` extra fields and the
+  `StatusLogEntry` accessors that fed them (`ion_injection_time_ms`,
+  `ft_resolution`, `faims_cv`, `s_lens_rf_level`, `analyzer_temperature`,
+  `lock_mass_correction_ppm` and the three lock-mass counts) are removed.
+  Their labels do not occur in any status log, so they were always empty;
+  the same values are emitted per scan from scan parameters. The decoded
+  status log is still available through Rust `status_log_record` and
+  Python `status_log()`.
 
 ### Fixed
 

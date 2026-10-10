@@ -63,7 +63,6 @@ these trailer fields:
 | `opentfraw.number_of_matched_lock_masses` | `Number of LM Found:` | Peaks matched in this scan |
 | `opentfraw.number_of_configured_lock_masses` | `Number of Lock Masses:` | Lock masses configured for acquisition |
 
-The corresponding `opentfraw.status.*` keys read the instrument-status log.
 Missing, mistyped, or negative counts are omitted; an explicit zero is retained.
 The older `opentfraw.number_of_lock_masses` key retains its compatibility
 fallback from matched to configured count, so it must not be interpreted as a
