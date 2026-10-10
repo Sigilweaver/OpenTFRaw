@@ -6,7 +6,7 @@
 [![PyPI](https://img.shields.io/pypi/v/opentfraw.svg)](https://pypi.org/project/opentfraw/)
 [![docs.rs](https://img.shields.io/docsrs/opentfraw)](https://docs.rs/opentfraw)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Rust MSRV](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust MSRV](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org)
 
 > Part of the [OpenMassSpec](https://github.com/Sigilweaver/OpenMassSpec)
 > stack for mass spectrometry raw-file access.
@@ -52,13 +52,16 @@ pip install opentfraw
 Rust:
 
 ```rust
+use std::{fs::File, io::BufReader};
 use opentfraw::RawFileReader;
 
 let raw = RawFileReader::open_path("sample.raw")?;
-let mut file = std::fs::File::open("sample.raw")?;
-for scan_num in 1..=raw.num_scans {
+// Buffer the scan reads: an unbuffered File is about 11x slower.
+let mut file = BufReader::new(File::open("sample.raw")?);
+let info = &raw.run_header.sample_info;
+for scan_num in info.first_scan_number..=info.last_scan_number {
     let peaks = raw.read_scan_peaks(&mut file, scan_num)?;
-    println!("scan {scan_num}: {} peaks", peaks.mz.len());
+    println!("scan {scan_num}: {} peaks", peaks.len());
 }
 ```
 
