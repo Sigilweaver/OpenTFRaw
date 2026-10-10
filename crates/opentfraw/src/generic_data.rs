@@ -224,7 +224,9 @@ impl GenericRecord {
                 }
                 GenericType::WideString => {
                     let s = if desc.length > 0 {
-                        r.read_utf16_fixed(desc.length as usize * 2)?
+                        // Lossy: a malformed trailer string must not fail the
+                        // whole open.
+                        r.read_utf16_fixed_lossy(desc.length as usize * 2)?
                     } else {
                         String::new()
                     };
@@ -316,6 +318,38 @@ mod tests {
             out.extend_from_slice(&field_bytes(t, l, label));
         }
         out
+    }
+
+    #[test]
+    fn wide_string_with_unpaired_surrogate_decodes_lossily() {
+        let header = GenericDataHeader {
+            fields: vec![
+                GenericDataDescriptor {
+                    field_type: GenericType::WideString,
+                    length: 4,
+                    label: "Comment:".into(),
+                },
+                GenericDataDescriptor {
+                    field_type: GenericType::Int32,
+                    length: 0,
+                    label: "Next:".into(),
+                },
+            ],
+        };
+        // "A", lone high surrogate, "B", NUL terminator; then an i32.
+        let mut bytes = Vec::new();
+        for u in [0x0041u16, 0xD800, 0x0042, 0x0000] {
+            bytes.extend_from_slice(&u.to_le_bytes());
+        }
+        bytes.extend_from_slice(&7i32.to_le_bytes());
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let rec = GenericRecord::read(&mut r, &header).expect("lossy decode");
+        match rec.get("Comment:") {
+            Some(GenericValue::String(s)) => assert_eq!(s, "A\u{FFFD}B"),
+            other => panic!("unexpected value: {other:?}"),
+        }
+        // The stream stays aligned for the following field.
+        assert!(matches!(rec.get("Next:"), Some(GenericValue::Int32(7))));
     }
 
     fn try_read(bytes: Vec<u8>) -> Result<Option<GenericDataHeader>> {
