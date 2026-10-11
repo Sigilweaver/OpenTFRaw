@@ -7,19 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Removed
-
-- **Breaking (Python):** `RawFile.centroid_labels()` no longer returns a
-  `signal_to_noise` array. It was computed as
-  `(intensity - baseline) / (noise - baseline)`, and no public source
-  documents that formula.
-
 ### Changed
 
 - `centroid_labels()` `noise` and `baseline`, and the Rust `NoiseNode`,
   `ScanDataPacket.noise_nodes` and `noise_at()`, are now documented as raw
   stored values from the scan's triplet stream. Their reading as noise and
-  baseline is unconfirmed; the names are unchanged.
+  baseline is unconfirmed; the names are unchanged. `centroid_labels()`
+  `signal_to_noise` is now documented as computed by this library with a
+  formula matched against vendor software output, not taken from a public
+  source.
 
 - mzML and canonical run metadata no longer include the acquisition
   computer name or the original directory, and original file and method

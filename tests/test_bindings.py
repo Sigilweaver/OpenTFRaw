@@ -192,6 +192,7 @@ def test_centroid_labels(raw_file):
         "resolution",
         "noise",
         "baseline",
+        "signal_to_noise",
     }
     assert set(labels.keys()) == expected_keys
     n = len(labels["mz"])
