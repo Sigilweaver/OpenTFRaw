@@ -123,7 +123,7 @@ fn main() {
                     p.ms_power(),
                     p.is_dependent(),
                     p.ionization(),
-                    p.activation(),
+                    evt.activation(),
                 );
                 if !evt.reactions().is_empty() {
                     for rx in evt.reactions() {

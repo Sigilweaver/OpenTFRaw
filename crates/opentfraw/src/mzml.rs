@@ -178,6 +178,7 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
     };
 
     let precursor = if !is_ms1 {
+        let activation = event.and_then(|e| e.activation());
         let info = if let Some(q1) = srm_q1 {
             PrecursorInfo {
                 target_mz: Some(q1),
@@ -187,7 +188,7 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
                 collision_energy: srm_ce,
                 ce_is_nce: false,
                 master_scan_number: None,
-                activation: event.and_then(|e| e.preamble.activation()),
+                activation,
                 analyzer: event.and_then(|e| e.preamble.analyzer()),
             }
         } else {
@@ -222,7 +223,19 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
                     .as_ref()
                     .map(|p| p.activation_energy_is_nce())
                     .unwrap_or(false);
-            let ae = ae_from_params.or_else(|| reaction.map(|r| r.energy).filter(|&e| e > 0.0));
+            // On ETD and EThcD events the reaction's energy field holds the
+            // ETD reaction time, not a collision energy: PRIDE PXD006767
+            // stores 130 in every MS2 event, the method's "Activation Time:
+            // 130.000"; PXD077396 and PXD070648 store a value that scales
+            // with 1/z^2 of the scan's charge state (95.834 at z=2, 42.593
+            // at z=3). Only a labelled scan parameter counts there.
+            let is_etd = matches!(activation, Some(Activation::ETD | Activation::EThcD));
+            let ae = ae_from_params.or_else(|| {
+                reaction
+                    .filter(|_| !is_etd)
+                    .map(|r| r.energy)
+                    .filter(|&e| e > 0.0)
+            });
             let master = params
                 .as_ref()
                 .and_then(|p| p.master_scan_number())
@@ -236,7 +249,7 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
                 collision_energy: ae,
                 ce_is_nce: ae_is_nce,
                 master_scan_number: master,
-                activation: event.and_then(|e| e.preamble.activation()),
+                activation,
                 analyzer: event.and_then(|e| e.preamble.analyzer()),
             }
         };
@@ -607,11 +620,14 @@ fn convert_analyzer(a: Option<crate::Analyzer>) -> Option<msc::Analyzer> {
     })
 }
 
-/// `Unknown` codes map to `None`: the shared model has no "unknown" method.
+/// `Unknown` codes map to `None`: the shared model has no "unknown" method,
+/// and the writer then emits no dissociation-method term.
 fn convert_activation(a: Option<Activation>) -> Option<msc::Activation> {
     a.and_then(|a| match a {
         Activation::HCD => Some(msc::Activation::HCD),
         Activation::CID => Some(msc::Activation::CID),
+        Activation::ETD => Some(msc::Activation::ETD),
+        Activation::EThcD => Some(msc::Activation::EThcD),
         Activation::Unknown(_) => None,
     })
 }

@@ -118,4 +118,4 @@ The same applies to `event.preamble()`, `event.fraction_collectors()`,
 | `scan_filter::build_filter` | `RawFileReader::scan_filter` |
 | `DeviceFamily::detect*`, `DetectedInstrument` | `RawFileReader::device_family`, `instrument_model` |
 | `AuditTag::unknown_long`, `RunHeader::unk_addr`, `Reaction::unknown_*` | none; these held undecoded bytes |
-| `Activation` variants other than `HCD` and `CID`; `ControllerType::{Analog, Adc, Pda, Uv}` | `Activation::Unknown(code)`; `ControllerType::Other` (see `CHANGELOG.md`) |
+| `Activation::{MPID, ECD, IRMPD, PD, PQD, UVPD, SID}`; `ControllerType::{Analog, Adc, Pda, Uv}` | `Activation::Unknown(code)`; `ControllerType::Other` (see `CHANGELOG.md`) |

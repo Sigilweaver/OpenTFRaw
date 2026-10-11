@@ -90,6 +90,18 @@ minor versions.
   token unset. (#58)
 - `RawFileReader::source_cid_by_method_event`: declared source CID energy
   from the embedded method XML, keyed by (segment, event).
+- ETD and EThcD activation. In version 66 files, scan-event preamble
+  byte 120 is 1 on electron-transfer MSn scans; such a scan whose byte 24
+  is 1 or 4 decodes as `Activation::ETD`. An ETD MS2 scan read out in the
+  Orbitrap with a second, precursor-less reaction decodes as
+  `Activation::EThcD`. New `ScanEvent::activation()` returns this;
+  `ScanEventPreamble::activation()` returns ETD but cannot tell EThcD.
+  Evidence: the three Orbitrap Velos Pro ETD files of PRIDE PXD006767
+  (method "Activation Type: ETD", byte 120 = 1 on all 10,836 MS2 scans,
+  0 on all MS1 scans) and five EThcD files of PXD077396 and PXD070648
+  (method "Is EThcD Active = True", byte 120 = 1 on all 59,034 MS2 scans).
+  CID and HCD files have 0 or 2 there. Details are in the format docs,
+  section 22.5. Python `activation` reports `"etd"` or `"ethcd"`.
 
 ### Changed
 
@@ -114,18 +126,17 @@ minor versions.
   `collision-induced dissociation` (MS:1000133) term in `<activation>`
   (openmassspec-core 3.0 writer). The PSI-MS CV version written in `<cv>` is
   the one core 3.0 ships.
-- **Breaking (Rust):** `Activation` names only the scan-event codes with
-  corpus evidence, `HCD` (1) and `CID` (4). Every other non-zero code
-  decodes as the new `Activation::Unknown(u8)`, which holds the raw byte.
-  The `MPID`, `ETD`, `ECD`, `IRMPD`, `PD`, `PQD`, `UVPD`, `SID` and
-  `EThcD` variants are removed: no public source documents those codes,
-  and every corpus scan that carries one has an implausible scan event
-  (for example EI ionization on a nanospray Orbitrap run). For an unknown
-  code the scan filter omits the `@<method>` clause, the mzML
-  `<activation>` carries no dissociation-method term, and Python
-  `activation` is
-  `"unknown"`. Tribrid EThcD scans, which use codes 1 and 4, still render
-  as `@etd@hcd<energy>`.
+- **Breaking (Rust):** `Activation` names only methods with corpus
+  evidence. Byte 24 of the scan event gives `HCD` (1) and `CID` (4); every
+  other non-zero code decodes as the new `Activation::Unknown(u8)`, which
+  holds the raw byte. `ETD` and `EThcD` no longer come from byte 24 codes:
+  they are decoded from preamble byte 120 (see Added). The `MPID`, `ECD`,
+  `IRMPD`, `PD`, `PQD`, `UVPD` and `SID` variants are removed: no public
+  source documents their codes, and every corpus scan that carries one has
+  an implausible scan event (for example EI ionization on a nanospray
+  Orbitrap run). For an unknown code the scan filter omits the
+  `@<method>` clause, the mzML `<activation>` carries no
+  dissociation-method term, and Python `activation` is `"unknown"`.
 - **Breaking (Rust):** `scan_filter::build_filter` no longer takes a
   `supplemental_energy` argument; it only fed the removed code-12 EThcD
   clause.
@@ -210,6 +221,22 @@ minor versions.
   `profile()` returns NaN.
 - An invalid UTF-16 character in a trailer or status-log string no longer
   fails the whole file open; the value decodes with replacement characters.
+- ETD scans were labelled CID. On the three PXD006767 ETD files all 10,836
+  MS2 spectra had a `collision-induced dissociation` term and a 130 eV
+  `collision energy`; they now have `electron transfer dissociation`
+  (MS:1000598) and no collision energy, since the stored 130 is the
+  method's ETD activation time. Their scan filters read `@etd130.00`
+  instead of `@cid130.00`. The 59,034 EThcD MS2 spectra of PXD077396 and
+  PXD070648 had `beam-type collision-induced dissociation` and a
+  `collision energy` in eV taken from the reaction record (95.83 at charge
+  2 on PXD077396); they now have `electron transfer dissociation` plus
+  `electron transfer higher-energy collision dissociation` (MS:1002631) and
+  no collision energy, since that value scales with 1/z^2 of the charge
+  state like a charge-dependent ETD reaction time. Their filters are
+  unchanged (`@etd@hcd`). Across every scan of the 291 corpus files,
+  the only other activation changes are 132 scans in 4 files with misread
+  scan events (131 in PXD064117 and PXD067311, whose methods enable EThcD,
+  and 1 in PXD039587), which now read ETD instead of CID.
 - README and docs-site Rust examples buffer scan reads and compile against
   the current `read_scan_peaks` return type.
 - Python docstrings for `peaks()` and `iter_scans()`; two broken rustdoc

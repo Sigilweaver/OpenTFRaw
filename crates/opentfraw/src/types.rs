@@ -79,17 +79,23 @@ pub enum Ionization {
     GDI = 9,
 }
 
-/// Activation method from ScanEventPreamble byte 24.
+/// Activation method of a scan event.
 ///
-/// Only codes with corpus evidence get a named variant (see CORPUS.md for
-/// the public PRIDE files):
+/// Only methods with corpus evidence get a named variant (see CORPUS.md for
+/// the public PRIDE files). Byte 24 of the scan event preamble gives the
+/// base code:
 ///   0 = no activation (MS1 scans; `from_byte` returns `None`)
 ///   1 = HCD (Q Exactive family; renders as "hcd")
 ///   4 = CID/HCD (Fusion/Exploris/Eclipse; renders as "cid" on ITMS, "hcd" on FTMS)
 ///
-/// Every other code decodes as [`Activation::Unknown`] carrying the raw
-/// byte. No public source documents a mapping for those codes, and the
+/// Every other byte-24 code decodes as [`Activation::Unknown`] carrying the
+/// raw byte. No public source documents a mapping for those codes, and the
 /// corpus has no MSn scan with a well-formed scan event that uses one.
+///
+/// [`Activation::ETD`] and [`Activation::EThcD`] are not byte-24 codes:
+/// they come from preamble byte 120 of a version 66 scan event (see
+/// [`crate::scan_event::ScanEventPreamble::activation`] and
+/// [`crate::scan_event::ScanEvent::activation`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Activation {
@@ -98,6 +104,13 @@ pub enum Activation {
     /// Collision-induced dissociation / beam-type HCD - Fusion/Exploris style (code 4).
     /// Renders as "cid" on ITMS analyzers, "hcd" on FTMS analyzers.
     CID,
+    /// Electron-transfer dissociation: an MSn event whose preamble byte 120
+    /// is 1 (version 66 files).
+    ETD,
+    /// Electron-transfer dissociation with supplemental HCD: an ETD event
+    /// read out in the Orbitrap whose body holds a second, precursor-less
+    /// reaction for the supplemental step.
+    EThcD,
     /// A non-zero code with no established meaning. Holds the raw byte.
     Unknown(u8),
 }
@@ -257,8 +270,11 @@ impl Ionization {
 }
 
 impl Activation {
-    /// Decode byte 24. Returns `None` for 0 (no activation) and
+    /// Decode byte 24 alone. Returns `None` for 0 (no activation) and
     /// [`Activation::Unknown`] for any code without an established meaning.
+    /// Never returns [`Activation::ETD`] or [`Activation::EThcD`]; read a
+    /// scan's activation through
+    /// [`crate::scan_event::ScanEvent::activation`] instead.
     pub fn from_byte(b: u8) -> Option<Self> {
         match b {
             0 => None,
@@ -268,7 +284,9 @@ impl Activation {
         }
     }
 
-    /// Short identifier used in scan filter strings (e.g. "hcd", "cid").
+    /// Short identifier used in scan filter strings (e.g. "hcd", "cid",
+    /// "etd"). [`Activation::EThcD`] returns "ethcd"; the scan filter writes
+    /// it as the two-clause `@etd@hcd` form instead.
     ///
     /// For [`Activation::CID`] on FTMS instruments this project's filter
     /// string uses "hcd" instead; callers should substitute via
@@ -278,6 +296,8 @@ impl Activation {
         match self {
             Self::HCD => "hcd",
             Self::CID => "cid",
+            Self::ETD => "etd",
+            Self::EThcD => "ethcd",
             Self::Unknown(_) => "unknown",
         }
     }
