@@ -75,8 +75,9 @@ minor versions.
   read, and `RawFile.to_mzml()` raises at the first unreadable scan instead
   of leaving it out. For example, `PXD020246_TSQVantage.RAW` has 4 of
   35,098 scans whose flat-peak record matches no known layout; it used to
-  convert without them and now fails. The `to_mzml` example's new
-  `--skip-unreadable` flag writes the other scans and prints the count.
+  convert without them and now fails. Pass `skip_unreadable=True` (see
+  Added), or use the `to_mzml` example's new `--skip-unreadable` flag, to
+  write the other scans.
 
 ### Added
 
@@ -102,6 +103,11 @@ minor versions.
   (method "Is EThcD Active = True", byte 120 = 1 on all 59,034 MS2 scans).
   CID and HCD files have 0 or 2 there. Details are in the format docs,
   section 22.5. Python `activation` reports `"etd"` or `"ethcd"`.
+- Python: `RawFile.to_mzml(..., skip_unreadable=False)`. With
+  `skip_unreadable=True`, scans that cannot be decoded are left out instead
+  of raising, a `UserWarning` gives the count, and the call returns it.
+  `to_mzml` now returns the number of records left out (always 0 by
+  default) instead of `None`.
 
 ### Changed
 

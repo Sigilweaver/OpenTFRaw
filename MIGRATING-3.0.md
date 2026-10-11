@@ -6,7 +6,9 @@ fields and accessors without breaking your code. `CHANGELOG.md` lists every
 change; this page covers what callers usually need to edit.
 
 Python users: the `RawFile` API is unchanged except that decode failures
-raise instead of being skipped (step 2).
+raise instead of being skipped (step 2). To convert a file that has
+unreadable scans, call `raw.to_mzml(path, skip_unreadable=True)`: it writes
+the other scans, warns, and returns how many were left out.
 
 ## 1. Dependencies
 
@@ -18,7 +20,7 @@ openmassspec-core = "3"   # only if you use it directly
 
 ## 2. Unreadable scans are errors
 
-Nothing skips an unreadable scan any more.
+Nothing skips an unreadable scan unless you ask for it.
 
 `extract_spectrum` returns `Result`:
 

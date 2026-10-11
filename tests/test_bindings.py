@@ -470,3 +470,17 @@ def test_to_mzml(raw_file, tmp_path):
     tree = ET.parse(out_path)
     root = tree.getroot()
     assert root.tag.endswith("mzML")
+
+
+def test_to_mzml_skip_unreadable_on_readable_file(raw_file, tmp_path):
+    """Every scan of the fixture decodes, so both policies write the same
+    document, report 0 left out, and warn about nothing."""
+    import warnings
+
+    default_out = tmp_path / "default.mzML"
+    skip_out = tmp_path / "skip.mzML"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert raw_file.to_mzml(str(default_out)) == 0
+        assert raw_file.to_mzml(str(skip_out), skip_unreadable=True) == 0
+    assert default_out.read_bytes() == skip_out.read_bytes()
