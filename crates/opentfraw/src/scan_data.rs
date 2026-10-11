@@ -452,10 +452,9 @@ pub(crate) fn read_flat_peaks<R: Read + Seek>(
         }
     }
 
-    // Neither worked; return empty
-    Err(Error::UnexpectedEof {
+    // Neither peak count gives a plausible first m/z.
+    Err(Error::UnrecognizedScanRecord {
         offset: data_addr.saturating_add(cum_end),
-        needed: 0,
     })
 }
 
@@ -738,6 +737,18 @@ mod tests {
     }
 
     #[test]
+    fn read_flat_peaks_reports_an_unrecognized_record() {
+        // Every candidate peak count puts an implausible m/z first.
+        let bytes = vec![0x7Fu8; 27];
+        let mut cursor = Cursor::new(bytes);
+        let err = read_flat_peaks(&mut cursor, 0, 27, 3).unwrap_err();
+        assert!(
+            matches!(err, Error::UnrecognizedScanRecord { offset: 27 }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
     fn read_flat_peaks_rejects_implausible_peak_count() {
         // data_size implies a peak_count that could never fit in the file.
         let bytes = vec![0u8; 16];
@@ -747,7 +758,9 @@ mod tests {
         // "peak_section_bytes > cum_end" guard is an acceptable rejection
         // reason; a panic or successful huge allocation is not.
         match err {
-            Error::AllocationTooLarge { .. } | Error::UnexpectedEof { .. } => {}
+            Error::AllocationTooLarge { .. }
+            | Error::UnexpectedEof { .. }
+            | Error::UnrecognizedScanRecord { .. } => {}
             other => panic!("unexpected error variant: {other:?}"),
         }
     }

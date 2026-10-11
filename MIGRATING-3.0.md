@@ -65,8 +65,8 @@ add a `?`.
 ## 3. Errors
 
 `opentfraw::Error` is `#[non_exhaustive]`; add a `_ =>` arm to matches. It
-has two new variants: `Core` (an `openmassspec_core::Error`, for example
-from the mzML writer) and `ScanIndexOutOfRange`. `?` converts an
+has new variants: `Core` (an `openmassspec_core::Error`, for example from
+the mzML writer), `ScanIndexOutOfRange`, and `UnrecognizedScanRecord`. `?` converts an
 `opentfraw::Error` into `openmassspec_core::Error`.
 
 ## 4. Matching enums

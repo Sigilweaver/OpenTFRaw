@@ -27,7 +27,9 @@ minor versions.
     `Result<Option<String>>` (was `Option<String>`), and `RawFileReader::open`
     fails when the embedded method region cannot be read.
 - `Error` is `#[non_exhaustive]` and gains `Core` (an
-  `openmassspec_core::Error`) and `ScanIndexOutOfRange`.
+  `openmassspec_core::Error`), `ScanIndexOutOfRange`, and
+  `UnrecognizedScanRecord` (a TSQ flat-peak record that matches no known
+  layout; this was `UnexpectedEof` with `needed: 0`).
   `From<opentfraw::Error> for openmassspec_core::Error` is added.
 - `#[non_exhaustive]` on every public enum: `Analyzer`, `Polarity`,
   `ScanMode`, `MsPower`, `ScanType`, `Ionization`, `Activation`,
@@ -66,7 +68,10 @@ minor versions.
   `OSError` when a scan or chromatogram cannot be decoded,
   `RawFile.instrument_method_text()` raises `OSError` when the file cannot be
   read, and `RawFile.to_mzml()` raises at the first unreadable scan instead
-  of leaving it out.
+  of leaving it out. For example, `PXD020246_TSQVantage.RAW` has 4 of
+  35,098 scans whose flat-peak record matches no known layout; it used to
+  convert without them and now fails. The `to_mzml` example's new
+  `--skip-unreadable` flag writes the other scans and prints the count.
 
 ### Added
 
@@ -99,6 +104,11 @@ minor versions.
 - mzML `<software>` now reports the real opentfraw version instead of a
   fixed `0.1.0`.
 - MSRV is now Rust 1.88, matching `openmassspec-core` 3.0.
+- mzML: a precursor whose activation method is not decoded, which includes
+  every SRM scan from TSQ files, no longer gets a
+  `collision-induced dissociation` (MS:1000133) term in `<activation>`
+  (openmassspec-core 3.0 writer). The PSI-MS CV version written in `<cv>` is
+  the one core 3.0 ships.
 - **Breaking (Rust):** `Activation` names only the scan-event codes with
   corpus evidence, `HCD` (1) and `CID` (4). Every other non-zero code
   decodes as the new `Activation::Unknown(u8)`, which holds the raw byte.
@@ -106,9 +116,9 @@ minor versions.
   `EThcD` variants are removed: no public source documents those codes,
   and every corpus scan that carries one has an implausible scan event
   (for example EI ionization on a nanospray Orbitrap run). For an unknown
-  code the scan filter omits the `@<method>` clause, mzML has no decoded
-  activation (the writer then emits its default
-  collision-induced dissociation term), and Python `activation` is
+  code the scan filter omits the `@<method>` clause, the mzML
+  `<activation>` carries no dissociation-method term, and Python
+  `activation` is
   `"unknown"`. Tribrid EThcD scans, which use codes 1 and 4, still render
   as `@etd@hcd<energy>`.
 - **Breaking (Rust):** `scan_filter::build_filter` no longer takes a

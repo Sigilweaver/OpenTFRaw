@@ -33,6 +33,9 @@ pub enum Error {
     #[error("scan index {0} is out of range")]
     ScanIndexOutOfRange(u32),
 
+    #[error("scan data record ending at offset {offset:#x} does not match a known layout")]
+    UnrecognizedScanRecord { offset: u64 },
+
     #[error("operation not supported for this scan-data format: {0}")]
     UnsupportedOperation(&'static str),
 
