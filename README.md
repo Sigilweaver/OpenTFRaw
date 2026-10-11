@@ -5,7 +5,7 @@
 [![crates.io](https://img.shields.io/crates/v/opentfraw.svg)](https://crates.io/crates/opentfraw)
 [![PyPI](https://img.shields.io/pypi/v/opentfraw.svg)](https://pypi.org/project/opentfraw/)
 [![docs.rs](https://img.shields.io/docsrs/opentfraw)](https://docs.rs/opentfraw)
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/Sigilweaver/OpenTFRaw/blob/main/LICENSE)
 [![Rust MSRV](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org)
 
 > Part of the [OpenMassSpec](https://github.com/Sigilweaver/OpenMassSpec)
@@ -87,8 +87,8 @@ guide, format specification, and API reference.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/Sigilweaver/OpenTFRaw/blob/main/LICENSE).
 
 The format specification was developed by binary analysis of public
 mass-spectrometry datasets (PRIDE accessions). See
-[CORPUS.md](CORPUS.md) and [ATTRIBUTION.md](ATTRIBUTION.md).
+[CORPUS.md](https://github.com/Sigilweaver/OpenTFRaw/blob/main/CORPUS.md) and [ATTRIBUTION.md](https://github.com/Sigilweaver/OpenTFRaw/blob/main/ATTRIBUTION.md).

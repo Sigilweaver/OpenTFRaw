@@ -32,8 +32,6 @@ manifest-path = "crates/opentfraw-py/Cargo.toml"
 include = [
     { path = "LICENSE", format = "sdist" },
     { path = "README.md", format = "sdist" },
-    { path = "CHANGELOG.md", format = "sdist" },
-    { path = "README.md", format = "wheel" },
 ]
 
 [dependency-groups]
