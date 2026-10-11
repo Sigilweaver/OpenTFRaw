@@ -4,6 +4,7 @@ use std::io::{Read, Seek};
 
 /// Audit tag embedded in FileHeader (112 bytes).
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct AuditTag {
     /// Unix timestamp (seconds since epoch).
     pub time: f64,
@@ -11,7 +12,6 @@ pub struct AuditTag {
     pub tag1: String,
     /// Secondary tag (instrument model, user name, etc.).
     pub tag2: String,
-    pub unknown_long: u32,
 }
 
 impl AuditTag {
@@ -21,13 +21,8 @@ impl AuditTag {
         let time = r.read_windows_filetime()?;
         let tag1 = r.read_utf16_fixed(50)?;
         let tag2 = r.read_utf16_fixed(50)?;
-        let unknown_long = r.read_u32()?;
-        Ok(Self {
-            time,
-            tag1,
-            tag2,
-            unknown_long,
-        })
+        r.skip(4)?; // undecoded u32
+        Ok(Self { time, tag1, tag2 })
     }
 }
 
@@ -48,7 +43,6 @@ mod tests {
         let tag = read(bytes).unwrap();
         assert_eq!(tag.tag1, "Xcalibur_System");
         assert_eq!(tag.tag2, "Q Exactive HF");
-        assert_eq!(tag.unknown_long, 42);
         assert!((tag.time - 1_700_000_000.0).abs() < 1e-3);
     }
 

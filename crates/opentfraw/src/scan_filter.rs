@@ -37,8 +37,11 @@
 //!   windows.
 //! - Activation code 4 renders as `hcd` on an FTMS analyzer and `cid`
 //!   otherwise (see [`activation_str`]).
-//! - A tribrid FTMS MS2 event with two reactions and one non-zero precursor
+//! - An EThcD event (see [`crate::scan_event::ScanEvent::activation`])
 //!   renders a single `<precursor>@etd@hcd<energy>` clause.
+//! - An ETD event renders `@etd` followed by the stored reaction value. On
+//!   the corpus ETD files (PRIDE PXD006767) that value equals the method's
+//!   activation time in ms, not a collision energy.
 //! - SRM filters always start with a fixed `+` polarity, because those files
 //!   have no scan event to read polarity from.
 //! - Multiple precursors are separated by a space.
@@ -58,9 +61,11 @@ use crate::scan_event::ScanEvent;
 use crate::scan_index::ScanIndexEntry;
 use crate::types::{Activation, Analyzer, MsPower, ScanType};
 
-/// Resolve the activation filter-string token for a given activation code and
+/// Resolve the activation filter-string token for a given activation and
 /// analyzer. Code 1 renders as "hcd". Code 4 renders as "hcd" on an FTMS
 /// analyzer and "cid" on any other analyzer; this is a project convention.
+/// ETD renders as "etd" and EThcD as "ethcd" (the filter builder writes
+/// EThcD as `@etd@hcd`).
 pub fn activation_str(analyzer: Option<Analyzer>, act: Activation) -> &'static str {
     match act {
         Activation::CID => match analyzer {
@@ -84,7 +89,8 @@ pub fn activation_str(analyzer: Option<Analyzer>, act: Activation) -> &'static s
 /// For MS2+ scans the function first attempts to build the full precursor chain
 /// from `event.reactions` (populated for both pre-v66 and v66 files). If reactions
 /// are empty, it falls back to the single `precursor_mz` / `activation_energy` pair.
-pub fn build_filter(
+#[cfg(test)]
+pub(crate) fn build_filter(
     event: &ScanEvent,
     index_entry: &ScanIndexEntry,
     precursor_mz: Option<f64>,
@@ -177,23 +183,12 @@ pub(crate) fn build_filter_with_source_cid(
     // Precursor chain (only for MSn scans)
     if n >= 2 {
         // An unrecognised activation code gets no `@<method>` clause.
-        let act = p
+        let act = event
             .activation()
             .filter(|a| !matches!(a, Activation::Unknown(_)));
         let reactions = &event.reactions;
 
-        // Detect EThcD from tribrid instruments (Eclipse, Fusion Lumos).
-        // These encode EThcD as CID/HCD activation (byte 24 = 4 or 1) with
-        // n_reactions = 2 in the body, where only the first reaction has a
-        // valid non-zero precursor m/z.
-        let n_valid_precursors = reactions.iter().filter(|r| r.precursor_mz > 0.0).count();
-        let is_tribrid_ethcd = n == 2
-            && reactions.len() >= 2
-            && n_valid_precursors == 1
-            && matches!(analyzer, Some(Analyzer::FTMS))
-            && matches!(act, Some(Activation::CID) | Some(Activation::HCD));
-
-        if is_tribrid_ethcd {
+        if act == Some(Activation::EThcD) {
             // Eclipse / Fusion Lumos EThcD: one valid precursor, two-clause filter.
             // activation_energy from scan_params "HCD Energy:" = supplemental HCD NCE%.
             if let Some(rx) = reactions.iter().find(|r| r.precursor_mz > 0.0) {
@@ -390,10 +385,7 @@ mod tests {
         pre.bytes[24] = 4; // CID
         let rxn = Reaction {
             precursor_mz: 440.254,
-            unknown_double: 1.0,
             energy: 35.0,
-            unknown_long1: 0,
-            unknown_long2: 0,
         };
         let ev = ScanEvent {
             preamble: pre,
@@ -424,17 +416,11 @@ mod tests {
             reactions: vec![
                 Reaction {
                     precursor_mz: 810.50,
-                    unknown_double: 1.0,
                     energy: 35.0,
-                    unknown_long1: 0,
-                    unknown_long2: 0,
                 },
                 Reaction {
                     precursor_mz: 265.27,
-                    unknown_double: 1.0,
                     energy: 35.0,
-                    unknown_long1: 0,
-                    unknown_long2: 0,
                 },
             ],
             fraction_collectors: vec![FractionCollector {
@@ -470,5 +456,112 @@ mod tests {
         assert_eq!(ev.preamble.activation(), Some(Activation::Unknown(12)));
         let s = build_filter(&ev, &idx, Some(649.12), Some(35.0));
         assert_eq!(s, "FTMS + c NSI d Full ms2 649.1200 [150.0000-2000.0000]");
+    }
+    /// Preamble of a PXD006767 Orbitrap Velos Pro ETD MS2 event: ITMS,
+    /// byte 24 = 4, byte 120 = 1.
+    fn etd_preamble(len: usize) -> ScanEventPreamble {
+        let mut pre = make_preamble(1, 0, 2, 0);
+        pre.bytes.resize(len, 0);
+        pre.bytes[10] = 1; // dependent
+        pre.bytes[40] = 0; // ITMS
+        pre.bytes[24] = 4;
+        pre.bytes[120] = 1;
+        pre
+    }
+
+    #[test]
+    fn etd_flag_renders_etd_clause() {
+        let ev = ScanEvent {
+            preamble: etd_preamble(136),
+            reactions: vec![Reaction {
+                precursor_mz: 467.1021,
+                energy: 130.0,
+            }],
+            fraction_collectors: vec![],
+            coefficients: vec![],
+        };
+        assert_eq!(ev.preamble.activation(), Some(Activation::ETD));
+        assert_eq!(ev.activation(), Some(Activation::ETD));
+        let idx = make_index(50.0, 1415.0);
+        assert_eq!(
+            build_filter(&ev, &idx, Some(467.1021), None),
+            "ITMS + c NSI d Full ms2 467.1021@etd130.00 [50.0000-1415.0000]"
+        );
+    }
+
+    #[test]
+    fn etd_flag_needs_v66_msn_and_a_named_code() {
+        // Version 63/64 preamble: byte 120 is not read.
+        assert_eq!(etd_preamble(128).activation(), Some(Activation::CID));
+        // MS1 event.
+        let mut pre = etd_preamble(136);
+        pre.bytes[6] = 1;
+        assert_eq!(pre.activation(), Some(Activation::CID));
+        // Byte 24 zero or unnamed, as on misread events.
+        let mut pre = etd_preamble(136);
+        pre.bytes[24] = 0;
+        assert_eq!(pre.activation(), None);
+        pre.bytes[24] = 11;
+        assert_eq!(pre.activation(), Some(Activation::Unknown(11)));
+        // Byte 120 = 2 (Q Exactive / Exploris / Astral) is not ETD.
+        let mut pre = etd_preamble(136);
+        pre.bytes[120] = 2;
+        assert_eq!(pre.activation(), Some(Activation::CID));
+    }
+
+    #[test]
+    fn ethcd_event_renders_two_clause_filter() {
+        let mut pre = etd_preamble(136);
+        pre.bytes[40] = 4; // FTMS
+        let ev = ScanEvent {
+            preamble: pre,
+            reactions: vec![
+                Reaction {
+                    precursor_mz: 507.8661,
+                    energy: 95.83,
+                },
+                Reaction {
+                    precursor_mz: 0.0,
+                    energy: 0.0,
+                },
+            ],
+            fraction_collectors: vec![],
+            coefficients: vec![],
+        };
+        assert_eq!(ev.preamble.activation(), Some(Activation::ETD));
+        assert_eq!(ev.activation(), Some(Activation::EThcD));
+        let idx = make_index(110.0, 1026.0);
+        assert_eq!(
+            build_filter(&ev, &idx, Some(507.8661), Some(25.0)),
+            "FTMS + c NSI d Full ms2 507.8661@etd@hcd25.00 [110.0000-1026.0000]"
+        );
+    }
+
+    #[test]
+    fn two_reactions_without_etd_flag_are_not_ethcd() {
+        let mut pre = make_preamble(1, 0, 2, 0);
+        pre.bytes[10] = 1;
+        pre.bytes[24] = 4;
+        let ev = ScanEvent {
+            preamble: pre,
+            reactions: vec![
+                Reaction {
+                    precursor_mz: 507.8661,
+                    energy: 30.0,
+                },
+                Reaction {
+                    precursor_mz: 0.0,
+                    energy: 0.0,
+                },
+            ],
+            fraction_collectors: vec![],
+            coefficients: vec![],
+        };
+        assert_eq!(ev.activation(), Some(Activation::CID));
+        let idx = make_index(110.0, 1026.0);
+        assert_eq!(
+            build_filter(&ev, &idx, Some(507.8661), Some(30.0)),
+            "FTMS + c NSI d Full ms2 507.8661@hcd30.00 [110.0000-1026.0000]"
+        );
     }
 }

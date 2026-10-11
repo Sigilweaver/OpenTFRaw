@@ -4,6 +4,7 @@ use std::io::{Read, Seek};
 
 /// One entry in the scan index array (v66: 92 bytes).
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct ScanIndexEntry {
     pub index: u32,
     pub scan_event: u16,

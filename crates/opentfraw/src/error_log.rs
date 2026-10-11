@@ -4,6 +4,7 @@ use std::io::{Read, Seek};
 
 /// An error log entry.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct ErrorEntry {
     pub time: f32,
     pub message: String,

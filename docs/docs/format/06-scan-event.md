@@ -116,6 +116,10 @@ other scan parameters. Version-dependent size.
 | 33-39 | unknown_byte[33-39] | |
 | 40 | **analyzer** | 0=ITMS, 1=TQMS, 2=SQMS, 3=TOFMS, 4=FTMS, 5=Sector |
 
+Byte 24 does not carry ETD: on ETD scans it holds 4, the same value as on
+the MS1 scans of the same file. Electron-transfer scans are marked by
+byte 120 (section 22.5).
+
 ### 22.2 Size by Version
 
 | Version | Total Bytes |
@@ -187,9 +191,11 @@ taken from the Finnigan module:
   use 2 decimals. SRM filters use 3 decimals for Q1 and the Q3 windows.
 - Activation code 4 (section 31.7) renders as `hcd` on an FTMS analyzer and
   `cid` on any other analyzer. Code 1 renders as `hcd`.
-- A tribrid FTMS MS2 event with two reactions, of which only one has a
-  non-zero precursor m/z, renders a single `{PRECURSOR}@etd@hcd{ENERGY}`
-  clause.
+- An EThcD event (section 22.5) renders a single
+  `{PRECURSOR}@etd@hcd{ENERGY}` clause, where the energy is the scan
+  parameters' activation energy (the supplemental HCD energy).
+- An ETD event renders `@etd` followed by the reaction's stored value,
+  which on the corpus ETD files is the reaction time in ms (section 22.5).
 - SRM filters (flat-peak files) start with a fixed `+` polarity and have no
   analyzer or ionization token, because those files have no scan event to read
   them from. The `@cid{ENERGY}` clause is present only when a collision energy
@@ -202,6 +208,57 @@ taken from the Finnigan module:
 - Missing values fall back to `MS` for the analyzer, `+` for polarity and
   `Full` for the scan type. An unknown activation code omits the `@{METHOD}`
   clause.
+
+### 22.5 Electron-transfer flag (byte 120, v66)
+
+In a 136-byte (v66) preamble, byte 120 is 1 on electron-transfer MSn
+events. OpenTFRaw reads it only on MSn events whose byte 24 is a named code
+(1 or 4), and decodes such an event as ETD. An ETD MS2 event read out in
+the Orbitrap (FTMS) whose body has two or more reactions, exactly one of
+them with a precursor m/z, is decoded as EThcD; the precursor-less reaction
+is the supplemental step.
+
+| Value | Seen on |
+|-------|---------|
+| 0 | MS1 and CID/HCD MSn events of Velos-family and tribrid instruments |
+| 1 | ETD and EThcD MSn events |
+| 2 | Every event of Q Exactive, Exploris and Astral files |
+
+Evidence (PRIDE public files, every scan event of every corpus file read):
+
+- PXD006767 `EFM4_AspN_ETD_22032016.raw`,
+  `EFM4_lysargiNase_ETD_22032016.raw` and
+  `EFM7_lysargiNase_ETD_22032016.raw` (Orbitrap Velos Pro, v66). The
+  embedded instrument method says `Activation Type: ETD` with supplemental
+  activation enabled. Byte 120 is 1 on all 10,836 MS2 events (3,415, 3,266
+  and 4,155) and 0 on all 6,939 MS1 events; byte 24 is 4 on both. Each
+  event stores one reaction whose energy field is 130, equal to the method's
+  `Activation Time: 130.000`. In CID files the same field equals the
+  method's normalized collision energy (PXD051336 Velos Pro: 35 and
+  `Normalized Coll. Energy: 35.0`). So on ETD events this value is a
+  reaction time, and the mzML writer does not report it as a collision
+  energy.
+- PXD077396 `EC-OT30-25-190-EThcD-01.raw`, `-03.raw` and `-09.raw`
+  (Orbitrap Eclipse) and PXD070648 `..._Trypsin_Chymotrypsin_1019_a.raw` and
+  `..._991_a.raw` (Orbitrap Fusion Lumos). The method text says
+  `Is EThcD Active = True`. Byte 120 is 1 on all 59,034 MS2 events, each
+  with two reactions of which only the first has a precursor m/z. The first
+  reaction's energy field scales with 1/z^2 of the scan's `Charge State:`
+  (PXD077396 `-01.raw`: 95.834 at z=2, 42.593 at z=3, 23.959 at z=4), as a
+  charge-dependent ETD reaction time would, so it is not reported as a
+  collision energy either.
+- Files whose method declares only CID or HCD, for example PXD051336
+  (Velos Pro), PXD000790 and PXD044191 (Elite), PXD032800 (Eclipse) and
+  PXD006062 (Fusion Lumos), have 0 on every event.
+
+The corpus has no ETD file in format versions 63 or 64, so byte 120 is not
+read there. The 38 corpus files whose scan events are misread (see the
+README's known issues) also show 1 at byte 120, mostly with byte 24 zero or
+out of range. Requiring a named byte-24 code leaves 132 of their MSn scans
+decoded as ETD: 131 in PXD064117 and PXD067311, whose methods enable EThcD,
+and 1 in PXD039587, whose method declares only CID. The corpus files carry
+no stored scan filter text, so filters could not be used as evidence.
+
 
 ---
 
@@ -227,7 +284,8 @@ Precursor ion information for MS2+ scans. Stored as an array within ScanEvent.
 
 Example: `542.3000@hcd35.00`, `480.2500@cid30.00`
 
-The activation method name comes from the ScanEventPreamble `activation` field.
+The activation method name comes from the ScanEventPreamble `activation`
+field (byte 24) and the electron-transfer flag (byte 120, section 22.5).
 Precision and method tokens follow the conventions in section 22.4.
 
 ---

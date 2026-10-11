@@ -71,3 +71,58 @@ fn run_metadata_omits_acquisition_paths_by_default() {
     );
     assert!(full.extra.contains_key("opentfraw.original_file_path"));
 }
+
+/// A scan whose data cannot be read is reported, not skipped: the source
+/// yields `Err` for it and the mzML writer fails with that error.
+#[test]
+fn unreadable_scans_are_errors() {
+    use openmassspec_core::SpectrumSource;
+    use std::io::{Cursor, Read};
+
+    let Some(path) = common::fixture() else {
+        eprintln!("skipping: no Thermo fixture available");
+        return;
+    };
+    let raw = RawFileReader::open_path(&path).expect("open raw");
+    // Keep the metadata region and drop the scan data, so every scan read
+    // runs past the end of the input.
+    let mut bytes = Vec::new();
+    File::open(&path)
+        .expect("reopen raw")
+        .read_to_end(&mut bytes)
+        .expect("read raw");
+    bytes.truncate(raw.data_addr as usize);
+
+    let mut source = Cursor::new(bytes.clone());
+    let items: Vec<_> = OpenTfRawSource::new(&raw, &mut source, "x.raw", false)
+        .iter_spectra()
+        .collect();
+    assert_eq!(items.len(), raw.num_scans as usize, "one item per scan");
+    assert!(items.iter().all(|r| r.is_err()));
+
+    let mut source = Cursor::new(bytes.clone());
+    let items: Vec<_> = opentfraw::iter_spectra(&raw, &mut source, false).collect();
+    assert_eq!(items.len(), raw.num_scans as usize);
+    assert!(items.iter().all(|r| r.is_err()));
+
+    let mut source = Cursor::new(bytes);
+    let err = opentfraw::write_mzml(&raw, &mut source, &mut Vec::new(), "x.raw", false)
+        .expect_err("truncated scan data must fail the write");
+    assert!(matches!(err, opentfraw::Error::Core(_)), "{err:?}");
+}
+
+#[test]
+fn extract_spectrum_rejects_out_of_range_index() {
+    let Some(path) = common::fixture() else {
+        eprintln!("skipping: no Thermo fixture available");
+        return;
+    };
+    let raw = RawFileReader::open_path(&path).expect("open raw");
+    let mut source = BufReader::new(File::open(&path).expect("reopen raw"));
+    assert!(opentfraw::extract_spectrum(&raw, &mut source, 0, false).is_ok());
+    let err = opentfraw::extract_spectrum(&raw, &mut source, raw.num_scans, false).unwrap_err();
+    assert!(
+        matches!(err, opentfraw::Error::ScanIndexOutOfRange(n) if n == raw.num_scans),
+        "{err:?}"
+    );
+}

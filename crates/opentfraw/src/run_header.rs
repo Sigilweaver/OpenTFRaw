@@ -5,6 +5,7 @@ use std::io::{Read, Seek};
 
 /// Run header - the secondary index structure with pointers to all data streams.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct RunHeader {
     pub sample_info: SampleInfo,
     pub file_names: Vec<String>,
@@ -19,9 +20,6 @@ pub struct RunHeader {
     pub inst_log_addr: u64,
     /// File offset to error log.
     pub error_log_addr: u64,
-    /// Unknown address between error_log and scan_trailer (v64+ only).
-    /// Hypothesis: GenericDataHeader for scan trailer / scan params schema.
-    pub unk_addr: u64,
     /// File offset to scan event trailer stream.
     pub scan_trailer_addr: u64,
     /// File offset to scan parameters stream.
@@ -66,7 +64,7 @@ impl RunHeader {
             let data_addr = r.read_u64()?;
             let inst_log_addr = r.read_u64()?;
             let error_log_addr = r.read_u64()?;
-            let unk_addr = r.read_u64()?;
+            let _unk_addr = r.read_u64()?;
             let scan_trailer_addr = r.read_u64()?;
             let scan_params_addr = r.read_u64()?;
             let _unk5 = r.read_u32()?;
@@ -86,7 +84,6 @@ impl RunHeader {
                 data_addr,
                 inst_log_addr,
                 error_log_addr,
-                unk_addr,
                 scan_trailer_addr,
                 scan_params_addr,
                 own_addr,
@@ -124,7 +121,6 @@ impl RunHeader {
                 data_addr,
                 inst_log_addr,
                 error_log_addr,
-                unk_addr: 0,
                 scan_trailer_addr,
                 scan_params_addr,
                 own_addr,

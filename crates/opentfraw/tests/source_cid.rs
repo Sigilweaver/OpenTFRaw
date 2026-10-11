@@ -12,7 +12,7 @@ fn public_negative_plus_source_cid_method_fallback() {
     assert_eq!(raw.instrument_model, Some("Q Exactive Plus"));
     assert_eq!(raw.num_scans, 6674);
     let mut source = std::fs::File::open(path).unwrap();
-    let method = raw.instrument_method_text(&mut source).unwrap();
+    let method = raw.instrument_method_text(&mut source).unwrap().unwrap();
     assert_eq!(
         method
             .matches("<Fragmentation_Source unit=\"eV\" FullInternalName=\"decimal?\">70</Fragmentation_Source>")
@@ -99,9 +99,8 @@ fn public_source_cid_method_and_trailer_precedence() {
             ("Scan Event:", GenericValue::Int32(2)),
         ],
     ] {
-        raw.scan_parameters[0] = GenericRecord {
-            values: ids.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(),
-        };
+        raw.scan_parameters[0] =
+            GenericRecord::new(ids.into_iter().map(|(k, v)| (k.to_owned(), v)).collect());
         assert_eq!(raw.source_cid_energy_ev(first), None);
     }
 }

@@ -16,6 +16,8 @@ publish = false
 [lib]
 name = "opentfraw"
 crate-type = ["cdylib"]
+# Same lib name as the opentfraw crate; rustdoc output would collide.
+doc = false
 
 [lints.rust]
 unsafe_code = "forbid"

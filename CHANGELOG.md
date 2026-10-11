@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+Every public API change since 2.0.0. See `MIGRATING-3.0.md` for how to
+update code. Later 3.x releases add variants, fields and accessors as
+minor versions.
+
+- Requires `openmassspec-core` 3.0.
+- Unreadable scans are errors, not skipped:
+  - `OpenTfRawSource::iter_spectra` yields one `openmassspec_core::Result`
+    per scan; `iter_chromatograms` yields `Result` items.
+  - `extract_spectrum` returns `Result<SpectrumRecord>` (was `Option`); an
+    out-of-range index is the new `Error::ScanIndexOutOfRange`.
+  - `iter_spectra` yields `Result<SpectrumRecord>` and one item per scan.
+  - `write_mzml` and `write_indexed_mzml` return
+    `Result<openmassspec_core::WriteSummary>` (was `Result<()>`) and stop at
+    the first unreadable scan.
+  - `RawFileReader::instrument_method_text` returns
+    `Result<Option<String>>` (was `Option<String>`), and `RawFileReader::open`
+    fails when the embedded method region cannot be read.
+- `Error` is `#[non_exhaustive]` and gains `Core` (an
+  `openmassspec_core::Error`), `ScanIndexOutOfRange`, and
+  `UnrecognizedScanRecord` (a TSQ flat-peak record that matches no known
+  layout; this was `UnexpectedEof` with `needed: 0`).
+  `From<opentfraw::Error> for openmassspec_core::Error` is added.
+- `#[non_exhaustive]` on every public enum: `Analyzer`, `Polarity`,
+  `ScanMode`, `MsPower`, `ScanType`, `Ionization`, `Activation`,
+  `GenericType`, `GenericValue`, `DeviceFamily`, `ScanDataFormat`,
+  `ControllerType`, `ExtraFields`, `Error`. Matches outside the crate need a
+  wildcard arm.
+- `#[non_exhaustive]` on every public struct with public fields:
+  `RawFileReader`, `ControllerInfo`, `StatusLogRecord`, `ScanEvent`,
+  `ScanEventPreamble`, `Reaction`, `FractionCollector`, `ScanIndexEntry`,
+  `ScanDataPacket`, `PacketHeader`, `Peak`, `NoiseNode`, `Profile`,
+  `ProfileChunk`, `GenericDataDescriptor`, `GenericDataHeader`,
+  `GenericRecord`, `FileHeader`, `AuditTag`, `SampleInfo`, `RunHeader`,
+  `RawFileInfo`, `RawFileInfoPreamble`, `SeqRow`, `InjectionData`,
+  `ErrorEntry`, `PrecursorInfo`, `SpectrumRecord`. Fields stay public for
+  reading; struct literals no longer compile outside the crate.
+- The scan-event types expose accessor methods instead of public fields,
+  so the scan-event decoder can change how it stores them in a minor
+  release: `ScanEvent::preamble()`, `reactions()`, `fraction_collectors()`,
+  `coefficients()`; `Reaction::precursor_mz()`, `energy()`;
+  `FractionCollector::low_mz()`, `high_mz()`; `ScanEventPreamble::bytes()`.
+- `ScanParams` and `StatusLogEntry` no longer expose their tuple field; use
+  the new `ScanParams::new` / `StatusLogEntry::new` and the existing
+  `record()`.
+- Removed fields that held undecoded bytes: `AuditTag::unknown_long`,
+  `RunHeader::unk_addr`, `Reaction::unknown_double`,
+  `Reaction::unknown_long1`, `Reaction::unknown_long2`.
+- Removed from the public API (now crate-private): `scan_data::read_flat_peaks`,
+  `scan_data::read_scan_srm_v66`, `scan_data::read_scan_srm_v66_windows`,
+  `scan_data::search_v63_transition`, `scan_filter::build_filter`,
+  `DeviceFamily::detect_instrument`, `DeviceFamily::detect_from_model_strings`,
+  `DeviceFamily::detect_heuristic`, `DetectedInstrument`. The reader methods
+  `read_scan_flat`, `read_scan_srm_v66` and `scan_filter`, and the fields
+  `device_family` and `instrument_model`, cover the same data.
+- Removed the deprecated `DeviceFamily::detect`.
+- Also breaking, described under Changed and Removed below: the `Activation`
+  variants, `scan_filter::build_filter`'s `supplemental_energy` argument,
+  the removed trailer label fallbacks, `ScanParams::supplemental_activation_energy`,
+  the removed `StatusLogEntry` accessors and `opentfraw.status.*` extras,
+  `ControllerType`'s variants, and the `RawFileReader::inst_log` type.
+- Python: `RawFile.iter_records()` and `RawFile.read_chromatograms()` raise
+  `OSError` when a scan or chromatogram cannot be decoded,
+  `RawFile.instrument_method_text()` raises `OSError` when the file cannot be
+  read, and `RawFile.to_mzml()` raises at the first unreadable scan instead
+  of leaving it out. For example, `PXD020246_TSQVantage.RAW` has 4 of
+  35,098 scans whose flat-peak record matches no known layout; it used to
+  convert without them and now fails. Pass `skip_unreadable=True` (see
+  Added), or use the `to_mzml` example's new `--skip-unreadable` flag, to
+  write the other scans.
+
+### Added
+
+- `ScanParams::new`, `StatusLogEntry::new`, `GenericRecord::new`,
+  `ScanMode::as_str`.
+- Separate matched and configured lock-mass counts in Rust accessors, Python
+  extras, canonical spectrum records, and mzML userParams, including status-log
+  variants. Missing matched counts stay absent rather than becoming the
+  configured count. The existing combined accessor and extra key retain their
+  compatibility fallback; `scan_filter()` still leaves the unproven `lock`
+  token unset. (#58)
+- `RawFileReader::source_cid_by_method_event`: declared source CID energy
+  from the embedded method XML, keyed by (segment, event).
+- ETD and EThcD activation. In version 66 files, scan-event preamble
+  byte 120 is 1 on electron-transfer MSn scans; such a scan whose byte 24
+  is 1 or 4 decodes as `Activation::ETD`. An ETD MS2 scan read out in the
+  Orbitrap with a second, precursor-less reaction decodes as
+  `Activation::EThcD`. New `ScanEvent::activation()` returns this;
+  `ScanEventPreamble::activation()` returns ETD but cannot tell EThcD.
+  Evidence: the three Orbitrap Velos Pro ETD files of PRIDE PXD006767
+  (method "Activation Type: ETD", byte 120 = 1 on all 10,836 MS2 scans,
+  0 on all MS1 scans) and five EThcD files of PXD077396 and PXD070648
+  (method "Is EThcD Active = True", byte 120 = 1 on all 59,034 MS2 scans).
+  CID and HCD files have 0 or 2 there. Details are in the format docs,
+  section 22.5. Python `activation` reports `"etd"` or `"ethcd"`.
+- Python: `RawFile.to_mzml(..., skip_unreadable=False)`. With
+  `skip_unreadable=True`, scans that cannot be decoded are left out instead
+  of raising, a `UserWarning` gives the count, and the call returns it.
+  `to_mzml` now returns the number of records left out (always 0 by
+  default) instead of `None`.
+
 ### Changed
 
 - `centroid_labels()` `noise` and `baseline`, and the Rust `NoiseNode`,
@@ -24,19 +126,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values; `RawFileReader` still exposes them directly.
 - mzML `<software>` now reports the real opentfraw version instead of a
   fixed `0.1.0`.
-- MSRV is now Rust 1.88, matching `openmassspec-core` 2.0.0.
-- **Breaking (Rust):** `Activation` names only the scan-event codes with
-  corpus evidence, `HCD` (1) and `CID` (4). Every other non-zero code
-  decodes as the new `Activation::Unknown(u8)`, which holds the raw byte.
-  The `MPID`, `ETD`, `ECD`, `IRMPD`, `PD`, `PQD`, `UVPD`, `SID` and
-  `EThcD` variants are removed: no public source documents those codes,
-  and every corpus scan that carries one has an implausible scan event
-  (for example EI ionization on a nanospray Orbitrap run). For an unknown
-  code the scan filter omits the `@<method>` clause, mzML has no decoded
-  activation (the writer then emits its default
-  collision-induced dissociation term), and Python `activation` is
-  `"unknown"`. Tribrid EThcD scans, which use codes 1 and 4, still render
-  as `@etd@hcd<energy>`.
+- MSRV is now Rust 1.88, matching `openmassspec-core` 3.0.
+- mzML: a precursor whose activation method is not decoded, which includes
+  every SRM scan from TSQ files, no longer gets a
+  `collision-induced dissociation` (MS:1000133) term in `<activation>`
+  (openmassspec-core 3.0 writer). The PSI-MS CV version written in `<cv>` is
+  the one core 3.0 ships.
+- **Breaking (Rust):** `Activation` names only methods with corpus
+  evidence. Byte 24 of the scan event gives `HCD` (1) and `CID` (4); every
+  other non-zero code decodes as the new `Activation::Unknown(u8)`, which
+  holds the raw byte. `ETD` and `EThcD` no longer come from byte 24 codes:
+  they are decoded from preamble byte 120 (see Added). The `MPID`, `ECD`,
+  `IRMPD`, `PD`, `PQD`, `UVPD` and `SID` variants are removed: no public
+  source documents their codes, and every corpus scan that carries one has
+  an implausible scan event (for example EI ionization on a nanospray
+  Orbitrap run). For an unknown code the scan filter omits the
+  `@<method>` clause, the mzML `<activation>` carries no
+  dissociation-method term, and Python `activation` is `"unknown"`.
 - **Breaking (Rust):** `scan_filter::build_filter` no longer takes a
   `supplemental_energy` argument; it only fed the removed code-12 EThcD
   clause.
@@ -121,40 +227,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `profile()` returns NaN.
 - An invalid UTF-16 character in a trailer or status-log string no longer
   fails the whole file open; the value decodes with replacement characters.
+- ETD scans were labelled CID. On the three PXD006767 ETD files all 10,836
+  MS2 spectra had a `collision-induced dissociation` term and a 130 eV
+  `collision energy`; they now have `electron transfer dissociation`
+  (MS:1000598) and no collision energy, since the stored 130 is the
+  method's ETD activation time. Their scan filters read `@etd130.00`
+  instead of `@cid130.00`. The 59,034 EThcD MS2 spectra of PXD077396 and
+  PXD070648 had `beam-type collision-induced dissociation` and a
+  `collision energy` in eV taken from the reaction record (95.83 at charge
+  2 on PXD077396); they now have `electron transfer dissociation` plus
+  `electron transfer higher-energy collision dissociation` (MS:1002631) and
+  no collision energy, since that value scales with 1/z^2 of the charge
+  state like a charge-dependent ETD reaction time. Their filters are
+  unchanged (`@etd@hcd`). Across every scan of the 291 corpus files,
+  the only other activation changes are 132 scans in 4 files with misread
+  scan events (131 in PXD064117 and PXD067311, whose methods enable EThcD,
+  and 1 in PXD039587), which now read ETD instead of CID.
+- README and CORPUS.md coverage claims match the corpus: format versions
+  63, 64 and 66 only (not 8 through 66), no LCQ-family file (the
+  "LCQ Classic" files of PXD044152 are Orbitrap Exploris 480 by file
+  header, and the "TSQ Quantiva" file is TSQ Altis), and no UVPD, ECD or
+  correctly decoded MS3 data. The README gains a "Known issues and gaps"
+  section.
 - README and docs-site Rust examples buffer scan reads and compile against
   the current `read_scan_peaks` return type.
 - Python docstrings for `peaks()` and `iter_scans()`; two broken rustdoc
   links.
-
-### Validation
-
-- New corpus test checks, for every scan of the CI fixture, that the most
-  intense decoded centroid matches the scan-index base peak and that every
-  centroid lies inside the scan window. Also passes on all 152,328 scans of
-  PXD031322 (Fusion Lumos).
-- CI sets `REQUIRE_CORPUS=1`, so corpus tests fail instead of skipping when
-  the fixture is missing, and Rust and pytest share one fixture name.
-
-## [3.0.0] - 2026-10-04
-
-### Changed
-
-- **Breaking (Rust):** `RawFileReader` gains the public
-  `source_cid_by_method_event` map. Code that constructs this reader with a
-  struct literal must initialize the new field; exhaustive destructuring must
-  bind it or use `..`. Readers opened through `open_path` or `open` need no
-  caller changes. Python users keep the existing API.
-
-### Added
-
-- Separate matched and configured lock-mass counts in Rust accessors, Python
-  extras, canonical spectrum records, and mzML userParams, including status-log
-  variants. Missing matched counts stay absent rather than becoming the
-  configured count. The existing combined accessor and extra key retain their
-  compatibility fallback; `scan_filter()` still leaves the unproven `lock`
-  token unset. (#58)
-
-### Fixed
 
 - Orbitrap MS1 profiles in 96-byte event bodies now use the calibration
   coefficients after the acquisition window. This fixes frequency values
@@ -172,6 +270,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Validation
 
+- New corpus test checks, for every scan of the CI fixture, that the most
+  intense decoded centroid matches the scan-index base peak and that every
+  centroid lies inside the scan window. Also passes on all 152,328 scans of
+  PXD031322 (Fusion Lumos).
+- CI sets `REQUIRE_CORPUS=1`, so corpus tests fail instead of skipping when
+  the fixture is missing, and Rust and pytest share one fixture name.
 - Verify trailer-free source-CID recovery on all 6,674 scans of a public
   negative-polarity Q Exactive Plus acquisition (GlycoPOST GPST000122).
   The embedded method supplies 70 eV for its MS1 and MS2 events. The original

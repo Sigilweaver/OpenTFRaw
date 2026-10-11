@@ -401,6 +401,7 @@ fn scan_number_to_index(scan_number: u32, first_scan_number: u32) -> Option<usiz
 }
 
 /// A parsed Thermo Fisher RAW file.
+#[non_exhaustive]
 pub struct RawFileReader {
     pub header: FileHeader,
     pub seq_row: SeqRow,
@@ -466,6 +467,7 @@ pub struct RawFileReader {
 /// Inferred controller kind. The reader decodes no controller-type code, so
 /// it only separates the MS controller from every other controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ControllerType {
     /// A controller whose run header has MS scan data.
     Ms,
@@ -488,6 +490,7 @@ impl ControllerType {
 
 /// Minimal metadata about one controller in a multi-controller RAW file.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ControllerInfo {
     /// Zero-based controller index (position in `run_header_addrs`).
     pub index: usize,
@@ -1047,7 +1050,7 @@ impl RawFileReader {
             srm_ce_by_event,
             source_cid_by_method_event: Default::default(),
         };
-        if let Some(text) = reader.instrument_method_text(&mut source) {
+        if let Some(text) = reader.instrument_method_text(&mut source)? {
             reader.source_cid_by_method_event =
                 crate::instrument_method::source_cid_settings(&text);
         }
@@ -1438,30 +1441,34 @@ impl RawFileReader {
     /// block of valid UTF-16LE text (at least 256 characters long) and returns
     /// it as a `String`.
     ///
-    /// Returns `None` if no suitable text block is found or if the method was
-    /// not embedded (`method_file_present == false`).
+    /// Returns `Ok(None)` if no suitable text block is found or if the method
+    /// was not embedded (`method_file_present == false`).
     ///
     /// Note: This is a best-effort extraction. The result is the raw text
     /// content; callers may wish to trim or parse it further.
-    pub fn instrument_method_text<R: Read + Seek>(&self, source: &mut R) -> Option<String> {
+    ///
+    /// # Errors
+    ///
+    /// An I/O error if the metadata region cannot be read from `source`.
+    pub fn instrument_method_text<R: Read + Seek>(&self, source: &mut R) -> Result<Option<String>> {
         if !self.raw_file_info.preamble.method_file_present {
-            return None;
+            return Ok(None);
         }
         // Read metadata region: from byte 0 up to (but not including) scan data.
         // Cap at 512 KB to avoid reading very large files entirely.
         const MAX_WINDOW: u64 = 512 * 1024;
         let window_len = MAX_WINDOW.min(self.data_addr) as usize;
         if window_len < 4 {
-            return None;
+            return Ok(None);
         }
-        source.seek(std::io::SeekFrom::Start(0)).ok()?;
+        source.seek(std::io::SeekFrom::Start(0))?;
         let mut buf = vec![0u8; window_len];
-        source.read_exact(&mut buf).ok()?;
+        source.read_exact(&mut buf)?;
 
         // Scan for the longest valid UTF-16LE text block (min 256 chars = 512 bytes).
         // Strategy: find aligned 2-byte sequences where every pair decodes to a
         // printable/whitespace Unicode scalar (U+0020..U+FFFD).
-        extract_utf16le_text(&buf, 256)
+        Ok(extract_utf16le_text(&buf, 256))
     }
 }
 
@@ -1537,9 +1544,15 @@ fn extract_utf16le_text(buf: &[u8], min_chars: usize) -> Option<String> {
 ///     println!("Charge state:   {:?}", p.charge_state());
 /// }
 /// ```
-pub struct ScanParams<'a>(pub &'a GenericRecord);
+pub struct ScanParams<'a>(&'a GenericRecord);
 
 impl<'a> ScanParams<'a> {
+    /// Wrap a scan-parameter record, such as one from
+    /// [`RawFileReader::scan_parameters`].
+    pub fn new(record: &'a GenericRecord) -> Self {
+        Self(record)
+    }
+
     /// Return the raw `GenericRecord` for direct field access.
     #[inline]
     pub fn record(&self) -> &GenericRecord {
@@ -1855,6 +1868,7 @@ impl<'a> ScanParams<'a> {
 
 /// One instrument status-log record.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct StatusLogRecord {
     /// Time the record was written, in minutes (same scale as scan start
     /// times).
@@ -1868,9 +1882,15 @@ pub struct StatusLogRecord {
 /// The instrument log records instrument-state values (temperatures, voltages,
 /// pressures, etc.) over time; a scan sees the last record written at or
 /// before its start time. The schema varies across instrument models.
-pub struct StatusLogEntry<'a>(pub &'a GenericRecord);
+pub struct StatusLogEntry<'a>(&'a GenericRecord);
 
 impl<'a> StatusLogEntry<'a> {
+    /// Wrap a status-log record, such as one from
+    /// [`RawFileReader::inst_log_record`].
+    pub fn new(record: &'a GenericRecord) -> Self {
+        Self(record)
+    }
+
     /// Return the raw record for direct field access.
     #[inline]
     pub fn record(&self) -> &GenericRecord {

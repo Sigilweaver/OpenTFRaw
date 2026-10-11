@@ -9,7 +9,7 @@ fn record(matched: Option<GenericValue>, configured: Option<GenericValue>) -> Ge
     if let Some(v) = configured {
         values.push(("Number of Lock Masses:".into(), v));
     }
-    GenericRecord { values }
+    GenericRecord::new(values)
 }
 
 fn assert_counts(
@@ -18,7 +18,7 @@ fn assert_counts(
     configured: Option<i32>,
     legacy: Option<i32>,
 ) {
-    let p = ScanParams(r);
+    let p = ScanParams::new(r);
     assert_eq!(p.number_of_matched_lock_masses(), matched);
     assert_eq!(p.number_of_configured_lock_masses(), configured);
     assert_eq!(p.number_of_lock_masses(), legacy);

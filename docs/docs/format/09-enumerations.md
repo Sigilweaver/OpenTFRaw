@@ -74,5 +74,9 @@ _Enumerations_
 | 1 | HCD | Higher-energy Collisional Dissociation |
 | 4 | CID | Collision-Induced Dissociation |
 
+Other non-zero byte-24 values decode as unknown and produce no activation
+term. ETD and EThcD are not byte-24 values; they come from preamble
+byte 120 (section 22.5).
+
 ---
 

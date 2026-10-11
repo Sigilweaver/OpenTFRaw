@@ -3,38 +3,129 @@ use crate::reader::BinaryReader;
 use std::io::{Read, Seek};
 
 /// Precursor reaction info for MS2+ scans (32 bytes).
+///
+/// Read through the accessor methods; the stored layout may change as more
+/// of the scan event is decoded.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Reaction {
-    pub precursor_mz: f64,
-    pub unknown_double: f64,
-    pub energy: f64,
-    pub unknown_long1: u32,
-    pub unknown_long2: u32,
+    pub(crate) precursor_mz: f64,
+    pub(crate) energy: f64,
+}
+
+impl Reaction {
+    /// Precursor m/z of this reaction.
+    pub fn precursor_mz(&self) -> f64 {
+        self.precursor_mz
+    }
+
+    /// Activation energy of this reaction as stored in the scan event.
+    pub fn energy(&self) -> f64 {
+        self.energy
+    }
 }
 
 /// M/z acquisition range.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct FractionCollector {
-    pub low_mz: f64,
-    pub high_mz: f64,
+    pub(crate) low_mz: f64,
+    pub(crate) high_mz: f64,
+}
+
+impl FractionCollector {
+    /// Lower bound of the range, in m/z.
+    pub fn low_mz(&self) -> f64 {
+        self.low_mz
+    }
+
+    /// Upper bound of the range, in m/z.
+    pub fn high_mz(&self) -> f64 {
+        self.high_mz
+    }
 }
 
 /// Scan event preamble - byte array encoding scan parameters.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct ScanEventPreamble {
-    pub bytes: Vec<u8>,
+    pub(crate) bytes: Vec<u8>,
 }
 
 /// Complete scan event.
+///
+/// Read through the accessor methods; the stored layout may change as more
+/// of the scan event is decoded.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct ScanEvent {
-    pub preamble: ScanEventPreamble,
-    pub reactions: Vec<Reaction>,
-    pub fraction_collectors: Vec<FractionCollector>,
-    pub coefficients: Vec<f64>,
+    pub(crate) preamble: ScanEventPreamble,
+    pub(crate) reactions: Vec<Reaction>,
+    pub(crate) fraction_collectors: Vec<FractionCollector>,
+    pub(crate) coefficients: Vec<f64>,
+}
+
+impl ScanEvent {
+    /// The fixed-size preamble with the scan's enumerated settings.
+    pub fn preamble(&self) -> &ScanEventPreamble {
+        &self.preamble
+    }
+
+    /// Precursor reactions, first stage first. Empty for MS1 scans.
+    pub fn reactions(&self) -> &[Reaction] {
+        &self.reactions
+    }
+
+    /// Acquisition m/z ranges.
+    pub fn fraction_collectors(&self) -> &[FractionCollector] {
+        &self.fraction_collectors
+    }
+
+    /// Frequency-to-m/z calibration coefficients (empty when the scan has
+    /// none). See [`crate::scan_data::freq_to_mz`].
+    pub fn coefficients(&self) -> &[f64] {
+        &self.coefficients
+    }
+
+    /// Activation method of this scan.
+    ///
+    /// This is [`ScanEventPreamble::activation`], except that an ETD MS2
+    /// event read out in the Orbitrap (FTMS) with two or more reactions of
+    /// which exactly one has a precursor m/z is [`crate::Activation::EThcD`].
+    /// The precursor-less reaction is the supplemental step. Every such
+    /// event in the corpus comes from a file whose method text says "Is
+    /// EThcD Active = True" (PRIDE PXD077396 and PXD070648; see
+    /// [`ScanEventPreamble::activation`]). The Orbitrap Velos Pro ETD files
+    /// in PXD006767 store one reaction per event and stay ETD.
+    pub fn activation(&self) -> Option<crate::Activation> {
+        let act = self.preamble.activation()?;
+        if act == crate::Activation::ETD && self.has_supplemental_reaction() {
+            return Some(crate::Activation::EThcD);
+        }
+        Some(act)
+    }
+
+    /// An FTMS MS2 event with two or more reactions of which exactly one has
+    /// a precursor m/z.
+    fn has_supplemental_reaction(&self) -> bool {
+        let with_precursor = self
+            .reactions
+            .iter()
+            .filter(|r| r.precursor_mz > 0.0)
+            .count();
+        self.preamble.ms_power() == Some(crate::MsPower::Ms2)
+            && self.preamble.analyzer() == Some(crate::Analyzer::FTMS)
+            && self.reactions.len() >= 2
+            && with_precursor == 1
+    }
 }
 
 impl ScanEventPreamble {
+    /// The raw preamble bytes. Their length depends on the file version.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     pub(crate) fn size_for_version(version: u32) -> usize {
         match version {
             0..=8 => 41,
@@ -94,11 +185,51 @@ impl ScanEventPreamble {
             .and_then(|&b| crate::Ionization::from_byte(b))
     }
 
-    /// Activation method: byte 24.
+    /// Activation method from the preamble alone: byte 24, or
+    /// [`crate::Activation::ETD`] when the electron-transfer byte is set.
+    ///
+    /// This cannot tell EThcD from ETD, which needs the event's reactions;
+    /// use [`ScanEvent::activation`] for a scan's activation.
+    ///
+    /// Byte 120 of a 136-byte (version 66) preamble is 1 on electron-transfer
+    /// MSn events. Corpus evidence (PRIDE public files):
+    ///
+    /// - PXD006767 `EFM4_AspN_ETD_22032016.raw`,
+    ///   `EFM4_lysargiNase_ETD_22032016.raw` and
+    ///   `EFM7_lysargiNase_ETD_22032016.raw` (Orbitrap Velos Pro): the
+    ///   embedded instrument method says "Activation Type: ETD" for every
+    ///   dependent scan, and byte 120 is 1 on all 10,836 MS2 events (3,415,
+    ///   3,266 and 4,155) and 0 on every MS1 event. Byte 24 is 4 on both MS1
+    ///   and MS2 events, so it does not carry the method here. The reaction
+    ///   energy field holds 130, the method's "Activation Time: 130.000",
+    ///   where CID files hold the normalized collision energy.
+    /// - PXD077396 `EC-OT30-25-190-EThcD-01/03/09.raw` (Orbitrap Eclipse) and
+    ///   PXD070648 `..._1019_a.raw` and `..._991_a.raw` (Orbitrap Fusion
+    ///   Lumos): the method text says "Is EThcD Active = True" and byte 120
+    ///   is 1 on all 59,034 MS2 events.
+    /// - Velos-family and tribrid files whose method declares only CID or HCD
+    ///   (for example PXD051336 Velos Pro, PXD000790 Elite, PXD032800
+    ///   Eclipse, PXD006062 Fusion Lumos) have 0 on every event; Q Exactive,
+    ///   Exploris and Astral files have 2 on every event.
+    ///
+    /// The flag is only read when byte 24 holds a named code (1 or 4): files
+    /// whose scan events are misread also show 1 at byte 120, mostly with
+    /// byte 24 zero or out of range (one such event in PXD039587, whose
+    /// method declares only CID, still decodes as ETD). The format docs
+    /// (section 22.5) list the counts. Version 63 and 64 preambles also have a byte
+    /// 120, but no corpus file of those versions uses ETD, so it is not read
+    /// there.
     pub fn activation(&self) -> Option<crate::Activation> {
-        self.bytes
+        let base = self
+            .bytes
             .get(24)
-            .and_then(|&b| crate::Activation::from_byte(b))
+            .and_then(|&b| crate::Activation::from_byte(b))?;
+        let is_msn = self.bytes.get(6).is_some_and(|&p| p >= 2);
+        let named = matches!(base, crate::Activation::HCD | crate::Activation::CID);
+        if self.bytes.len() == 136 && is_msn && named && self.bytes.get(120) == Some(&1) {
+            return Some(crate::Activation::ETD);
+        }
+        Some(base)
     }
 
     /// Wideband flag: byte 32, `true` only for 1. The Finnigan Perl module
@@ -115,8 +246,8 @@ impl ScanEventPreamble {
             .and_then(|&b| crate::Analyzer::from_byte(b))
     }
 
-    /// Raw value of the activation byte (byte 24). Useful for diagnostics when
-    /// `activation()` returns `None` (unrecognised code).
+    /// Raw value of byte 24, for diagnostics. [`Self::activation`] decodes it
+    /// together with the electron-transfer byte (byte 120).
     pub fn activation_byte(&self) -> u8 {
         self.bytes.get(24).copied().unwrap_or(0)
     }
@@ -301,17 +432,11 @@ impl ScanEvent {
                         break;
                     }
                     let mz = crate::bytes::read_f64_le(&body, off)?;
-                    let unk = crate::bytes::read_f64_le(&body, off + 8)?;
                     let energy = crate::bytes::read_f64_le(&body, off + 16)?;
-                    let ul1 = crate::bytes::read_u32_le(&body, off + 24)?;
-                    let ul2 = crate::bytes::read_u32_le(&body, off + 28)?;
                     if mz.is_finite() && mz >= 0.0 {
                         rxs.push(Reaction {
                             precursor_mz: mz,
-                            unknown_double: unk,
                             energy,
-                            unknown_long1: ul1,
-                            unknown_long2: ul2,
                         });
                     }
                 }
@@ -333,19 +458,13 @@ impl ScanEvent {
                         break;
                     }
                     let mz = crate::bytes::read_f64_le(&body, off)?;
-                    let unk = crate::bytes::read_f64_le(&body, off + 8)?;
                     let energy = crate::bytes::read_f64_le(&body, off + 16)?;
-                    let ul1 = crate::bytes::read_u32_le(&body, off + 24)?;
-                    let ul2 = crate::bytes::read_u32_le(&body, off + 28)?;
                     // Accept only reactions with plausible m/z values (0 is valid for
                     // MS1 triggers; accept non-negative finite values).
                     if mz.is_finite() && mz >= 0.0 {
                         rxs.push(Reaction {
                             precursor_mz: mz,
-                            unknown_double: unk,
                             energy,
-                            unknown_long1: ul1,
-                            unknown_long2: ul2,
                         });
                     }
                 }
@@ -367,10 +486,7 @@ impl ScanEvent {
             if mz.is_finite() && mz > 0.0 && mz < 50_000.0 {
                 reactions.push(Reaction {
                     precursor_mz: mz,
-                    unknown_double: crate::bytes::read_f64_le(&body, 12)?,
                     energy: crate::bytes::read_f64_le(&body, 20)?,
-                    unknown_long1: crate::bytes::read_u32_le(&body, 28)?,
-                    unknown_long2: crate::bytes::read_u32_le(&body, 32)?,
                 });
             }
         }
@@ -414,17 +530,15 @@ impl ScanEvent {
 
 impl Reaction {
     fn read<R: Read + Seek>(r: &mut BinaryReader<R>) -> Result<Self> {
+        // Layout: precursor m/z (f64), an undecoded f64, energy (f64), two
+        // undecoded u32s.
         let precursor_mz = r.read_f64()?;
-        let unknown_double = r.read_f64()?;
+        r.skip(8)?;
         let energy = r.read_f64()?;
-        let unknown_long1 = r.read_u32()?;
-        let unknown_long2 = r.read_u32()?;
+        r.skip(8)?;
         Ok(Self {
             precursor_mz,
-            unknown_double,
             energy,
-            unknown_long1,
-            unknown_long2,
         })
     }
 }

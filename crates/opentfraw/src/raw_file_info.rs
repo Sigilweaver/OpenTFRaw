@@ -4,6 +4,7 @@ use std::io::{Read, Seek};
 
 /// The critical preamble containing addresses and acquisition date.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct RawFileInfoPreamble {
     pub method_file_present: bool,
     pub year: u16,
@@ -96,6 +97,7 @@ fn format_rfc3339(unix_seconds: f64) -> String {
 
 /// RawFileInfo: preamble + label strings + computer name.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct RawFileInfo {
     pub preamble: RawFileInfoPreamble,
     pub label_headings: Vec<String>,

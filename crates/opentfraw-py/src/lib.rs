@@ -13,8 +13,10 @@
 //! python -c "import opentfraw; print(opentfraw.__doc__)"
 //! ```
 
+use std::ffi::CString;
 use std::fs::File;
 use std::io::BufReader;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{
     mpsc::{sync_channel, Receiver},
@@ -26,10 +28,10 @@ use ::opentfraw::generic_data::GenericValue;
 use ::opentfraw::mzml::OpenTfRawSource;
 use ::opentfraw::scan_filter::activation_str;
 use ::opentfraw::ExtraFields;
-use ::opentfraw::{scan_metadata, Polarity, RawFileReader, ScanMetadata, ScanMode};
+use ::opentfraw::{scan_metadata, Polarity, RawFileReader, ScanMetadata};
 use numpy::{PyArray1, ToPyArray};
-use openmassspec_core::{SpectrumRecord, SpectrumSource};
-use pyo3::exceptions::{PyIOError, PyIndexError, PyRuntimeError, PyValueError};
+use openmassspec_core::{RecordErrorPolicy, SpectrumRecord, SpectrumSource, WriteOptions};
+use pyo3::exceptions::{PyIOError, PyIndexError, PyRuntimeError, PyUserWarning, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use pyo3::IntoPyObjectExt;
@@ -117,8 +119,8 @@ fn normalize_record_json(value: &mut serde_json::Value) {
 #[pyclass(module = "opentfraw")]
 struct RecordIter {
     // `None` marks a complete stream, so a closed channel without it means
-    // the decode thread died.
-    receiver: Mutex<Receiver<Option<SpectrumRecord>>>,
+    // the decode thread died. `Err` carries a scan decode failure.
+    receiver: Mutex<Receiver<Option<Result<SpectrumRecord, String>>>>,
     finished: bool,
 }
 
@@ -141,7 +143,11 @@ impl RecordIter {
                 .map_err(|_| "record decode thread ended without a result")
         });
         match message {
-            Ok(Some(rec)) => record_object(py, rec).map(Some),
+            Ok(Some(Ok(rec))) => record_object(py, rec).map(Some),
+            Ok(Some(Err(error))) => {
+                slf.finished = true;
+                Err(PyIOError::new_err(error))
+            }
             Ok(None) => {
                 slf.finished = true;
                 Ok(None)
@@ -173,6 +179,11 @@ fn generic_value_to_py(py: Python<'_>, value: &GenericValue) -> PyResult<Py<PyAn
         GenericValue::Float32(x) => (*x).into_py_any(py)?,
         GenericValue::Float64(x) => (*x).into_py_any(py)?,
         GenericValue::String(s) => s.into_py_any(py)?,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unsupported generic value type: {other:?}"
+            )))
+        }
     })
 }
 
@@ -272,11 +283,17 @@ impl RawFile {
         let mut source = OpenTfRawSource::new(&self.reader, &mut *file, &filename, false);
         source
             .iter_chromatograms()
-            .map(|rec| json_object(py, &rec))
+            .map(|rec| {
+                let rec = rec.map_err(|e| PyIOError::new_err(e.to_string()))?;
+                json_object(py, &rec)
+            })
             .collect()
     }
 
     /// Stream full canonical spectrum records with a two-record buffer.
+    ///
+    /// Raises ``OSError`` at the first scan that cannot be decoded; the
+    /// stream ends there.
     fn iter_records(&self) -> PyResult<RecordIter> {
         let path = self.path.clone();
         let raw = RawFileReader::open_path(&path).map_err(to_py_err)?;
@@ -290,7 +307,12 @@ impl RawFile {
                 .unwrap_or_default();
             let mut source = OpenTfRawSource::new(&raw, &mut file, &filename, false);
             for record in source.iter_spectra() {
-                if sender.send(Some(record)).is_err() {
+                let failed = record.is_err();
+                if sender
+                    .send(Some(record.map_err(|e| e.to_string())))
+                    .is_err()
+                    || failed
+                {
                     return;
                 }
             }
@@ -610,7 +632,7 @@ impl RawFile {
             .reader
             .scan_events
             .get(idx)
-            .map(|e| e.coefficients.clone())
+            .map(|e| e.coefficients().to_vec())
             .unwrap_or_default();
 
         let mut src = self.locked_source()?;
@@ -751,7 +773,7 @@ impl RawFile {
     /// collision_energy_is_nce : bool  (True when collision_energy is a
     ///     normalized collision energy rather than eV; when a scan stores
     ///     both, the NCE value is reported)
-    /// activation : str | None  ("hcd", "cid", "etd", ...)
+    /// activation : str | None  ("hcd", "cid", "etd", "ethcd")
     /// master_scan_number : int | None  (scan that triggered this one)
     /// extra : dict[str, str]  (every other decoded ``opentfraw.*`` value
     ///     the scan carries; see :func:`extra_field_keys`)
@@ -854,13 +876,16 @@ impl RawFile {
     ///
     /// Thermo RAW files embed the acquisition method as a UTF-16LE text or
     /// XML blob in the metadata region. Returns `None` if no suitable text
-    /// block is found or if no method was embedded in the file. This is
+    /// block is found or if no method was embedded in the file, and raises
+    /// ``OSError`` if the file cannot be read. This is
     /// distinct from :attr:`sample_info`'s ``inst_method`` field, which is
     /// just the method file name (e.g. ``"Standard_HCD.meth"``) rather than
     /// its embedded contents.
     fn instrument_method_text(&self) -> PyResult<Option<String>> {
         let mut src = self.locked_source()?;
-        Ok(self.reader.instrument_method_text(&mut *src))
+        self.reader
+            .instrument_method_text(&mut *src)
+            .map_err(to_py_err)
     }
 
     /// Write the entire file out as mzML 1.1.0 to `out_path`.
@@ -870,13 +895,24 @@ impl RawFile {
     /// ``extra_fields`` to write only the listed keys, or
     /// ``exclude_extra_fields`` to write all but the listed keys;
     /// ``extra_fields=[]`` writes none.
-    #[pyo3(signature = (out_path, extra_fields=None, exclude_extra_fields=None))]
+    ///
+    /// By default a scan whose data cannot be decoded stops the conversion
+    /// and raises ``OSError``; the file at ``out_path`` is then incomplete.
+    /// With ``skip_unreadable=True`` such scans are left out, the rest are
+    /// written, and a ``UserWarning`` states how many were left out. The
+    /// ``<spectrumList count>`` attribute still counts the skipped scans.
+    ///
+    /// Returns the number of records left out (always 0 unless
+    /// ``skip_unreadable=True``).
+    #[pyo3(signature = (out_path, extra_fields=None, exclude_extra_fields=None, skip_unreadable=false))]
     fn to_mzml(
         &self,
+        py: Python<'_>,
         out_path: &str,
         extra_fields: Option<Vec<String>>,
         exclude_extra_fields: Option<Vec<String>>,
-    ) -> PyResult<()> {
+        skip_unreadable: bool,
+    ) -> PyResult<usize> {
         let selection = match (extra_fields, exclude_extra_fields) {
             (Some(_), Some(_)) => {
                 return Err(PyValueError::new_err(
@@ -893,19 +929,37 @@ impl RawFile {
             }
             (None, None) => ExtraFields::All,
         };
-        let out_file = File::create(out_path).map_err(|e| PyIOError::new_err(e.to_string()))?;
-        let mut out = std::io::BufWriter::new(out_file);
-        let mut src = self.locked_source()?;
+        let policy = if skip_unreadable {
+            RecordErrorPolicy::Skip
+        } else {
+            RecordErrorPolicy::Fail
+        };
+        let options = WriteOptions::new().with_record_error_policy(policy);
         let raw_filename = self
             .path
             .file_name()
             .and_then(|s| s.to_str())
             .ok_or_else(|| PyValueError::new_err("non-UTF8 file name"))?;
-        let mut source = OpenTfRawSource::new(&self.reader, &mut *src, raw_filename, false)
-            .with_extra_fields(selection);
-        openmassspec_core::write_mzml(&mut source, &mut out)
-            .map_err(|e| PyIOError::new_err(e.to_string()))?;
-        Ok(())
+        let out_file = File::create(out_path).map_err(|e| PyIOError::new_err(e.to_string()))?;
+        let mut out = std::io::BufWriter::new(out_file);
+        let summary = {
+            // Release the source lock before any warning runs Python code.
+            let mut src = self.locked_source()?;
+            let mut source = OpenTfRawSource::new(&self.reader, &mut *src, raw_filename, false)
+                .with_extra_fields(selection);
+            openmassspec_core::write_mzml_with_options(&mut source, &mut out, &options)
+                .map_err(|e| PyIOError::new_err(e.to_string()))?
+        };
+        out.flush().map_err(|e| PyIOError::new_err(e.to_string()))?;
+        let skipped = summary.skipped();
+        if skipped > 0 {
+            let message = CString::new(format!(
+                "to_mzml left out {skipped} unreadable record(s) from {raw_filename}"
+            ))
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            PyErr::warn(py, &py.get_type::<PyUserWarning>(), &message, 1)?;
+        }
+        Ok(skipped)
     }
 }
 
@@ -922,10 +976,7 @@ fn metadata_dict<'py>(
         Some(Polarity::Negative) => "-",
         _ => "",
     };
-    let scan_mode = meta.scan_mode.map(|m| match m {
-        ScanMode::Centroid => "centroid",
-        ScanMode::Profile => "profile",
-    });
+    let scan_mode = meta.scan_mode.map(|m| m.as_str());
     let precursor = meta.precursor.as_ref();
 
     d.set_item("scan_number", meta.scan_number)?;

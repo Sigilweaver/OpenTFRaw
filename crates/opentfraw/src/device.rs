@@ -20,6 +20,7 @@ use crate::Analyzer;
 
 /// Coarse instrument-family classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DeviceFamily {
     /// LCQ Classic/Deca/Advantage/Fleet - 3D ion trap (legacy).
     LcqIonTrap,
@@ -216,28 +217,18 @@ fn contains_word(haystack: &[u8], needle: &[u8]) -> bool {
 /// Detection result carrying the exact model (when found) and the coarse
 /// family.
 #[derive(Debug, Clone)]
-pub struct DetectedInstrument {
+pub(crate) struct DetectedInstrument {
     /// Exact canonical model name, e.g. "Orbitrap Fusion Lumos", if detected.
-    pub model: Option<&'static str>,
+    pub(crate) model: Option<&'static str>,
     /// Coarse device family. Always populated (possibly `Unknown`).
-    pub family: DeviceFamily,
-}
-
-impl DetectedInstrument {
-    /// Unknown / undetected instrument.
-    pub const fn unknown() -> Self {
-        Self {
-            model: None,
-            family: DeviceFamily::Unknown,
-        }
-    }
+    pub(crate) family: DeviceFamily,
 }
 
 impl DeviceFamily {
     /// Scan `metadata_bytes` (a raw prefix of the RAW file) for a canonical
     /// Thermo instrument model encoded as UTF-16LE, then fall back to the
     /// heuristic over `tag2` + `inst_method` + `first_analyzer`.
-    pub fn detect_instrument(
+    pub(crate) fn detect_instrument(
         metadata_bytes: &[u8],
         tag2: &str,
         inst_method: &str,
@@ -264,7 +255,7 @@ impl DeviceFamily {
     /// section 11) against the registry, in the order given. Used when the
     /// pre-scan-data window names no model, e.g. files written without an
     /// embedded instrument method (#59).
-    pub fn detect_from_model_strings(models: &[String]) -> Option<DetectedInstrument> {
+    pub(crate) fn detect_from_model_strings(models: &[String]) -> Option<DetectedInstrument> {
         models.iter().find_map(|model| {
             let hay = utf16le(model);
             MODEL_REGISTRY
@@ -279,7 +270,7 @@ impl DeviceFamily {
 
     /// Keyword heuristic over audit-tag + method path, with analyzer-type
     /// fallback. Retained as a secondary path when no model string is found.
-    pub fn detect_heuristic(
+    pub(crate) fn detect_heuristic(
         tag2: &str,
         inst_method: &str,
         first_analyzer: Option<Analyzer>,
@@ -336,14 +327,6 @@ impl DeviceFamily {
             Some(Analyzer::SQMS) => Self::TripleQuad,
             _ => Self::Unknown,
         }
-    }
-
-    /// Legacy compatibility wrapper (no metadata byte window).
-    #[deprecated(
-        note = "Use `DeviceFamily::detect_instrument` with the metadata byte window for reliable detection"
-    )]
-    pub fn detect(tag2: &str, inst_method: &str, first_analyzer: Option<Analyzer>) -> Self {
-        Self::detect_heuristic(tag2, inst_method, first_analyzer)
     }
 }
 

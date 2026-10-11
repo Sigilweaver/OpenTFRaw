@@ -149,9 +149,9 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "openmassspec-core"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d35a0865b854555b9794b5cb89ad93cceeb93ed070a0e16875e3cfa05c7ac36"
+checksum = "d11eb6376e628cb354ac492308d43de89994a4292bab74b8393bca5aa12fe463"
 dependencies = [
  "flate2",
  "serde",

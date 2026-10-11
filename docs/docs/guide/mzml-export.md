@@ -38,5 +38,17 @@ raw.to_mzml("run.mzML", exclude_extra_fields=["opentfraw.sps_masses"])  # all bu
 
 From Rust, pass `ExtraFields` to `OpenTfRawSource::with_extra_fields`.
 
+If a scan's data cannot be decoded, the export fails with that error
+instead of leaving the scan out. To write the readable scans instead:
+
+```python
+skipped = raw.to_mzml("run.mzML", skip_unreadable=True)
+```
+
+This emits a `UserWarning` with the count and returns it. From Rust, an
+`OpenTfRawSource` written with `openmassspec_core::write_mzml_with_options`
+and `RecordErrorPolicy::Skip` does the same and reports the count in the
+returned `WriteSummary`.
+
 OpenTFRaw's goal is direct, open access to the RAW binary and a
 faithful open-standard mzML rendering of it.
