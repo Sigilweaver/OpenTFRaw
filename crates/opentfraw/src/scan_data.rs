@@ -9,12 +9,14 @@ pub struct Peak {
     pub abundance: f32,
 }
 
-/// A node in the per-scan noise-vs-m/z function carried by FT scans.
+/// One node of the triplet stream carried by FT scans.
 ///
-/// Thermo stores noise and baseline as a piecewise-linear function of m/z
-/// (a few dozen nodes), not per peak. Per-peak noise/baseline are recovered
-/// by interpolating this function at each peak's m/z (see
-/// [`ScanDataPacket::noise_at`]).
+/// The triplet stream follows the centroid peak list and holds `(f32, f32,
+/// f32)` nodes, a few dozen per scan rather than one per peak. The first
+/// value is an m/z. The second and third values are named `noise` and
+/// `baseline`, but that is an unconfirmed reading: no public source
+/// documents what they measure, so treat them as raw stored values.
+/// [`ScanDataPacket::noise_at`] interpolates them at a given m/z.
 #[derive(Debug, Clone, Copy)]
 pub struct NoiseNode {
     pub mz: f32,
@@ -63,8 +65,9 @@ pub struct ScanDataPacket {
     /// carries no FT label data (e.g. ion-trap scans) or its layout did not
     /// match the expected encoding.
     pub resolutions: Vec<f32>,
-    /// Nodes of the scan's noise-vs-m/z function. Empty when absent. Use
-    /// [`Self::noise_at`] to evaluate per-peak noise/baseline.
+    /// Nodes of the scan's triplet stream (see [`NoiseNode`]). Empty when
+    /// absent. Use [`Self::noise_at`] to interpolate the stored `noise` and
+    /// `baseline` values at a peak's m/z.
     pub noise_nodes: Vec<NoiseNode>,
 }
 
@@ -157,7 +160,7 @@ impl ScanDataPacket {
 
     /// Decode the per-peak label streams that follow the centroid peak list:
     /// descriptor (peak index, skipped), unknown (per-peak resolution), and
-    /// triplet (noise-vs-m/z function). Assumes the cursor sits immediately
+    /// triplet (`(m/z, noise, baseline)` nodes). Assumes the cursor sits immediately
     /// after the peak list.
     fn read_labels<R: Read + Seek>(
         r: &mut BinaryReader<R>,
@@ -196,9 +199,10 @@ impl ScanDataPacket {
             Vec::new()
         };
 
-        // Triplet stream: the noise-vs-m/z function as (m/z, noise, baseline)
-        // f32 nodes. Per-peak noise/baseline come from interpolating this at
-        // the peak m/z (see `noise_at`).
+        // Triplet stream: (m/z, noise, baseline) f32 nodes. The meaning of
+        // the second and third values is unconfirmed (see `NoiseNode`).
+        // Per-peak values come from interpolating at the peak m/z (see
+        // `noise_at`).
         let node_count = header.triplet_stream_size / 3;
         r.check_count(node_count as u64, 12)?;
         let mut noise_nodes = Vec::with_capacity(node_count as usize);
@@ -225,9 +229,9 @@ impl ScanDataPacket {
         Ok((resolutions, noise_nodes))
     }
 
-    /// Linearly interpolate `(noise, baseline)` at `mz` from the scan's
-    /// noise-vs-m/z function. Returns `None` when the scan carries no noise
-    /// nodes. Queries outside the node range clamp to the nearest endpoint.
+    /// Linearly interpolate the stored `(noise, baseline)` node values at
+    /// `mz` (see [`NoiseNode`] for what is known about them). Returns `None`
+    /// when the scan carries no triplet nodes. Queries outside the node range clamp to the nearest endpoint.
     pub fn noise_at(&self, mz: f64) -> Option<(f32, f32)> {
         let nodes = &self.noise_nodes;
         if nodes.is_empty() {

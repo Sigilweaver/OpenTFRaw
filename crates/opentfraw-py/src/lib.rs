@@ -446,9 +446,8 @@ impl RawFile {
     /// second/millisecond fields - a different decoded timestamp from
     /// :attr:`created` (which reads the Xcalibur audit tag/FILETIME). The two
     /// are expected to agree since they record the same acquisition event,
-    /// but come from independently-decoded fields; if they disagree on a
-    /// given file, treat `created` as the more established source (it mirrors
-    /// what the vendor reader surfaces as the file's creation time). Like
+    /// but come from independently-decoded fields, so a file may carry
+    /// different values in the two. Like
     /// `created`, this is the instrument's local wall-clock time with no
     /// timezone, so interpreting the value as UTC reproduces that local
     /// wall-clock rather than a true UTC instant.
@@ -470,8 +469,9 @@ impl RawFile {
         )
     }
 
-    /// Return the canonical Thermo scan filter string for `scan_number`, or
-    /// `None` if the scan is out of range.
+    /// Return the scan filter string for `scan_number`, or `None` if the
+    /// scan is out of range. The grammar is documented in the format
+    /// reference (Scan Event, Filter Line Construction).
     fn scan_filter(&self, scan_number: u32) -> Option<String> {
         self.reader.scan_filter(scan_number)
     }
@@ -495,9 +495,9 @@ impl RawFile {
 
     /// Return the per-scan generic ("trailer") parameters for `scan_number` as
     /// a ``{label: value}`` dict, or ``None`` if the scan has no parameter
-    /// record. Mirrors the vendor reader's trailer-extra information: keys are
-    /// the instrument's own labels (e.g. ``"HCD Energy V:"``,
-    /// ``"MS2 Isolation Width:"``, ``"Ion Injection Time (ms):"``) and values
+    /// record. Keys are the instrument's own labels as stored in the file
+    /// (e.g. ``"HCD Energy V:"``, ``"MS2 Isolation Width:"``,
+    /// ``"Ion Injection Time (ms):"``) and values
     /// keep their stored type (str / int / float / bool / None for absent entries). The core already
     /// decodes these; this surfaces them to Python.
     fn scan_parameters<'py>(
@@ -547,7 +547,7 @@ impl RawFile {
     ///
     /// Works on every file type (Orbitrap/ion-trap and TSQ/SRM). Profile
     /// data is skipped for speed; use :meth:`profile` for the raw profile
-    /// signal and :meth:`centroid_labels` for per-peak resolution and noise.
+    /// signal and :meth:`centroid_labels` for per-peak label data.
     fn peaks<'py>(
         &self,
         py: Python<'py>,
@@ -624,6 +624,18 @@ impl RawFile {
     /// - ``signal_to_noise`` : float32
     ///   (``(intensity - baseline) / (noise - baseline)``)
     ///
+    /// ``noise`` and ``baseline`` are the second and third f32 of each
+    /// ``(m/z, noise, baseline)`` node in the scan's triplet stream, which
+    /// follows the centroid peak list. The per-peak value is the linear
+    /// interpolation of those nodes at the peak m/z. The names are an
+    /// unconfirmed reading of the stored values: no public source documents
+    /// what they measure, so treat them as raw stored values.
+    ///
+    /// ``signal_to_noise`` is computed by this library from ``intensity``,
+    /// ``noise`` and ``baseline``. The formula was matched against vendor
+    /// software output and is not taken from a public source. It is ``NaN``
+    /// where ``noise - baseline`` is not positive.
+    ///
     /// ``resolution`` / ``noise`` / ``baseline`` / ``signal_to_noise`` are
     /// ``NaN`` for scans that carry no FT label data (e.g. ion-trap scans).
     /// The profile signal is skipped for speed.
@@ -660,7 +672,7 @@ impl RawFile {
                 Some((nz, bl)) => {
                     noise.push(nz);
                     baseline.push(bl);
-                    // Matches the vendor reader's per-peak S:N definition.
+                    // S:N = (intensity - baseline) / (noise - baseline).
                     let denom = nz - bl;
                     signal_to_noise.push(if denom > 0.0 {
                         (p.abundance - bl) / denom
@@ -722,7 +734,8 @@ impl RawFile {
     /// isolation_width : float | None
     /// collision_energy : float | None
     /// collision_energy_is_nce : bool  (True when collision_energy is a
-    ///     normalized collision energy rather than eV)
+    ///     normalized collision energy rather than eV; when a scan stores
+    ///     both, the NCE value is reported)
     /// activation : str | None  ("hcd", "cid", "etd", ...)
     /// master_scan_number : int | None  (scan that triggered this one)
     /// extra : dict[str, str]  (every other decoded ``opentfraw.*`` value
@@ -797,8 +810,8 @@ impl RawFile {
     /// ----
     /// index : int
     /// is_ms_controller : bool
-    /// controller_type : str  (``"Ms"``, ``"Analog"``, ``"Adc"``, ``"Pda"``,
-    ///     ``"Uv"``, or ``"Other"``)
+    /// controller_type : str  (``"Ms"`` or ``"Other"``; the kind of a non-MS
+    ///     controller is not decoded)
     /// first_scan : int
     /// last_scan : int
     /// start_time : float  (minutes)

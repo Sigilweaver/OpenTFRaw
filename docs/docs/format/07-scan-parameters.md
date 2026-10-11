@@ -74,6 +74,24 @@ Older LTQ Orbitrap instruments prepend one or more empty-label `AsciiString`
 fields (containing `\t`-separated internal state) before the human-readable
 fields above.
 
+### 25.4 Activation Energy
+
+Activation energy is read from these scan-parameter labels:
+
+| Label | Kind | Form |
+|-------|------|------|
+| `"HCD Energy:"` | NCE | String, optional trailing `%` |
+| `"HCD Energy V:"` | NCE | String, optional trailing `%` |
+| `"HCD Energy eV:"` | eV | Numeric |
+
+Both kinds come from labels stored in the file. When a scan carries both an
+NCE label and an eV label, OpenTFRaw reports the NCE value; this priority is a
+project choice. The eV label is used only when no NCE label is present. The
+reader's `activation_energy_is_nce` (Python: `collision_energy_is_nce`) says
+which kind was reported. A value of zero is treated as not set. A stepped
+NCE string such as `"27 30 33"` does not parse as a single number, so it
+yields no NCE value and the eV label is used if present.
+
 ---
 
 ## 26. GenericDataHeader

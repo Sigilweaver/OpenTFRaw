@@ -42,10 +42,24 @@ scan = raw.scan(3)                        # dict: ms_level, RT, charge, filter_s
 for scan in raw.iter_scans():             # equivalent to scan(n) for n in range(first_scan, last_scan+1)
     ...
 raw.scan_table()                          # {key: [one value per scan]} for every scan() key but mz/intensity; no peak reads
-raw.scan_filter(3)                        # canonical Thermo filter string, or None
+raw.scan_filter(3)                        # scan filter string, or None
 raw.profile(3)                            # (mz, intensity) from the raw profile signal
 raw.centroid_labels(3)                    # mz/intensity/resolution/noise/baseline/signal_to_noise
 ```
+
+`centroid_labels()` `noise` and `baseline` are the second and third f32 of
+each `(m/z, noise, baseline)` node in the scan's triplet stream, which
+follows the centroid peak list, linearly interpolated at each peak m/z. The
+names are an unconfirmed reading: no public source documents what these
+values measure, so treat them as raw stored values.
+
+`signal_to_noise` is computed by this library as
+`(intensity - baseline) / (noise - baseline)`, and is `NaN` where
+`noise - baseline` is not positive. The formula was matched against vendor
+software output and is not taken from a public source.
+
+`resolution`, `noise`, `baseline` and `signal_to_noise` are `NaN` for scans
+without FT label data.
 
 `scan()` reads its metadata from the same derivation the mzML writer uses,
 so its precursor, collision-energy and scan-mode values match what
@@ -91,8 +105,8 @@ raw.instrument_method_text()  # best-effort UTF-16LE text/XML acquisition method
 
 `status_log` and `scan_parameters` are both per-scan generic-record
 streams decoded from the file, but distinct ones: `scan_parameters`
-mirrors the vendor reader's trailer-extra values, while `status_log` is
-the instrument-state-over-time log.
+holds the per-scan trailer values, while `status_log` is the
+instrument-state-over-time log.
 
 `controllers()` returns a one-element list for the common single-MS-
 controller case; multi-detector files (UV, PDA, Analog channels

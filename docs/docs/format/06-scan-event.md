@@ -155,14 +155,53 @@ uses the same environment variable.
 
 ### 22.4 Filter Line Construction
 
-A human-readable filter line can be constructed from the preamble:
+OpenTFRaw renders a one-line scan filter from the preamble, the reactions,
+the scan-index m/z range and the scan parameters:
 
 ```
-{ANALYZER} {POLARITY} {SCAN_MODE} {IONIZATION}{DEPENDENT}{WIDEBAND} {SCAN_TYPE} {MS_POWER} [{LOW_MZ}-{HIGH_MZ}]
+{ANALYZER} {POLARITY} {SCAN_MODE} {IONIZATION} [sid={EV}] [d] {SCAN_TYPE} {MS_POWER} [{PRECURSOR}@{METHOD}{ENERGY} ...] [{LOW_MZ}-{HIGH_MZ}]
 ```
 
-Example: `FTMS + p NSI Full ms [350.00-1500.00]`
-Example: `FTMS + c NSI d Full ms2 542.30@hcd35.00 [100.00-1600.00]`
+Examples:
+
+- `FTMS + p NSI Full ms [350.0000-1500.0000]`
+- `FTMS + c NSI d Full ms2 645.8311@hcd28.00 [150.0000-2000.0000]`
+- `ITMS + c NSI d Full ms3 810.5000@cid35.00 265.2700@cid35.00 [100.0000-1000.0000]`
+- `+ c SRM ms2 500.000@cid20.00 [100.450-100.550, 200.450-200.550]` (SRM)
+
+**Token order.** The order follows the `stringify` methods of the Finnigan
+Perl module (Gene Selkov, release 0.0206,
+[metacpan.org/dist/Finnigan](https://metacpan.org/dist/Finnigan)):
+
+| Part | Finnigan source |
+|------|-----------------|
+| analyzer, polarity, scan mode, ionization, `d`, scan type, `ms<n>` | [`lib/Finnigan/ScanEventPreamble.pm`, `stringify`](https://metacpan.org/release/SELKOVJR/Finnigan-0.0206/source/lib/Finnigan/ScanEventPreamble.pm#L558) |
+| preamble, then precursors, then m/z range | [`lib/Finnigan/ScanEvent.pm`, `stringify`](https://metacpan.org/release/SELKOVJR/Finnigan-0.0206/source/lib/Finnigan/ScanEvent.pm#L197) |
+| `{PRECURSOR}@{METHOD}{ENERGY}` | [`lib/Finnigan/Reaction.pm`, `stringify`](https://metacpan.org/release/SELKOVJR/Finnigan-0.0206/source/lib/Finnigan/Reaction.pm#L36) |
+| `[{LOW_MZ}-{HIGH_MZ}]` | [`lib/Finnigan/FractionCollector.pm`, `stringify`](https://metacpan.org/release/SELKOVJR/Finnigan-0.0206/source/lib/Finnigan/FractionCollector.pm#L30) |
+
+**Project conventions.** The following are OpenTFRaw's own conventions, not
+taken from the Finnigan module:
+
+- Numeric precision: precursor m/z and the m/z range use 4 decimals; energies
+  use 2 decimals. SRM filters use 3 decimals for Q1 and the Q3 windows.
+- Activation code 4 (section 31.7) renders as `hcd` on an FTMS analyzer and
+  `cid` on any other analyzer. Code 1 renders as `hcd`.
+- A tribrid FTMS MS2 event with two reactions, of which only one has a
+  non-zero precursor m/z, renders a single `{PRECURSOR}@etd@hcd{ENERGY}`
+  clause.
+- SRM filters (flat-peak files) start with a fixed `+` polarity and have no
+  analyzer or ionization token, because those files have no scan event to read
+  them from. The `@cid{ENERGY}` clause is present only when a collision energy
+  is decoded from the transition record.
+- Multiple precursors are separated by a space.
+- `sid={EV}` follows ionization when a positive source CID energy is known
+  (section 22.3).
+- The final precursor's energy is the scan parameters' activation energy
+  (section 25.4) when present, otherwise the reaction's stored energy.
+- Missing values fall back to `MS` for the analyzer, `+` for polarity and
+  `Full` for the scan type. An unknown activation code omits the `@{METHOD}`
+  clause.
 
 ---
 
@@ -186,9 +225,10 @@ Precursor ion information for MS2+ scans. Stored as an array within ScanEvent.
 {precursor_mz}@{activation_method}{energy}
 ```
 
-Example: `542.30@hcd35.00`, `480.25@cid30.00`
+Example: `542.3000@hcd35.00`, `480.2500@cid30.00`
 
 The activation method name comes from the ScanEventPreamble `activation` field.
+Precision and method tokens follow the conventions in section 22.4.
 
 ---
 

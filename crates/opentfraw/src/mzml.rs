@@ -29,7 +29,8 @@ use crate::RawFileReader;
 /// list. `target_mz` is the isolation-window center; `selected_mz` is the
 /// monoisotopic-resolved precursor (when available). `collision_energy` is
 /// either an absolute eV value or, when `ce_is_nce == true`, a normalized
-/// collision energy.
+/// collision energy. When a scan stores both, the NCE value is reported (see
+/// [`crate::ScanParams::activation_energy`]).
 #[derive(Debug, Clone, Default)]
 pub struct PrecursorInfo {
     pub target_mz: Option<f64>,
@@ -608,19 +609,12 @@ fn convert_analyzer(a: Option<crate::Analyzer>) -> Option<msc::Analyzer> {
     })
 }
 
+/// `Unknown` codes map to `None`: the shared model has no "unknown" method.
 fn convert_activation(a: Option<Activation>) -> Option<msc::Activation> {
-    a.map(|a| match a {
-        Activation::HCD => msc::Activation::HCD,
-        Activation::MPID => msc::Activation::MPID,
-        Activation::ETD => msc::Activation::ETD,
-        Activation::CID => msc::Activation::CID,
-        Activation::ECD => msc::Activation::ECD,
-        Activation::IRMPD => msc::Activation::IRMPD,
-        Activation::PD => msc::Activation::PD,
-        Activation::PQD => msc::Activation::PQD,
-        Activation::UVPD => msc::Activation::UVPD,
-        Activation::SID => msc::Activation::SID,
-        Activation::EThcD => msc::Activation::EThcD,
+    a.and_then(|a| match a {
+        Activation::HCD => Some(msc::Activation::HCD),
+        Activation::CID => Some(msc::Activation::CID),
+        Activation::Unknown(_) => None,
     })
 }
 

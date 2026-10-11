@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `centroid_labels()` `noise` and `baseline`, and the Rust `NoiseNode`,
+  `ScanDataPacket.noise_nodes` and `noise_at()`, are now documented as raw
+  stored values from the scan's triplet stream. Their reading as noise and
+  baseline is unconfirmed; the names are unchanged. `centroid_labels()`
+  `signal_to_noise` is now documented as computed by this library with a
+  formula matched against vendor software output, not taken from a public
+  source.
+
 - mzML and canonical run metadata no longer include the acquisition
   computer name or the original directory, and original file and method
   paths are reduced to file names. Call
@@ -17,8 +25,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - mzML `<software>` now reports the real opentfraw version instead of a
   fixed `0.1.0`.
 - MSRV is now Rust 1.88, matching `openmassspec-core` 2.0.0.
+- **Breaking (Rust):** `Activation` names only the scan-event codes with
+  corpus evidence, `HCD` (1) and `CID` (4). Every other non-zero code
+  decodes as the new `Activation::Unknown(u8)`, which holds the raw byte.
+  The `MPID`, `ETD`, `ECD`, `IRMPD`, `PD`, `PQD`, `UVPD`, `SID` and
+  `EThcD` variants are removed: no public source documents those codes,
+  and every corpus scan that carries one has an implausible scan event
+  (for example EI ionization on a nanospray Orbitrap run). For an unknown
+  code the scan filter omits the `@<method>` clause, mzML has no decoded
+  activation (the writer then emits its default
+  collision-induced dissociation term), and Python `activation` is
+  `"unknown"`. Tribrid EThcD scans, which use codes 1 and 4, still render
+  as `@etd@hcd<energy>`.
+- **Breaking (Rust):** `scan_filter::build_filter` no longer takes a
+  `supplemental_energy` argument; it only fed the removed code-12 EThcD
+  clause.
+- **Breaking:** typed trailer and status-log accessors read only labels
+  that occur in the reference corpus. These label fallbacks are removed,
+  and none of them occurs in any of the 291 corpus files, so no decoded
+  value changes:
+  - `monoisotopic_mz`: `MS2 Isolation M/Z:`, `Isolation Center M/Z:`,
+    `Precursor M/Z:`
+  - `activation_energy` and `activation_energy_is_nce`: `CE:`,
+    `Normalized Collision Energy:`, `HCD Energy (eV):`,
+    `Collision Energy (eV):`. Energy now comes from `HCD Energy:` or
+    `HCD Energy V:` (NCE), else `HCD Energy eV:` (eV).
+  - `isolation_width_mz`: `MSn Isolation Width:`, `Isolation Width (M/Z):`,
+    `MS2 Isolation Width (M/Z):`; `isolation_target_mz`: `Target M/Z:`
+  - `ion_injection_time_ms` (trailer and status log): `Ion Inject Time (ms):`
+  - `possible_charge_states`: `Possible Charge States:`. It now returns the
+    selected charge (`Charge State:`) as a one-element list.
+- **Breaking:** `ScanParams::supplemental_activation_energy`,
+  `StatusLogEntry::spray_voltage`, `StatusLogEntry::capillary_temperature`
+  and the extra fields `opentfraw.supplemental_activation_energy`,
+  `opentfraw.status.spray_voltage` and
+  `opentfraw.status.capillary_temperature` are removed. None of the labels
+  they read occurs in any corpus file, so none of them ever returned a
+  value there. Any such label in another file is still returned by
+  `scan_parameters` / `status_log` under its own name.
+- **Breaking (Rust):** `ControllerType` has only `Ms` and `Other`. The
+  `Analog`, `Adc`, `Pda` and `Uv` variants were never produced: no byte that
+  names a non-MS controller's kind is decoded.
 
 ### Fixed
+
+- SRM scan filters (TSQ files) no longer contain an ionization token. It
+  was a fixed `NSI` for v63 files and `ESI` for v66 files, but these files
+  have no scan event to read the ionization from, and the embedded methods
+  disagree with the fixed value (PXD056439 records an NSI source and
+  PXD041995 an H-ESI source; both got `ESI`). Filters now read, for example,
+  `+ c SRM ms2 356.690@cid15.44 [311.827-312.527, ...]`.
 
 - mzML instrument CV terms: 13 models had a wrong accession or name,
   including Orbitrap Astral (was `MS:1003355`, "bottom-up proteomics") and
@@ -440,10 +496,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mz`/`intensity`/`resolution`/`noise`/`baseline`/`signal_to_noise` arrays.
   (@oskarsari)
 - `RawFile.scan_parameters(scan_number)` (Python): returns the per-scan generic
-  ("trailer") parameters as a `{label: value}` dict (or `None`), mirroring the
-  vendor reader's trailer-extra information. Keys are the instrument's own
-  labels (e.g. `"HCD Energy V:"`, `"MS2 Isolation Width:"`); values keep their
-  stored type. The Rust core already decoded these (`scan_parameters` /
+  ("trailer") parameters as a `{label: value}` dict (or `None`). Keys are the
+  instrument's own labels (e.g. `"HCD Energy V:"`, `"MS2 Isolation Width:"`);
+  values keep their stored type. The Rust core already decoded these (`scan_parameters` /
   `GenericRecord`); this surfaces them to Python. (@oskarsari)
 - `RawFile.created`: file creation (acquisition start) time as a Unix timestamp
   in seconds, read from the Xcalibur audit tag (a Windows FILETIME). The Rust
