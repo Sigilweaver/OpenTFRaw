@@ -630,7 +630,7 @@ impl RawFile {
             .reader
             .scan_events
             .get(idx)
-            .map(|e| e.coefficients.clone())
+            .map(|e| e.coefficients().to_vec())
             .unwrap_or_default();
 
         let mut src = self.locked_source()?;

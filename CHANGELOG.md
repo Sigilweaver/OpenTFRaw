@@ -45,6 +45,11 @@ minor versions.
   `RawFileInfo`, `RawFileInfoPreamble`, `SeqRow`, `InjectionData`,
   `ErrorEntry`, `PrecursorInfo`, `SpectrumRecord`. Fields stay public for
   reading; struct literals no longer compile outside the crate.
+- The scan-event types expose accessor methods instead of public fields,
+  so the scan-event decoder can change how it stores them in a minor
+  release: `ScanEvent::preamble()`, `reactions()`, `fraction_collectors()`,
+  `coefficients()`; `Reaction::precursor_mz()`, `energy()`;
+  `FractionCollector::low_mz()`, `high_mz()`; `ScanEventPreamble::bytes()`.
 - `ScanParams` and `StatusLogEntry` no longer expose their tuple field; use
   the new `ScanParams::new` / `StatusLogEntry::new` and the existing
   `record()`.

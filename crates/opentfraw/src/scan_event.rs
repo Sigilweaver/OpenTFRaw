@@ -3,39 +3,97 @@ use crate::reader::BinaryReader;
 use std::io::{Read, Seek};
 
 /// Precursor reaction info for MS2+ scans (32 bytes).
+///
+/// Read through the accessor methods; the stored layout may change as more
+/// of the scan event is decoded.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct Reaction {
-    pub precursor_mz: f64,
-    pub energy: f64,
+    pub(crate) precursor_mz: f64,
+    pub(crate) energy: f64,
+}
+
+impl Reaction {
+    /// Precursor m/z of this reaction.
+    pub fn precursor_mz(&self) -> f64 {
+        self.precursor_mz
+    }
+
+    /// Activation energy of this reaction as stored in the scan event.
+    pub fn energy(&self) -> f64 {
+        self.energy
+    }
 }
 
 /// M/z acquisition range.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct FractionCollector {
-    pub low_mz: f64,
-    pub high_mz: f64,
+    pub(crate) low_mz: f64,
+    pub(crate) high_mz: f64,
+}
+
+impl FractionCollector {
+    /// Lower bound of the range, in m/z.
+    pub fn low_mz(&self) -> f64 {
+        self.low_mz
+    }
+
+    /// Upper bound of the range, in m/z.
+    pub fn high_mz(&self) -> f64 {
+        self.high_mz
+    }
 }
 
 /// Scan event preamble - byte array encoding scan parameters.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct ScanEventPreamble {
-    pub bytes: Vec<u8>,
+    pub(crate) bytes: Vec<u8>,
 }
 
 /// Complete scan event.
+///
+/// Read through the accessor methods; the stored layout may change as more
+/// of the scan event is decoded.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct ScanEvent {
-    pub preamble: ScanEventPreamble,
-    pub reactions: Vec<Reaction>,
-    pub fraction_collectors: Vec<FractionCollector>,
-    pub coefficients: Vec<f64>,
+    pub(crate) preamble: ScanEventPreamble,
+    pub(crate) reactions: Vec<Reaction>,
+    pub(crate) fraction_collectors: Vec<FractionCollector>,
+    pub(crate) coefficients: Vec<f64>,
+}
+
+impl ScanEvent {
+    /// The fixed-size preamble with the scan's enumerated settings.
+    pub fn preamble(&self) -> &ScanEventPreamble {
+        &self.preamble
+    }
+
+    /// Precursor reactions, first stage first. Empty for MS1 scans.
+    pub fn reactions(&self) -> &[Reaction] {
+        &self.reactions
+    }
+
+    /// Acquisition m/z ranges.
+    pub fn fraction_collectors(&self) -> &[FractionCollector] {
+        &self.fraction_collectors
+    }
+
+    /// Frequency-to-m/z calibration coefficients (empty when the scan has
+    /// none). See [`crate::scan_data::freq_to_mz`].
+    pub fn coefficients(&self) -> &[f64] {
+        &self.coefficients
+    }
 }
 
 impl ScanEventPreamble {
+    /// The raw preamble bytes. Their length depends on the file version.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     pub(crate) fn size_for_version(version: u32) -> usize {
         match version {
             0..=8 => 41,

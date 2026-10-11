@@ -49,7 +49,7 @@ fn decoded_peaks_agree_with_scan_index() {
 
         if let (Some(profile), Some(event)) = (&packet.profile, raw.scan_events.get(i)) {
             if let Some((mz, _)) = profile
-                .to_mz_intensity(&event.coefficients)
+                .to_mz_intensity(event.coefficients())
                 .into_iter()
                 .find(|(mz, _)| !mz.is_finite())
             {

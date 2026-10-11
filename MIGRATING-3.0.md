@@ -94,6 +94,21 @@ let p = ScanParams::new(&rec);
 
 `StatusLogEntry::new` works the same way. `PrecursorInfo` keeps `Default`.
 
+The scan-event types are read through methods instead of fields:
+
+```rust
+// before
+let coeffs = &event.coefficients;
+for rx in &event.reactions { println!("{} {}", rx.precursor_mz, rx.energy); }
+
+// after
+let coeffs = event.coefficients();
+for rx in event.reactions() { println!("{} {}", rx.precursor_mz(), rx.energy()); }
+```
+
+The same applies to `event.preamble()`, `event.fraction_collectors()`,
+`FractionCollector::low_mz()` / `high_mz()` and `ScanEventPreamble::bytes()`.
+
 ## 6. Removed items
 
 | Removed | Use instead |

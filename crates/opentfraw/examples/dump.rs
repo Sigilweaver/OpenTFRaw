@@ -114,7 +114,7 @@ fn main() {
             let n_events = std::cmp::min(3, raw.scan_events.len());
             println!("--- First {} Scan Events ---", n_events);
             for (i, evt) in raw.scan_events[..n_events].iter().enumerate() {
-                let p = &evt.preamble;
+                let p = evt.preamble();
                 println!("  Event {}: analyzer={:?}, polarity={:?}, mode={:?}, ms_power={:?}, dependent={}, ionization={:?}, activation={:?}",
                     i,
                     p.analyzer(),
@@ -125,14 +125,18 @@ fn main() {
                     p.ionization(),
                     p.activation(),
                 );
-                if !evt.reactions.is_empty() {
-                    for rx in &evt.reactions {
-                        println!("    Precursor: {:.4} @ {:.1}", rx.precursor_mz, rx.energy);
+                if !evt.reactions().is_empty() {
+                    for rx in evt.reactions() {
+                        println!(
+                            "    Precursor: {:.4} @ {:.1}",
+                            rx.precursor_mz(),
+                            rx.energy()
+                        );
                     }
                 }
-                println!("    Coefficients: {} params", evt.coefficients.len());
-                for fc in &evt.fraction_collectors {
-                    println!("    Range: [{:.2}-{:.2}]", fc.low_mz, fc.high_mz);
+                println!("    Coefficients: {} params", evt.coefficients().len());
+                for fc in evt.fraction_collectors() {
+                    println!("    Range: [{:.2}-{:.2}]", fc.low_mz(), fc.high_mz());
                 }
             }
             println!();
@@ -274,7 +278,7 @@ fn main() {
                             // Show scan event info
                             let evt = raw.scan_events.get(i as usize);
                             let mode_str = evt
-                                .and_then(|e| e.preamble.scan_mode())
+                                .and_then(|e| e.preamble().scan_mode())
                                 .map(|m| format!("{:?}", m))
                                 .unwrap_or_else(|| "?".into());
 
@@ -311,7 +315,7 @@ fn main() {
                                     prof.first_value, prof.step, prof.chunks.len(), profile_bins);
                                     // Convert and show top signal
                                     let coeffs: Vec<f64> =
-                                        evt.map(|e| e.coefficients.clone()).unwrap_or_default();
+                                        evt.map(|e| e.coefficients().to_vec()).unwrap_or_default();
                                     if !coeffs.is_empty() {
                                         let mz_int = prof.to_mz_intensity(&coeffs);
                                         if let Some(max_pt) = mz_int

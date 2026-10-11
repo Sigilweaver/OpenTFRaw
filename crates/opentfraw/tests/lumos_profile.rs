@@ -12,17 +12,26 @@ fn public_lumos_ms1_profile_calibration_matches_scan_trailers() {
     let mut source = BufReader::new(File::open(&path).unwrap());
     let mut primary_count = 0;
     for (index, event) in raw.scan_events.iter().enumerate() {
-        if event.preamble.ms_power() != Some(opentfraw::MsPower::Ms1) {
+        if event.preamble().ms_power() != Some(opentfraw::MsPower::Ms1) {
             continue;
         }
         let scan = raw.run_header.sample_info.first_scan_number + index as u32;
         let params = raw.scan_params(scan).unwrap();
-        assert_eq!(event.coefficients.len(), 7, "scan {scan}");
-        assert_eq!(Some(event.coefficients[2]), params.conversion_parameter_a());
-        assert_eq!(Some(event.coefficients[3]), params.conversion_parameter_b());
-        assert_eq!(Some(event.coefficients[4]), params.conversion_parameter_c());
+        assert_eq!(event.coefficients().len(), 7, "scan {scan}");
+        assert_eq!(
+            Some(event.coefficients()[2]),
+            params.conversion_parameter_a()
+        );
+        assert_eq!(
+            Some(event.coefficients()[3]),
+            params.conversion_parameter_b()
+        );
+        assert_eq!(
+            Some(event.coefficients()[4]),
+            params.conversion_parameter_c()
+        );
         let profile = raw.read_scan(&mut source, scan).unwrap().profile.unwrap();
-        let points = profile.to_mz_intensity(&event.coefficients);
+        let points = profile.to_mz_intensity(event.coefficients());
         assert!(!points.is_empty(), "scan {scan}");
         for (mz, intensity) in points {
             assert!(
