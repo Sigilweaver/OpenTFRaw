@@ -132,9 +132,6 @@ const EXTRA_FIELDS: &[(&str, Getter)] = &[
     ("opentfraw.number_of_configured_lock_masses", |s| {
         param(s, |p| p.number_of_configured_lock_masses())
     }),
-    ("opentfraw.supplemental_activation_energy", |s| {
-        param(s, |p| p.supplemental_activation_energy())
-    }),
     ("opentfraw.hcd_energy", |s| {
         param(s, |p| p.hcd_energy().map(str::to_owned))
     }),
@@ -195,12 +192,6 @@ const EXTRA_FIELDS: &[(&str, Getter)] = &[
         param(s, |p| p.multi_inject_info().map(str::to_owned))
     }),
     // Instrument status log.
-    ("opentfraw.status.spray_voltage", |s| {
-        status(s, |l| l.spray_voltage())
-    }),
-    ("opentfraw.status.capillary_temperature", |s| {
-        status(s, |l| l.capillary_temperature())
-    }),
     ("opentfraw.status.ion_injection_time_ms", |s| {
         status(s, |l| l.ion_injection_time_ms())
     }),

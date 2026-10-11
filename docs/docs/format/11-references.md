@@ -9,6 +9,9 @@ _References_
 1. **unfinnigan** (Gene Selkov, 2010-2012): Perl/Python reverse-engineering
    project. The most comprehensive prior binary format analysis. Supports
    versions 57, 62, 63, 64, 66. Source: https://github.com/prvst/unfinnigan
+2. **Finnigan** Perl module (Gene Selkov), release 0.0206 on CPAN:
+   https://metacpan.org/dist/Finnigan. Its `stringify` methods are the
+   source of the scan filter token order (section 22.4).
 
 ### 35.2 Key Observations
 
