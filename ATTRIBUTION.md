@@ -30,6 +30,27 @@ Corpus files were downloaded from the [PRIDE Archive](https://www.ebi.ac.uk/prid
     improving support for quantification data." Nucleic Acids Res. 2019;47(D1):D442-D450.
     doi:10.1093/nar/gky1106
 
+## Cross-checks against vendor software
+
+The format layouts in this reader come from public data files and the
+sources listed above. Contributors have also compared some decoded values
+against output from Thermo software they were licensed to run, as a
+cross-check under the suite
+[format provenance policy](https://github.com/Sigilweaver/ops/blob/main/PROVENANCE.md).
+Values cross-checked this way:
+
+- Per-peak centroid label data: resolution, noise, baseline, and the
+  derived signal-to-noise ratio (Orbitrap Exploris 120 and Q Exactive Plus
+  files).
+- Orbitrap Exploris scan events: the m/z conversion coefficients used for
+  profile m/z, and the MS2 precursor m/z and activation energy.
+- Per-scan trailer parameter labels and values, such as the calibrated HCD
+  energy.
+- Scan filter strings, including the two-clause EThcD form on tribrid
+  instruments.
+- Which collision energy is reported when a scan carries both a normalized
+  and an eV value.
+
 ## Rust dependencies
 
 - [roxmltree](https://github.com/RazrFalcon/roxmltree) -- read-only parsing of
