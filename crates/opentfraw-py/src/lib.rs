@@ -26,7 +26,7 @@ use ::opentfraw::generic_data::GenericValue;
 use ::opentfraw::mzml::OpenTfRawSource;
 use ::opentfraw::scan_filter::activation_str;
 use ::opentfraw::ExtraFields;
-use ::opentfraw::{scan_metadata, Polarity, RawFileReader, ScanMetadata, ScanMode};
+use ::opentfraw::{scan_metadata, Polarity, RawFileReader, ScanMetadata};
 use numpy::{PyArray1, ToPyArray};
 use openmassspec_core::{SpectrumRecord, SpectrumSource};
 use pyo3::exceptions::{PyIOError, PyIndexError, PyRuntimeError, PyValueError};
@@ -177,6 +177,11 @@ fn generic_value_to_py(py: Python<'_>, value: &GenericValue) -> PyResult<Py<PyAn
         GenericValue::Float32(x) => (*x).into_py_any(py)?,
         GenericValue::Float64(x) => (*x).into_py_any(py)?,
         GenericValue::String(s) => s.into_py_any(py)?,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unsupported generic value type: {other:?}"
+            )))
+        }
     })
 }
 
@@ -940,10 +945,7 @@ fn metadata_dict<'py>(
         Some(Polarity::Negative) => "-",
         _ => "",
     };
-    let scan_mode = meta.scan_mode.map(|m| match m {
-        ScanMode::Centroid => "centroid",
-        ScanMode::Profile => "profile",
-    });
+    let scan_mode = meta.scan_mode.map(|m| m.as_str());
     let precursor = meta.precursor.as_ref();
 
     d.set_item("scan_number", meta.scan_number)?;

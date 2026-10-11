@@ -99,9 +99,8 @@ fn public_source_cid_method_and_trailer_precedence() {
             ("Scan Event:", GenericValue::Int32(2)),
         ],
     ] {
-        raw.scan_parameters[0] = GenericRecord {
-            values: ids.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(),
-        };
+        raw.scan_parameters[0] =
+            GenericRecord::new(ids.into_iter().map(|(k, v)| (k.to_owned(), v)).collect());
         assert_eq!(raw.source_cid_energy_ev(first), None);
     }
 }

@@ -5,6 +5,7 @@ use std::io::{Cursor, Read, Seek};
 
 /// A field descriptor within a GenericDataHeader.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct GenericDataDescriptor {
     pub field_type: GenericType,
     pub length: u32,
@@ -13,12 +14,14 @@ pub struct GenericDataDescriptor {
 
 /// Self-describing header for GenericRecord streams.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct GenericDataHeader {
     pub fields: Vec<GenericDataDescriptor>,
 }
 
 /// A typed value from a generic record.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum GenericValue {
     Gap,
     Int8(i8),
@@ -35,6 +38,7 @@ pub enum GenericValue {
 
 /// A single record decoded using a GenericDataHeader.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct GenericRecord {
     pub values: Vec<(String, GenericValue)>,
 }
@@ -192,6 +196,11 @@ fn label_is_plausible(s: &str) -> bool {
 }
 
 impl GenericRecord {
+    /// A record holding `values`, as `(label, value)` pairs in field order.
+    pub fn new(values: Vec<(String, GenericValue)>) -> Self {
+        Self { values }
+    }
+
     pub(crate) fn read<R: Read + Seek>(
         r: &mut BinaryReader<R>,
         header: &GenericDataHeader,

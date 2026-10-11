@@ -4,6 +4,7 @@ use std::io::{Read, Seek, SeekFrom};
 
 /// A single centroid peak (m/z + abundance).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Peak {
     pub mz: f64,
     pub abundance: f32,
@@ -18,6 +19,7 @@ pub struct Peak {
 /// documents what they measure, so treat them as raw stored values.
 /// [`ScanDataPacket::noise_at`] interpolates them at a given m/z.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct NoiseNode {
     pub mz: f32,
     pub noise: f32,
@@ -26,6 +28,7 @@ pub struct NoiseNode {
 
 /// A contiguous chunk of profile signal data.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct ProfileChunk {
     pub first_bin: u32,
     pub signal: Vec<f32>,
@@ -34,6 +37,7 @@ pub struct ProfileChunk {
 
 /// Profile spectrum data.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Profile {
     pub first_value: f64,
     pub step: f64,
@@ -44,6 +48,7 @@ pub struct Profile {
 
 /// The header of a scan data packet (40 bytes).
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct PacketHeader {
     pub profile_size: u32,
     pub peak_list_size: u32,
@@ -57,6 +62,7 @@ pub struct PacketHeader {
 
 /// A complete scan data packet.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct ScanDataPacket {
     pub header: PacketHeader,
     pub profile: Option<Profile>,
@@ -394,7 +400,7 @@ pub fn freq_to_mz(freq: f64, coefficients: &[f64]) -> f64 {
 /// end of each record, followed by `peak_count` flag bytes (1 byte per peak).
 ///
 /// `peak_count` is typically `data_size - 1`.
-pub fn read_flat_peaks<R: Read + Seek>(
+pub(crate) fn read_flat_peaks<R: Read + Seek>(
     source: &mut R,
     data_addr: u64,
     cum_end: u64,
@@ -464,7 +470,7 @@ pub fn read_flat_peaks<R: Read + Seek>(
 /// - bytes 4-31: other header fields (skipped)
 /// - bytes 32..32+n_peaks*8: m/z window table, one (lo_mz: f32, hi_mz: f32) pair per peak
 /// - bytes 32+n_peaks*8..: peak data, one (channel_idx: u32, mz: f32, intensity: f32) per peak
-pub fn read_scan_srm_v66<R: Read + Seek>(
+pub(crate) fn read_scan_srm_v66<R: Read + Seek>(
     source: &mut R,
     data_addr: u64,
     start_offset: u64,
@@ -505,7 +511,7 @@ pub fn read_scan_srm_v66<R: Read + Seek>(
 ///
 /// Returns one `(lo_mz, hi_mz)` pair per active transition channel,
 /// in channel order.
-pub fn read_scan_srm_v66_windows<R: Read + Seek>(
+pub(crate) fn read_scan_srm_v66_windows<R: Read + Seek>(
     source: &mut R,
     data_addr: u64,
     start_offset: u64,
@@ -551,7 +557,7 @@ pub fn read_scan_srm_v66_windows<R: Read + Seek>(
 ///   - [+48] collision energy (eV)     ← returned
 ///
 /// Returns `(Q1, Q3_width, CE_eV)` if a plausible match is found.
-pub fn search_v63_transition(data: &[u8], q3_center_target: f64) -> Option<(f64, f64, f64)> {
+pub(crate) fn search_v63_transition(data: &[u8], q3_center_target: f64) -> Option<(f64, f64, f64)> {
     let end = data.len().saturating_sub(32);
     for j in 8..end {
         if j + 8 > data.len() {

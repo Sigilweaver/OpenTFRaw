@@ -32,6 +32,7 @@ use crate::RawFileReader;
 /// collision energy. When a scan stores both, the NCE value is reported (see
 /// [`crate::ScanParams::activation_energy`]).
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct PrecursorInfo {
     pub target_mz: Option<f64>,
     pub selected_mz: Option<f64>,
@@ -54,6 +55,7 @@ pub struct PrecursorInfo {
 /// want to ingest Thermo data into their own column store should use
 /// `extract_spectrum` directly to avoid the XML-then-parse round trip.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SpectrumRecord {
     pub index: usize,
     pub scan_number: u32,

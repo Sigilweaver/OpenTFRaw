@@ -84,7 +84,8 @@ pub fn activation_str(analyzer: Option<Analyzer>, act: Activation) -> &'static s
 /// For MS2+ scans the function first attempts to build the full precursor chain
 /// from `event.reactions` (populated for both pre-v66 and v66 files). If reactions
 /// are empty, it falls back to the single `precursor_mz` / `activation_energy` pair.
-pub fn build_filter(
+#[cfg(test)]
+pub(crate) fn build_filter(
     event: &ScanEvent,
     index_entry: &ScanIndexEntry,
     precursor_mz: Option<f64>,
@@ -390,10 +391,7 @@ mod tests {
         pre.bytes[24] = 4; // CID
         let rxn = Reaction {
             precursor_mz: 440.254,
-            unknown_double: 1.0,
             energy: 35.0,
-            unknown_long1: 0,
-            unknown_long2: 0,
         };
         let ev = ScanEvent {
             preamble: pre,
@@ -424,17 +422,11 @@ mod tests {
             reactions: vec![
                 Reaction {
                     precursor_mz: 810.50,
-                    unknown_double: 1.0,
                     energy: 35.0,
-                    unknown_long1: 0,
-                    unknown_long2: 0,
                 },
                 Reaction {
                     precursor_mz: 265.27,
-                    unknown_double: 1.0,
                     energy: 35.0,
-                    unknown_long1: 0,
-                    unknown_long2: 0,
                 },
             ],
             fraction_collectors: vec![FractionCollector {

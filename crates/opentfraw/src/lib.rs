@@ -25,7 +25,7 @@ pub mod scan_format;
 pub mod scan_index;
 pub mod seq_row;
 
-pub use device::{DetectedInstrument, DeviceFamily};
+pub use device::DeviceFamily;
 pub use error::{Error, Result};
 pub use extra::ExtraFields;
 pub use mzml::{

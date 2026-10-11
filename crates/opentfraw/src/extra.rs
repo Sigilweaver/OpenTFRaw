@@ -20,6 +20,7 @@ use crate::RawFileReader;
 /// Which `opentfraw.*` extra fields to emit. Keys are the full names returned
 /// by [`extra_field_keys`]; keys not in that list are ignored.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExtraFields {
     /// Every registered field (the default).
     #[default]
@@ -248,10 +249,11 @@ mod tests {
         let cases: [(&str, &[&str]); 2] = [
             (
                 "impl<'a> ScanParams<'a> {",
-                // record: raw passthrough. The rest alias accessors that are
+                // new, record: constructor and raw passthrough. The rest alias accessors that are
                 // wired: orbitrap_resolution, number_of_lock_masses,
                 // lock_mass_correction_ppm.
                 &[
+                    "new",
                     "record",
                     "ft_resolution",
                     "number_of_lm_found",
@@ -260,7 +262,7 @@ mod tests {
             ),
             (
                 "impl<'a> StatusLogEntry<'a> {",
-                &["record", "get", "get_f64", "get_i32", "get_string"],
+                &["new", "record", "get", "get_f64", "get_i32", "get_string"],
             ),
         ];
         for (header, exempt) in cases {

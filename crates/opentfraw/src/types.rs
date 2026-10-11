@@ -3,6 +3,7 @@
 /// Analyzer type from ScanEventPreamble byte 40.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum Analyzer {
     ITMS = 0,
     TQMS = 1,
@@ -15,6 +16,7 @@ pub enum Analyzer {
 /// Polarity from ScanEventPreamble byte 4.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum Polarity {
     Negative = 0,
     Positive = 1,
@@ -23,6 +25,7 @@ pub enum Polarity {
 /// Scan mode from ScanEventPreamble byte 5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum ScanMode {
     Centroid = 0,
     Profile = 1,
@@ -31,6 +34,7 @@ pub enum ScanMode {
 /// MS power (MSn order) from ScanEventPreamble byte 6.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum MsPower {
     Undefined = 0,
     Ms1 = 1,
@@ -46,6 +50,7 @@ pub enum MsPower {
 /// Scan type from ScanEventPreamble byte 7.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum ScanType {
     Full = 0,
     Zoom = 1,
@@ -60,6 +65,7 @@ pub enum ScanType {
 /// Ionization mode from ScanEventPreamble byte 11.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum Ionization {
     EI = 0,
     CI = 1,
@@ -85,6 +91,7 @@ pub enum Ionization {
 /// byte. No public source documents a mapping for those codes, and the
 /// corpus has no MSn scan with a well-formed scan event that uses one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Activation {
     /// Higher-energy collisional dissociation - Q Exactive style (code 1).
     HCD,
@@ -98,6 +105,7 @@ pub enum Activation {
 /// Generic data field type codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
+#[non_exhaustive]
 pub enum GenericType {
     Gap = 0x0,
     Int8 = 0x1,
@@ -170,6 +178,14 @@ impl ScanMode {
         match self {
             Self::Centroid => 'c',
             Self::Profile => 'p',
+        }
+    }
+
+    /// Lowercase name: `"centroid"` or `"profile"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Centroid => "centroid",
+            Self::Profile => "profile",
         }
     }
 }

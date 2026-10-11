@@ -15,6 +15,7 @@
 
 /// The scan-data encoding used by a RAW file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ScanDataFormat {
     /// Self-describing `PacketHeader` records with optional profile + centroid
     /// sections. Used by all ion-trap, Orbitrap, Q-Orbitrap and Tribrid instruments.

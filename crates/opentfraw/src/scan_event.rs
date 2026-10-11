@@ -4,16 +4,15 @@ use std::io::{Read, Seek};
 
 /// Precursor reaction info for MS2+ scans (32 bytes).
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Reaction {
     pub precursor_mz: f64,
-    pub unknown_double: f64,
     pub energy: f64,
-    pub unknown_long1: u32,
-    pub unknown_long2: u32,
 }
 
 /// M/z acquisition range.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct FractionCollector {
     pub low_mz: f64,
     pub high_mz: f64,
@@ -21,12 +20,14 @@ pub struct FractionCollector {
 
 /// Scan event preamble - byte array encoding scan parameters.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct ScanEventPreamble {
     pub bytes: Vec<u8>,
 }
 
 /// Complete scan event.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct ScanEvent {
     pub preamble: ScanEventPreamble,
     pub reactions: Vec<Reaction>,
@@ -301,17 +302,11 @@ impl ScanEvent {
                         break;
                     }
                     let mz = crate::bytes::read_f64_le(&body, off)?;
-                    let unk = crate::bytes::read_f64_le(&body, off + 8)?;
                     let energy = crate::bytes::read_f64_le(&body, off + 16)?;
-                    let ul1 = crate::bytes::read_u32_le(&body, off + 24)?;
-                    let ul2 = crate::bytes::read_u32_le(&body, off + 28)?;
                     if mz.is_finite() && mz >= 0.0 {
                         rxs.push(Reaction {
                             precursor_mz: mz,
-                            unknown_double: unk,
                             energy,
-                            unknown_long1: ul1,
-                            unknown_long2: ul2,
                         });
                     }
                 }
@@ -333,19 +328,13 @@ impl ScanEvent {
                         break;
                     }
                     let mz = crate::bytes::read_f64_le(&body, off)?;
-                    let unk = crate::bytes::read_f64_le(&body, off + 8)?;
                     let energy = crate::bytes::read_f64_le(&body, off + 16)?;
-                    let ul1 = crate::bytes::read_u32_le(&body, off + 24)?;
-                    let ul2 = crate::bytes::read_u32_le(&body, off + 28)?;
                     // Accept only reactions with plausible m/z values (0 is valid for
                     // MS1 triggers; accept non-negative finite values).
                     if mz.is_finite() && mz >= 0.0 {
                         rxs.push(Reaction {
                             precursor_mz: mz,
-                            unknown_double: unk,
                             energy,
-                            unknown_long1: ul1,
-                            unknown_long2: ul2,
                         });
                     }
                 }
@@ -367,10 +356,7 @@ impl ScanEvent {
             if mz.is_finite() && mz > 0.0 && mz < 50_000.0 {
                 reactions.push(Reaction {
                     precursor_mz: mz,
-                    unknown_double: crate::bytes::read_f64_le(&body, 12)?,
                     energy: crate::bytes::read_f64_le(&body, 20)?,
-                    unknown_long1: crate::bytes::read_u32_le(&body, 28)?,
-                    unknown_long2: crate::bytes::read_u32_le(&body, 32)?,
                 });
             }
         }
@@ -414,17 +400,15 @@ impl ScanEvent {
 
 impl Reaction {
     fn read<R: Read + Seek>(r: &mut BinaryReader<R>) -> Result<Self> {
+        // Layout: precursor m/z (f64), an undecoded f64, energy (f64), two
+        // undecoded u32s.
         let precursor_mz = r.read_f64()?;
-        let unknown_double = r.read_f64()?;
+        r.skip(8)?;
         let energy = r.read_f64()?;
-        let unknown_long1 = r.read_u32()?;
-        let unknown_long2 = r.read_u32()?;
+        r.skip(8)?;
         Ok(Self {
             precursor_mz,
-            unknown_double,
             energy,
-            unknown_long1,
-            unknown_long2,
         })
     }
 }

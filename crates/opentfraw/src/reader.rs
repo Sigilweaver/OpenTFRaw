@@ -401,6 +401,7 @@ fn scan_number_to_index(scan_number: u32, first_scan_number: u32) -> Option<usiz
 }
 
 /// A parsed Thermo Fisher RAW file.
+#[non_exhaustive]
 pub struct RawFileReader {
     pub header: FileHeader,
     pub seq_row: SeqRow,
@@ -466,6 +467,7 @@ pub struct RawFileReader {
 /// Inferred controller kind. The reader decodes no controller-type code, so
 /// it only separates the MS controller from every other controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ControllerType {
     /// A controller whose run header has MS scan data.
     Ms,
@@ -488,6 +490,7 @@ impl ControllerType {
 
 /// Minimal metadata about one controller in a multi-controller RAW file.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ControllerInfo {
     /// Zero-based controller index (position in `run_header_addrs`).
     pub index: usize,
@@ -1541,9 +1544,15 @@ fn extract_utf16le_text(buf: &[u8], min_chars: usize) -> Option<String> {
 ///     println!("Charge state:   {:?}", p.charge_state());
 /// }
 /// ```
-pub struct ScanParams<'a>(pub &'a GenericRecord);
+pub struct ScanParams<'a>(&'a GenericRecord);
 
 impl<'a> ScanParams<'a> {
+    /// Wrap a scan-parameter record, such as one from
+    /// [`RawFileReader::scan_parameters`].
+    pub fn new(record: &'a GenericRecord) -> Self {
+        Self(record)
+    }
+
     /// Return the raw `GenericRecord` for direct field access.
     #[inline]
     pub fn record(&self) -> &GenericRecord {
@@ -1859,6 +1868,7 @@ impl<'a> ScanParams<'a> {
 
 /// One instrument status-log record.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct StatusLogRecord {
     /// Time the record was written, in minutes (same scale as scan start
     /// times).
@@ -1872,9 +1882,15 @@ pub struct StatusLogRecord {
 /// The instrument log records instrument-state values (temperatures, voltages,
 /// pressures, etc.) over time; a scan sees the last record written at or
 /// before its start time. The schema varies across instrument models.
-pub struct StatusLogEntry<'a>(pub &'a GenericRecord);
+pub struct StatusLogEntry<'a>(&'a GenericRecord);
 
 impl<'a> StatusLogEntry<'a> {
+    /// Wrap a status-log record, such as one from
+    /// [`RawFileReader::inst_log_record`].
+    pub fn new(record: &'a GenericRecord) -> Self {
+        Self(record)
+    }
+
     /// Return the raw record for direct field access.
     #[inline]
     pub fn record(&self) -> &GenericRecord {

@@ -5,6 +5,7 @@ use std::io::{Read, Seek};
 
 /// The 1356-byte file header at offset 0x0000.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct FileHeader {
     pub magic: u16,
     pub signature: String,

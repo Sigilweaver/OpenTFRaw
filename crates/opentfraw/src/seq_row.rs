@@ -4,6 +4,7 @@ use std::io::{Read, Seek};
 
 /// Injection data sub-structure within SeqRow (64 bytes).
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct InjectionData {
     pub row_number: u32,
     pub vial: String,
@@ -16,6 +17,7 @@ pub struct InjectionData {
 
 /// Sequence table row.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct SeqRow {
     pub injection: InjectionData,
     pub id: String,

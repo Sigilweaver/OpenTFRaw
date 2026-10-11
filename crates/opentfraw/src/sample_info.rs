@@ -4,6 +4,7 @@ use std::io::{Read, Seek};
 
 /// Summary information about the acquisition, embedded in RunHeader.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct SampleInfo {
     pub first_scan_number: u32,
     pub last_scan_number: u32,
