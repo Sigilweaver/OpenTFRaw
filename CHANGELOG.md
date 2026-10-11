@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+Every public API change since 2.0.0. See `MIGRATING-3.0.md` for how to
+update code. Later 3.x releases add variants, fields and accessors as
+minor versions.
+
+- Requires `openmassspec-core` 3.0.
+- Unreadable scans are errors, not skipped:
+  - `OpenTfRawSource::iter_spectra` yields one `openmassspec_core::Result`
+    per scan; `iter_chromatograms` yields `Result` items.
+  - `extract_spectrum` returns `Result<SpectrumRecord>` (was `Option`); an
+    out-of-range index is the new `Error::ScanIndexOutOfRange`.
+  - `iter_spectra` yields `Result<SpectrumRecord>` and one item per scan.
+  - `write_mzml` and `write_indexed_mzml` return
+    `Result<openmassspec_core::WriteSummary>` (was `Result<()>`) and stop at
+    the first unreadable scan.
+  - `RawFileReader::instrument_method_text` returns
+    `Result<Option<String>>` (was `Option<String>`), and `RawFileReader::open`
+    fails when the embedded method region cannot be read.
+- `Error` is `#[non_exhaustive]` and gains `Core` (an
+  `openmassspec_core::Error`) and `ScanIndexOutOfRange`.
+  `From<opentfraw::Error> for openmassspec_core::Error` is added.
+- `#[non_exhaustive]` on every public enum: `Analyzer`, `Polarity`,
+  `ScanMode`, `MsPower`, `ScanType`, `Ionization`, `Activation`,
+  `GenericType`, `GenericValue`, `DeviceFamily`, `ScanDataFormat`,
+  `ControllerType`, `ExtraFields`, `Error`. Matches outside the crate need a
+  wildcard arm.
+- `#[non_exhaustive]` on every public struct with public fields:
+  `RawFileReader`, `ControllerInfo`, `StatusLogRecord`, `ScanEvent`,
+  `ScanEventPreamble`, `Reaction`, `FractionCollector`, `ScanIndexEntry`,
+  `ScanDataPacket`, `PacketHeader`, `Peak`, `NoiseNode`, `Profile`,
+  `ProfileChunk`, `GenericDataDescriptor`, `GenericDataHeader`,
+  `GenericRecord`, `FileHeader`, `AuditTag`, `SampleInfo`, `RunHeader`,
+  `RawFileInfo`, `RawFileInfoPreamble`, `SeqRow`, `InjectionData`,
+  `ErrorEntry`, `PrecursorInfo`, `SpectrumRecord`. Fields stay public for
+  reading; struct literals no longer compile outside the crate.
+- `ScanParams` and `StatusLogEntry` no longer expose their tuple field; use
+  the new `ScanParams::new` / `StatusLogEntry::new` and the existing
+  `record()`.
+- Removed fields that held undecoded bytes: `AuditTag::unknown_long`,
+  `RunHeader::unk_addr`, `Reaction::unknown_double`,
+  `Reaction::unknown_long1`, `Reaction::unknown_long2`.
+- Removed from the public API (now crate-private): `scan_data::read_flat_peaks`,
+  `scan_data::read_scan_srm_v66`, `scan_data::read_scan_srm_v66_windows`,
+  `scan_data::search_v63_transition`, `scan_filter::build_filter`,
+  `DeviceFamily::detect_instrument`, `DeviceFamily::detect_from_model_strings`,
+  `DeviceFamily::detect_heuristic`, `DetectedInstrument`. The reader methods
+  `read_scan_flat`, `read_scan_srm_v66` and `scan_filter`, and the fields
+  `device_family` and `instrument_model`, cover the same data.
+- Removed the deprecated `DeviceFamily::detect`.
+- Also breaking, described under Changed and Removed below: the `Activation`
+  variants, `scan_filter::build_filter`'s `supplemental_energy` argument,
+  the removed trailer label fallbacks, `ScanParams::supplemental_activation_energy`,
+  the removed `StatusLogEntry` accessors and `opentfraw.status.*` extras,
+  `ControllerType`'s variants, and the `RawFileReader::inst_log` type.
+- Python: `RawFile.iter_records()` and `RawFile.read_chromatograms()` raise
+  `OSError` when a scan or chromatogram cannot be decoded,
+  `RawFile.instrument_method_text()` raises `OSError` when the file cannot be
+  read, and `RawFile.to_mzml()` raises at the first unreadable scan instead
+  of leaving it out.
+
+### Added
+
+- `ScanParams::new`, `StatusLogEntry::new`, `GenericRecord::new`,
+  `ScanMode::as_str`.
+- Separate matched and configured lock-mass counts in Rust accessors, Python
+  extras, canonical spectrum records, and mzML userParams, including status-log
+  variants. Missing matched counts stay absent rather than becoming the
+  configured count. The existing combined accessor and extra key retain their
+  compatibility fallback; `scan_filter()` still leaves the unproven `lock`
+  token unset. (#58)
+- `RawFileReader::source_cid_by_method_event`: declared source CID energy
+  from the embedded method XML, keyed by (segment, event).
+
 ### Changed
 
 - `centroid_labels()` `noise` and `baseline`, and the Rust `NoiseNode`,
@@ -24,7 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values; `RawFileReader` still exposes them directly.
 - mzML `<software>` now reports the real opentfraw version instead of a
   fixed `0.1.0`.
-- MSRV is now Rust 1.88, matching `openmassspec-core` 2.0.0.
+- MSRV is now Rust 1.88, matching `openmassspec-core` 3.0.
 - **Breaking (Rust):** `Activation` names only the scan-event codes with
   corpus evidence, `HCD` (1) and `CID` (4). Every other non-zero code
   decodes as the new `Activation::Unknown(u8)`, which holds the raw byte.
@@ -126,36 +200,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python docstrings for `peaks()` and `iter_scans()`; two broken rustdoc
   links.
 
-### Validation
-
-- New corpus test checks, for every scan of the CI fixture, that the most
-  intense decoded centroid matches the scan-index base peak and that every
-  centroid lies inside the scan window. Also passes on all 152,328 scans of
-  PXD031322 (Fusion Lumos).
-- CI sets `REQUIRE_CORPUS=1`, so corpus tests fail instead of skipping when
-  the fixture is missing, and Rust and pytest share one fixture name.
-
-## [3.0.0] - 2026-10-04
-
-### Changed
-
-- **Breaking (Rust):** `RawFileReader` gains the public
-  `source_cid_by_method_event` map. Code that constructs this reader with a
-  struct literal must initialize the new field; exhaustive destructuring must
-  bind it or use `..`. Readers opened through `open_path` or `open` need no
-  caller changes. Python users keep the existing API.
-
-### Added
-
-- Separate matched and configured lock-mass counts in Rust accessors, Python
-  extras, canonical spectrum records, and mzML userParams, including status-log
-  variants. Missing matched counts stay absent rather than becoming the
-  configured count. The existing combined accessor and extra key retain their
-  compatibility fallback; `scan_filter()` still leaves the unproven `lock`
-  token unset. (#58)
-
-### Fixed
-
 - Orbitrap MS1 profiles in 96-byte event bodies now use the calibration
   coefficients after the acquisition window. This fixes frequency values
   returned as m/z on Fusion Lumos, Eclipse and Orbitrap Elite files; centroid
@@ -172,6 +216,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Validation
 
+- New corpus test checks, for every scan of the CI fixture, that the most
+  intense decoded centroid matches the scan-index base peak and that every
+  centroid lies inside the scan window. Also passes on all 152,328 scans of
+  PXD031322 (Fusion Lumos).
+- CI sets `REQUIRE_CORPUS=1`, so corpus tests fail instead of skipping when
+  the fixture is missing, and Rust and pytest share one fixture name.
 - Verify trailer-free source-CID recovery on all 6,674 scans of a public
   negative-polarity Q Exactive Plus acquisition (GlycoPOST GPST000122).
   The embedded method supplies 70 eV for its MS1 and MS2 events. The original

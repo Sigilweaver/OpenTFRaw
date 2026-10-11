@@ -100,7 +100,7 @@ raw.status_log(3)             # {label: value} status-log record in effect for t
 raw.status_log_error          # why the status log could not be decoded, or None
 raw.error_log()               # [{"time": ..., "message": ...}, ...] in log order
 raw.controllers()             # [{"index", "is_ms_controller", "controller_type", ...}, ...]
-raw.instrument_method_text()  # best-effort UTF-16LE text/XML acquisition method blob, or None
+raw.instrument_method_text()  # best-effort UTF-16LE text/XML acquisition method blob, or None; raises OSError if the file cannot be read
 ```
 
 `status_log` and `scan_parameters` are distinct generic-record streams:

@@ -80,5 +80,7 @@ decoders described in [Scan data](./scan-data). Related read methods:
 ## Error handling
 
 Public functions return `opentfraw::Result<T>`. The error type is
-`opentfraw::Error`, which wraps the failure category (`Io`, `Parse`,
-`UnsupportedVersion`, `BadMagic`, ...) and a message.
+`opentfraw::Error`, a `#[non_exhaustive]` enum of failure categories (`Io`,
+`UnexpectedEof`, `UnsupportedVersion`, `BadMagic`, `Core`, ...); match it
+with a wildcard arm. A scan whose data cannot be decoded is reported as an
+error by every reader, iterator and mzML writer; none of them skip it.
