@@ -929,6 +929,9 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
                 self.raw.raw_file_info.computer_name.clone(),
             );
         }
+        if let Some(e) = self.raw.status_log_error() {
+            extra.insert("opentfraw.status_log_error".into(), e.to_string());
+        }
         if let Some(model) = self.raw.instrument_model {
             if instrument_term(model).is_none() {
                 extra.insert("opentfraw.instrument_model".into(), model.to_string());

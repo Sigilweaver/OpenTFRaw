@@ -249,6 +249,106 @@ impl<R: Read + Seek> BinaryReader<R> {
     }
 }
 
+/// The records on the acquisition's time axis: the longest run of
+/// consecutive records whose times never decrease.
+///
+/// Most files hold one such run. Some hold extra records whose times restart
+/// from zero partway through the log: a block of records written before the
+/// acquisition on an earlier clock (seen on Orbitrap Fusion and Fusion Lumos
+/// files), or a single trailing record with time zero (seen on a TSQ Quantum
+/// file). Those records stay in the log but are not matched to scans.
+fn status_log_time_axis(records: &[StatusLogRecord]) -> std::ops::Range<usize> {
+    let mut best = 0..0;
+    let mut start = 0;
+    for i in 1..=records.len() {
+        if i == records.len() || records[i].time < records[i - 1].time {
+            if i - start > best.len() {
+                best = start..i;
+            }
+            start = i;
+        }
+    }
+    best
+}
+
+/// The last record of `axis` (non-decreasing times) written at or before
+/// `rt` minutes.
+fn status_log_at(axis: &[StatusLogRecord], rt: f64) -> Option<&StatusLogRecord> {
+    // Record times are stored as f32: compare at that precision so a record
+    // written at the scan's own start time counts as at or before it.
+    let rt = rt as f32;
+    let n = axis.partition_point(|rec| rec.time <= rt);
+    n.checked_sub(1).map(|i| &axis[i])
+}
+
+/// Number of PascalStringWin32 fields in the InstID block: two model
+/// strings, serial number, software version and four tags.
+const INST_ID_STRINGS: usize = 8;
+
+/// Decode the instrument status log of the MS controller.
+///
+/// Layout (`docs/docs/format/08-logs.md`): the InstID block directly follows
+/// the RunHeader, the status-log GenericDataHeader directly follows InstID,
+/// and the header ends exactly at the run header's `inst_log_addr`, which is
+/// where the records start. Each record is a Float32 time (minutes) followed
+/// by the header's fields; the records end exactly at `error_log_addr`. Both
+/// boundaries are checked so a layout this decoder does not understand is
+/// reported instead of producing misaligned values.
+fn read_status_log<R: Read + Seek>(
+    r: &mut BinaryReader<R>,
+    run_header_end: u64,
+    inst_log_addr: u64,
+    n_records: u32,
+    error_log_addr: u64,
+) -> std::result::Result<(GenericDataHeader, Vec<StatusLogRecord>), String> {
+    let header = (|| -> Result<Option<GenericDataHeader>> {
+        r.seek_to(run_header_end)?;
+        r.skip(12)?;
+        for _ in 0..INST_ID_STRINGS {
+            r.read_pascal_string()?;
+        }
+        GenericDataHeader::try_read(r)
+    })()
+    .map_err(|e| format!("status-log header after the instrument ID block: {e}"))?
+    .ok_or_else(|| {
+        format!(
+            "no status-log header after the instrument ID block at {:#x}",
+            r.position()
+        )
+    })?;
+    if r.position() != inst_log_addr {
+        return Err(format!(
+            "status-log header ends at {:#x}, but the run header puts the records at {:#x}",
+            r.position(),
+            inst_log_addr
+        ));
+    }
+    let record_size = 4 + header.fixed_record_size() as u64;
+    let records = (|| -> Result<Vec<StatusLogRecord>> {
+        r.check_count(n_records as u64, record_size)?;
+        let mut records = Vec::with_capacity(n_records as usize);
+        for _ in 0..n_records {
+            let time = r.read_f32()?;
+            let record = GenericRecord::read(r, &header)?;
+            records.push(StatusLogRecord { time, record });
+        }
+        Ok(records)
+    })()
+    .map_err(|e| format!("status-log records at {inst_log_addr:#x}: {e}"))?;
+    if r.position() != error_log_addr {
+        return Err(format!(
+            "{n_records} status-log records of {record_size} bytes end at {:#x}, \
+             but the error log starts at {:#x}",
+            r.position(),
+            error_log_addr
+        ));
+    }
+    if let Some(rec) = records.iter().find(|rec| !rec.time.is_finite()) {
+        return Err(format!("status-log time is not finite: {}", rec.time));
+    }
+    Ok((header, records))
+}
+
 /// Model strings from the InstID block that follows the MS controller's
 /// RunHeader (`docs/docs/format/03-raw-file-info.md` section 11), most
 /// specific first: `model[2]` always names the model, while `model[1]` is
@@ -311,9 +411,19 @@ pub struct RawFileReader {
     pub scan_parameters_header: GenericDataHeader,
     pub scan_parameters: Vec<GenericRecord>,
     pub error_log: Vec<ErrorEntry>,
-    // Instrument log uses same structure
+    /// Field layout of the instrument status log.
     pub inst_log_header: GenericDataHeader,
-    pub inst_log: Vec<GenericRecord>,
+    /// Instrument status-log records in file order.
+    pub inst_log: Vec<StatusLogRecord>,
+    /// The records of `inst_log` on the acquisition's time axis (times never
+    /// decrease within it); only these are matched to scans. Records outside
+    /// it belong to another clock, such as a block written before the
+    /// acquisition started.
+    pub inst_log_time_axis: std::ops::Range<usize>,
+    /// Why the status log could not be decoded, or `None` when it was decoded
+    /// (possibly with zero records). When set, `inst_log` is empty and every
+    /// status-log accessor returns `None`.
+    pub status_log_error: Option<String>,
     /// Raw file version from the header.
     pub version: u32,
     /// Number of scans.
@@ -723,24 +833,35 @@ impl RawFileReader {
             (GenericDataHeader { fields: Vec::new() }, Vec::new())
         };
 
-        // 11. Instrument log - GenericData format in v64+
-        let (inst_log_header, inst_log) = if version >= 64 {
-            r.seek_to(run_header.inst_log_addr)?;
-            match GenericDataHeader::try_read(&mut r)? {
-                Some(hdr) => {
-                    let n_inst = run_header.sample_info.inst_log_length;
-                    r.check_count(n_inst as u64, hdr.fixed_record_size().max(1) as u64)?;
-                    let mut log = Vec::with_capacity(n_inst as usize);
-                    for _ in 0..n_inst {
-                        log.push(GenericRecord::read(&mut r, &hdr)?);
-                    }
-                    (hdr, log)
-                }
-                None => (GenericDataHeader { fields: Vec::new() }, Vec::new()),
+        // 11. Instrument status log. A failure does not fail the open, but
+        //     it is recorded in `status_log_error`, never left as an empty
+        //     log that looks valid.
+        let (inst_log_header, inst_log, status_log_error) = if version >= 57 {
+            match read_status_log(
+                &mut r,
+                run_header_end,
+                run_header.inst_log_addr,
+                run_header.sample_info.inst_log_length,
+                run_header.error_log_addr,
+            ) {
+                Ok((hdr, log)) => (hdr, log, None),
+                Err(e) => (
+                    GenericDataHeader { fields: Vec::new() },
+                    Vec::new(),
+                    Some(e),
+                ),
             }
         } else {
-            (GenericDataHeader { fields: Vec::new() }, Vec::new())
+            (
+                GenericDataHeader { fields: Vec::new() },
+                Vec::new(),
+                Some(format!(
+                    "status-log decoding is not supported for file version {version}"
+                )),
+            )
         };
+
+        let inst_log_time_axis = status_log_time_axis(&inst_log);
 
         // Detect flat-peak (TSQ/SRM) format.
         // Reliable indicator: ntrailer == 0 means no scan event trailer was written, which
@@ -912,6 +1033,8 @@ impl RawFileReader {
             error_log,
             inst_log_header,
             inst_log,
+            inst_log_time_axis,
+            status_log_error,
             version,
             num_scans,
             data_addr,
@@ -1143,21 +1266,37 @@ impl RawFileReader {
         self.scan_parameters(scan_number).map(ScanParams)
     }
 
-    /// Return the raw instrument-log record for a given scan number, or
-    /// `None` if the scan is out of range or no instrument log was found.
-    ///
-    /// The instrument log contains per-scan instrument-state values:
-    /// temperatures, voltages, pressures, ion counts, etc.
-    pub fn inst_log_record(&self, scan_number: u32) -> Option<&GenericRecord> {
+    /// Return the status-log record in effect when `scan_number` was
+    /// acquired: the last record on the acquisition's time axis
+    /// (`inst_log_time_axis`) whose time is at or before the scan's
+    /// start time. `None` if the scan is out of range, precedes the first record,
+    /// or the status log was not decoded (see [`Self::status_log_error`]).
+    pub fn status_log_record(&self, scan_number: u32) -> Option<&StatusLogRecord> {
         let first = self.run_header.sample_info.first_scan_number;
         let idx = scan_number.checked_sub(first)? as usize;
-        self.inst_log.get(idx)
+        let rt = self.scan_index.get(idx)?.start_time;
+        let axis = self.inst_log.get(self.inst_log_time_axis.clone())?;
+        status_log_at(axis, rt)
+    }
+
+    /// The values of [`Self::status_log_record`] for `scan_number`.
+    ///
+    /// The instrument status log holds instrument-state values
+    /// (temperatures, voltages, pressures, etc.) written over time, not one
+    /// record per scan.
+    pub fn inst_log_record(&self, scan_number: u32) -> Option<&GenericRecord> {
+        self.status_log_record(scan_number).map(|rec| &rec.record)
+    }
+
+    /// Why the status log could not be decoded, or `None` when it was.
+    pub fn status_log_error(&self) -> Option<&str> {
+        self.status_log_error.as_deref()
     }
 
     /// Return a typed [`StatusLogEntry`] view for the given scan number.
     ///
-    /// This wraps [`Self::inst_log_record`] and provides named, type-safe
-    /// accessors for common instrument-status fields.
+    /// This wraps [`Self::inst_log_record`]; read fields by their
+    /// status-log label.
     pub fn status_log_entry(&self, scan_number: u32) -> Option<StatusLogEntry<'_>> {
         self.inst_log_record(scan_number).map(StatusLogEntry)
     }
@@ -1714,11 +1853,21 @@ impl<'a> ScanParams<'a> {
 
 // -- Status log (instrument log) typed accessor --
 
-/// Typed accessor for a per-scan instrument-status log entry.
+/// One instrument status-log record.
+#[derive(Debug)]
+pub struct StatusLogRecord {
+    /// Time the record was written, in minutes (same scale as scan start
+    /// times).
+    pub time: f32,
+    /// The record's values, labelled by the status-log header.
+    pub record: GenericRecord,
+}
+
+/// The instrument-status log entry in effect for a scan.
 ///
 /// The instrument log records instrument-state values (temperatures, voltages,
-/// pressures, etc.) at the time each scan was acquired. The schema varies
-/// across instrument models.
+/// pressures, etc.) over time; a scan sees the last record written at or
+/// before its start time. The schema varies across instrument models.
 pub struct StatusLogEntry<'a>(pub &'a GenericRecord);
 
 impl<'a> StatusLogEntry<'a> {
@@ -1726,75 +1875,6 @@ impl<'a> StatusLogEntry<'a> {
     #[inline]
     pub fn record(&self) -> &GenericRecord {
         self.0
-    }
-
-    /// Ion injection time in milliseconds (`"Ion Injection Time (ms):"`).
-    pub fn ion_injection_time_ms(&self) -> Option<f64> {
-        self.0.get_f64("Ion Injection Time (ms):")
-    }
-
-    /// Orbitrap / FT resolving power setting.
-    pub fn ft_resolution(&self) -> Option<i32> {
-        self.0
-            .get_i32("Orbitrap Resolution:")
-            .or_else(|| self.0.get_i32("FT Resolution:"))
-    }
-
-    /// FAIMS compensation voltage (V).
-    pub fn faims_cv(&self) -> Option<f64> {
-        self.0
-            .get_f64("FAIMS CV:")
-            .or_else(|| self.0.get_f32("FAIMS CV:").map(f64::from))
-    }
-
-    /// S-Lens RF level (V).
-    pub fn s_lens_rf_level(&self) -> Option<f64> {
-        self.0.get_f64("S-Lens RF Level:")
-    }
-
-    /// Orbitrap / analyzer temperature (°C).
-    pub fn analyzer_temperature(&self) -> Option<f64> {
-        self.0
-            .get_f64("Analyzer Temperature:")
-            .or_else(|| self.0.get_f32("Analyzer Temperature:").map(f64::from))
-    }
-
-    /// Lock mass reference correction (ppm).
-    pub fn lock_mass_correction_ppm(&self) -> Option<f64> {
-        self.0
-            .get_f64("LM Correction (ppm):")
-            .or_else(|| self.0.get_f64("LM m/z-Correction (ppm):"))
-    }
-
-    /// Compatibility count: matched lock masses, falling back to the configured
-    /// count when the matched-count label is absent or has an unsupported type.
-    ///
-    /// The two labels describe different quantities. Prefer
-    /// [`Self::number_of_matched_lock_masses`] and
-    /// [`Self::number_of_configured_lock_masses`] for new code; this accessor
-    /// returns whichever of the two labels is present.
-    pub fn number_of_lock_masses(&self) -> Option<i32> {
-        self.0
-            .get_i32("Number of LM Found:")
-            .or_else(|| self.0.get_i32("Number of Lock Masses:"))
-    }
-
-    /// Number of lock-mass peaks found in this record (`Number of LM Found:`).
-    ///
-    /// Does not fall back to the configured count. Absent, mistyped, or negative
-    /// counts return `None`; zero is preserved. Neither zero nor a positive
-    /// count establishes whether a correction was applied to this scan.
-    pub fn number_of_matched_lock_masses(&self) -> Option<i32> {
-        self.0.get_i32("Number of LM Found:").filter(|&n| n >= 0)
-    }
-
-    /// Number of configured lock masses (`Number of Lock Masses:`).
-    ///
-    /// Does not fall back to the matched count. Absent, mistyped, or negative
-    /// counts return `None`; zero is preserved. A configured count does not
-    /// establish whether any lock masses matched or correction was applied.
-    pub fn number_of_configured_lock_masses(&self) -> Option<i32> {
-        self.0.get_i32("Number of Lock Masses:").filter(|&n| n >= 0)
     }
 
     /// Get any field by name (pass-through to the underlying record).
@@ -1829,6 +1909,146 @@ mod tests {
         bytes.extend(crate::test_util::pascal_string(model2));
         bytes.extend(crate::test_util::pascal_string("SN01234"));
         bytes
+    }
+
+    /// InstID block (12 bytes + 8 strings), status-log header with two
+    /// fields, then `times.len()` records; returns the bytes and the header
+    /// end offset.
+    fn status_log_stream(times: &[f32]) -> (Vec<u8>, u64) {
+        use crate::test_util::pascal_string;
+        let mut b = vec![0u8; 12];
+        for s in ["Model", "Model", "SN1", "1.0", "", "", "", ""] {
+            b.extend(pascal_string(s));
+        }
+        b.extend(2u32.to_le_bytes());
+        for (code, label) in [(0xAu32, "Temp (C):"), (0x8, "Count:")] {
+            b.extend(code.to_le_bytes());
+            b.extend(0u32.to_le_bytes());
+            b.extend(pascal_string(label));
+        }
+        let header_end = b.len() as u64;
+        for (i, t) in times.iter().enumerate() {
+            b.extend(t.to_le_bytes());
+            b.extend((20.0f32 + i as f32).to_le_bytes());
+            b.extend((i as i32).to_le_bytes());
+        }
+        (b, header_end)
+    }
+
+    fn decode(
+        bytes: Vec<u8>,
+        inst_log_addr: u64,
+        n: u32,
+        error_log_addr: u64,
+    ) -> std::result::Result<(GenericDataHeader, Vec<StatusLogRecord>), String> {
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        read_status_log(&mut r, 0, inst_log_addr, n, error_log_addr)
+    }
+
+    #[test]
+    fn status_log_decodes_time_and_fields() {
+        let (bytes, header_end) = status_log_stream(&[0.5, 1.0, 1.5]);
+        let end = bytes.len() as u64;
+        let (header, records) = decode(bytes, header_end, 3, end).unwrap();
+        assert_eq!(header.fields.len(), 2);
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[1].time, 1.0);
+        assert_eq!(records[1].record.get_f32("Temp (C):"), Some(21.0));
+        assert_eq!(records[2].record.get_i32("Count:"), Some(2));
+    }
+
+    #[test]
+    fn status_log_with_no_records_is_valid() {
+        let (bytes, header_end) = status_log_stream(&[]);
+        let (header, records) = decode(bytes, header_end, 0, header_end).unwrap();
+        assert_eq!(header.fields.len(), 2);
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn status_log_header_not_ending_at_record_address_is_an_error() {
+        let (bytes, header_end) = status_log_stream(&[0.5]);
+        let end = bytes.len() as u64;
+        let err = decode(bytes, header_end + 4, 1, end).unwrap_err();
+        assert!(err.contains("status-log header ends at"), "{err}");
+    }
+
+    #[test]
+    fn status_log_records_not_ending_at_error_log_is_an_error() {
+        // The run header claims one record fewer than the stream holds.
+        let (bytes, header_end) = status_log_stream(&[0.5, 1.0]);
+        let end = bytes.len() as u64;
+        let err = decode(bytes, header_end, 1, end).unwrap_err();
+        assert!(err.contains("but the error log starts at"), "{err}");
+    }
+
+    #[test]
+    fn status_log_without_header_is_an_error() {
+        let mut bytes = status_log_stream(&[]).0;
+        bytes.truncate(bytes.len() - 40);
+        bytes.extend([0xFFu8; 64]);
+        let err = decode(bytes, 0, 0, 0).unwrap_err();
+        assert!(err.contains("status-log header"), "{err}");
+    }
+
+    #[test]
+    fn status_log_truncated_records_are_an_error() {
+        let (mut bytes, header_end) = status_log_stream(&[0.5, 1.0]);
+        bytes.truncate(bytes.len() - 2);
+        let err = decode(bytes, header_end, 2, 0).unwrap_err();
+        assert!(err.contains("status-log records"), "{err}");
+    }
+
+    #[test]
+    fn status_log_non_finite_time_is_an_error() {
+        let (bytes, header_end) = status_log_stream(&[0.5, f32::NAN]);
+        let end = bytes.len() as u64;
+        assert!(decode(bytes, header_end, 2, end).is_err());
+    }
+
+    fn records_at(times: &[f32]) -> Vec<StatusLogRecord> {
+        times
+            .iter()
+            .map(|&time| StatusLogRecord {
+                time,
+                record: GenericRecord { values: Vec::new() },
+            })
+            .collect()
+    }
+
+    #[test]
+    fn time_axis_is_whole_log_when_times_never_decrease() {
+        assert_eq!(
+            status_log_time_axis(&records_at(&[0.1, 0.2, 0.2, 0.3])),
+            0..4
+        );
+        assert_eq!(status_log_time_axis(&[]), 0..0);
+    }
+
+    #[test]
+    fn time_axis_skips_block_written_on_an_earlier_clock() {
+        // A pre-acquisition block (60..72) then the acquisition (0..100).
+        let log = records_at(&[60.0, 66.0, 72.0, 0.01, 25.0, 50.0, 75.0, 100.0]);
+        assert_eq!(status_log_time_axis(&log), 3..8);
+    }
+
+    #[test]
+    fn time_axis_skips_trailing_zero_time_record() {
+        let log = records_at(&[0.1, 48.0, 96.0, 0.0]);
+        assert_eq!(status_log_time_axis(&log), 0..3);
+    }
+
+    #[test]
+    fn scan_sees_last_record_at_or_before_its_time() {
+        let log = records_at(&[1.0, 2.0, 3.0]);
+        let at = |rt| status_log_at(&log, rt).map(|r| r.time);
+        assert_eq!(at(0.5), None);
+        assert_eq!(at(1.0), Some(1.0));
+        assert_eq!(at(2.5), Some(2.0));
+        assert_eq!(at(99.0), Some(3.0));
+        // A scan time equal to a record time after f32 rounding matches it.
+        let log = records_at(&[6.602_834_5]);
+        assert!(status_log_at(&log, 6.602_834_5_f64).is_some());
     }
 
     #[test]

@@ -11,7 +11,8 @@ This stream is **self-describing**: a GenericDataHeader defines the field
 layout, followed by one GenericRecord per scan. The GenericDataHeader is NOT
 stored at `scan_params_addr` itself; it is located somewhere between
 `RunHeader.error_log_addr` and `RunHeader.scan_trailer_addr` in the file,
-typically near the instrument log. It is found by scanning forward from
+after the error-log entries (the instrument log ends at `error_log_addr`).
+It is found by scanning forward from
 `error_log_addr` looking for a valid GDH whose `fixed_record_size()` matches
 `(file_size − scan_params_addr) / num_scans`.
 
@@ -33,8 +34,8 @@ any other header at this offset. The file may contain a few trailing bytes
 
 The GDH for the ScanParameters stream is stored in the region bounded by
 `RunHeader.error_log_addr` (inclusive) and `RunHeader.scan_trailer_addr`
-(exclusive). Because the instrument log, error log, and ScanParameters GDH may
-be interleaved in this region, the reader locates the GDH by linear forward
+(exclusive). Because the error log and the ScanParameters GDH share this
+region, the reader locates the GDH by linear forward
 scan:
 
 1. Compute `expected_record_size = (file_size − scan_params_addr) / num_scans`

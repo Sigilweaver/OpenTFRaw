@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 
 use crate::mzml::ScanMetadata;
-use crate::reader::{ScanParams, StatusLogEntry};
+use crate::reader::ScanParams;
 use crate::RawFileReader;
 
 /// Which `opentfraw.*` extra fields to emit. Keys are the full names returned
@@ -49,7 +49,6 @@ struct Scan<'a> {
     meta: &'a ScanMetadata,
     raw: &'a RawFileReader,
     params: Option<ScanParams<'a>>,
-    status: Option<StatusLogEntry<'a>>,
 }
 
 type Getter = fn(&Scan<'_>) -> Option<String>;
@@ -59,13 +58,6 @@ fn param<T: ToString>(
     get: impl Fn(&ScanParams<'_>) -> Option<T>,
 ) -> Option<String> {
     scan.params.as_ref().and_then(get).map(|v| v.to_string())
-}
-
-fn status<T: ToString>(
-    scan: &Scan<'_>,
-    get: impl Fn(&StatusLogEntry<'_>) -> Option<T>,
-) -> Option<String> {
-    scan.status.as_ref().and_then(get).map(|v| v.to_string())
 }
 
 fn sps_masses(p: &ScanParams<'_>) -> Option<String> {
@@ -191,32 +183,6 @@ const EXTRA_FIELDS: &[(&str, Getter)] = &[
     ("opentfraw.multi_inject_info", |s| {
         param(s, |p| p.multi_inject_info().map(str::to_owned))
     }),
-    // Instrument status log.
-    ("opentfraw.status.ion_injection_time_ms", |s| {
-        status(s, |l| l.ion_injection_time_ms())
-    }),
-    ("opentfraw.status.resolution", |s| {
-        status(s, |l| l.ft_resolution())
-    }),
-    ("opentfraw.status.faims_cv", |s| status(s, |l| l.faims_cv())),
-    ("opentfraw.status.s_lens_rf_level", |s| {
-        status(s, |l| l.s_lens_rf_level())
-    }),
-    ("opentfraw.status.analyzer_temperature", |s| {
-        status(s, |l| l.analyzer_temperature())
-    }),
-    ("opentfraw.status.lock_mass_correction_ppm", |s| {
-        status(s, |l| l.lock_mass_correction_ppm())
-    }),
-    ("opentfraw.status.number_of_lock_masses", |s| {
-        status(s, |l| l.number_of_lock_masses())
-    }),
-    ("opentfraw.status.number_of_matched_lock_masses", |s| {
-        status(s, |l| l.number_of_matched_lock_masses())
-    }),
-    ("opentfraw.status.number_of_configured_lock_masses", |s| {
-        status(s, |l| l.number_of_configured_lock_masses())
-    }),
 ];
 
 /// Every registered `opentfraw.*` key, in emission order.
@@ -238,7 +204,6 @@ pub fn scan_extras(
         meta,
         raw,
         params: raw.scan_params(meta.scan_number),
-        status: raw.status_log_entry(meta.scan_number),
     };
     EXTRA_FIELDS
         .iter()

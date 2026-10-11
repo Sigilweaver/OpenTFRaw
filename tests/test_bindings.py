@@ -150,10 +150,13 @@ def test_scan_parameters(raw_file):
 
 
 def test_status_log(raw_file):
-    log = raw_file.status_log(raw_file.first_scan)
-    assert log is None or isinstance(log, dict)
-    if log:
-        assert all(isinstance(k, str) for k in log)
+    # The CI fixture's status log decodes; a scan after the first record sees
+    # the record in effect at its start time.
+    assert raw_file.status_log_error is None
+    log = raw_file.status_log(raw_file.last_scan)
+    assert isinstance(log, dict)
+    assert all(isinstance(k, str) for k in log)
+    assert 270.0 <= log["Capillary Temp (C):"] <= 280.0
 
 
 def test_peaks(raw_file):
