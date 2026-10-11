@@ -35,7 +35,9 @@ All multi-byte values are **little-endian**. Text is encoded as either
 | 66 | ~2015-present | 64-bit | **Current version**, Orbitrap Fusion/Lumos/Eclipse/Exploris/Astral |
 
 Version 66 is produced by all current instruments and is the primary target of
-this specification. Earlier versions are documented where they differ.
+this specification. Earlier versions are documented where they differ. The
+public test corpus holds versions 63, 64 and 66 only; layouts given for the
+other versions are untested.
 
 ---
 

@@ -11,11 +11,52 @@
 > Part of the [OpenMassSpec](https://github.com/Sigilweaver/OpenMassSpec)
 > stack for mass spectrometry raw-file access.
 
-Rust and Python reader for Thermo Fisher `.raw` mass spectrometry files,
-covering format versions 8 through 66 (LCQ Classic through Orbitrap
-Astral and modern TSQ).
+Rust and Python reader for Thermo Fisher `.raw` mass spectrometry files.
+It is tested on format versions 63, 64 and 66, from LTQ ion traps through
+Orbitrap Astral and TSQ Altis (see [Known issues and gaps](#known-issues-and-gaps)
+and [CORPUS.md](CORPUS.md)).
 
 Documentation: [sigilweaver.app/opentfraw/docs](https://sigilweaver.app/opentfraw/docs)
+
+## Known issues and gaps
+
+Measured on the public test corpus (291 files from 56 PRIDE datasets).
+
+- **Scan metadata is wrong on 38 of 291 corpus files (13%).** On these
+  files the scan event is misread: MS level, polarity, analyzer,
+  activation and precursor fields can be wrong, for example MS2 scans
+  reported as negative-polarity MS1 in a positive-mode run. Peak m/z and
+  intensity values are not affected. Affected: 30 of 52 Orbitrap Fusion
+  Lumos files (PXD007683, PXD025230, PXD037285, PXD064117, PXD067311,
+  PXD070648), 4 of 12 Q Exactive HF-X files (PXD021080), 2 of 2 Orbitrap
+  Ascend files (PXD061791), 1 of 18 Orbitrap Eclipse files (PXD054530) and
+  1 LTQ file (PXD039587).
+- **Activation methods:** CID, HCD, ETD and EThcD are identified. ETD and
+  EThcD are read only from format version 66 files (no older ETD file is in
+  the corpus). Other methods (UVPD, ECD, PQD and so on) decode as unknown,
+  and mzML then has no dissociation-method term.
+- **Analyzer is not reported** for Orbitrap Astral MS2 scans and for TSQ
+  triple-quadrupole scans.
+- **SRM data:** polarity is always reported as positive and isolation width
+  as 0.7. Decoding of TSQ Vantage (format version 63) SRM files is
+  unreliable: in PXD020246, some scans contain NaN values or peaks outside
+  the scan's m/z range. 4 of its 35,098 scans have a flat-peak record that
+  matches no known layout; they raise an error, and
+  `to_mzml(..., skip_unreadable=True)` (Python) or the `to_mzml` example's
+  `--skip-unreadable` flag writes the other scans and reports how many
+  were left out.
+- **Profile spectra** with an unrecognised calibration layout have NaN m/z
+  values; mzML reports the count in `opentfraw.unconverted_profile_bins`.
+- **m/z accuracy** follows the instrument's stored calibration. In FTMS
+  MS1 scans of 223 corpus files, background ions with known masses
+  (polysiloxanes, diisooctyl phthalate) are within 0.55 ppm of their
+  theoretical m/z at the median and 4.1 ppm at the 95th percentile.
+- **Tested files:** format versions 63, 64 and 66 only; positive polarity
+  only in the corpus (two negative-mode Q Exactive Plus files back opt-in
+  tests, see CORPUS.md); no GC-Orbitrap, LCQ-family, Orbitrap ID-X, Exactive,
+  TSQ Quantis/Endura/Fortis or single-quadrupole files; no data from
+  non-MS controllers (UV, PDA). Other versions and instruments may open but
+  are untested.
 
 ## Install
 

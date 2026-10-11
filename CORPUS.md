@@ -1,16 +1,25 @@
 # OpenTFRaw Validation Corpus
 
-The test corpus covers every major Thermo RAW format variant the parser
-needs to handle:
+The test corpus holds 291 files from 56 PRIDE datasets, about 204 GB.
+Measured from the file headers:
 
-- All supported format versions (8, 47, 57, 60, 62, 63, 64, 66)
+- Format versions: 66 (242 files), 64 (38) and 63 (11). There is no file
+  of version 8, 47, 57, 60 or 62, so those versions are untested.
 - Both scan-data encodings (PacketHeader and the two Flat variants)
-- Each major instrument family (ion trap, Orbitrap hybrid, Q-Orbitrap,
-  Tribrid, single-stage Orbitrap, Astral, triple quadrupole)
+- 23 instrument models: LTQ, LTQ XL, LTQ Velos, LTQ FT Ultra, LTQ Orbitrap
+  XL, LTQ Orbitrap Velos, Orbitrap Velos Pro, Orbitrap Elite, Q Exactive,
+  Q Exactive Plus, HF, HF-X and UHMR, Orbitrap Fusion, Fusion Lumos,
+  Eclipse and Ascend, Orbitrap Exploris 120, 240 and 480, Orbitrap Astral,
+  TSQ Altis and TSQ Quantum (the TSQ Vantage file).
+- Acquisition modes: DDA, DIA, PRM, SRM, ETD and EThcD; profile and
+  centroid scans; positive polarity only. The MS3 acquisitions (PXD070648)
+  are all in files whose scan events are misread (see the README), so no
+  MS3 scan is decoded correctly yet.
 
-Current size: ~124 GB across 283 files, covering all instrument families
-and acquisition modes.  Multiple files per instrument are included to
-exercise parameter variation across real-world datasets.
+Multiple files per instrument are included to exercise parameter variation
+across real-world datasets. Instruments, versions and modes missing from
+the corpus are listed under "Acquisition modes not yet in corpus" below and
+in the README's known issues.
 
 ## Source: PRIDE Archive
 
@@ -101,23 +110,33 @@ and scan-data encoding path):
 
 | Family                    | Instruments                                                   |
 | ------------------------- | ------------------------------------------------------------- |
-| Ion traps (LCQ/LTQ)       | LCQ Classic, LTQ, LTQ XL, LTQ Velos, LTQ FT                  |
-| LTQ Orbitrap hybrids      | LTQ Orbitrap, XL, XL ETD, Velos, Velos Pro, Elite             |
+| Ion traps (LTQ)           | LTQ, LTQ XL, LTQ Velos, LTQ FT Ultra                          |
+| LTQ Orbitrap hybrids      | LTQ Orbitrap XL, Velos, Velos Pro (ETD), Elite                |
 | Q-Orbitrap                | Q Exactive, Plus, HF, HF-X, UHMR                              |
 | Tribrid Orbitrap          | Fusion, Fusion Lumos, Eclipse, Ascend                         |
 | Single-stage Orbitrap     | Exploris 120, 240, 480, Astral (DIA)                          |
-| Triple quadrupole         | TSQ Vantage, Quantiva, Altis                                  |
+| Triple quadrupole         | TSQ Vantage, Altis                                            |
+
+The table uses the model read from each file header, not the PRIDE label.
+Several `sources.json` labels differ from the header: the six "LCQ Classic"
+files (PXD044152) are Orbitrap Exploris 480, the "TSQ Quantiva" file
+(PXD056439) is TSQ Altis, the "LTQ Orbitrap" ETD entry (PXD006767) holds
+Orbitrap Velos Pro ETD files and Q Exactive Plus HCD files, and the
+"LTQ Orbitrap" files of PXD069348 are LTQ Orbitrap XL. The corpus has no
+LCQ-family file.
 
 **Tier 2 - additional files per instrument covering distinct modes**:
 
 | Entry                            | Mode   | What it exercises                                      |
 | -------------------------------- | ------ | ------------------------------------------------------ |
 | Orbitrap Fusion Lumos (DIA)      | DIA    | Multiple isolation windows per scan cycle              |
-| Orbitrap Fusion Lumos (MS3)      | MS3    | Three-stage fragmentation / XL-MS workflow             |
-| Orbitrap Fusion Lumos (EThcD)    | EThcD  | Supplemental activation on tribrid variable-body scans |
+| Orbitrap Fusion Lumos (MS3)      | MS3    | PXD070648; the MS2-MS3 files have misread scan events, |
+|                                  |        | the two `_a` files are EThcD MS2                       |
+| Orbitrap Fusion Lumos (EThcD)    | EThcD  | PXD064117; its scan events are misread (README)        |
 | Orbitrap Eclipse (EThcD)         | EThcD  | Electron-transfer + supplemental HCD, two-clause filter|
 | Q Exactive Plus (DDA-2)          | DDA    | Second Q Exactive Plus vintage for regression          |
-| Orbitrap Fusion Lumos (UVPD)     | UVPD   | Ultraviolet photodissociation, tests Activation::Uvpd  |
+| Orbitrap Fusion Lumos ("UVPD")   | EThcD  | PXD067311; despite the file names the methods enable  |
+|                                  |        | EThcD, not UVPD; scan events are misread (README)      |
 | Q Exactive HF (DIA)              | DIA    | Fixed-window SWATH-like DIA on Q Exactive              |
 | Orbitrap Exploris 480 (DDA-2)    | DDA    | Second firmware vintage for regression                 |
 | TSQ Altis (SRM-2)                | SRM-2  | Second SRM file from a different dataset               |
@@ -209,7 +228,8 @@ and whole-file decoding still require a complete target fixture.
 | ---- | ----- |
 | Eclipse DIA | DIA on tribrid Orbitrap: needed to confirm whether tribrid instruments store isolation m/z in reaction structure (np>0) as DDA scans do. No confirmed Eclipse DIA PRIDE accession with accessible RAW files identified yet. Fusion Lumos DIA files (PXD031322) carry direct isolation centers at body offset 4; Eclipse DIA remains unverified. |
 | SPS-MS3 (TMT) | Synchronous precursor selection MS3 for isobaric quantification; differs from standard MS3 in the number of simultaneous precursor m/z in the scan event body. |
-| ECD / IRMPD | Both enum variants implemented; no corpus files yet. |
+| UVPD / ECD / IRMPD / PQD | No corpus files. These activations decode as unknown. |
+| ETD in format version 63 or 64 | No corpus file. Byte 120 (the ETD flag) is read only in version 66. |
 
 ## Lock-mass count controls (#58)
 

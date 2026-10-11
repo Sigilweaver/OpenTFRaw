@@ -243,6 +243,12 @@ minor versions.
   the only other activation changes are 132 scans in 4 files with misread
   scan events (131 in PXD064117 and PXD067311, whose methods enable EThcD,
   and 1 in PXD039587), which now read ETD instead of CID.
+- README and CORPUS.md coverage claims match the corpus: format versions
+  63, 64 and 66 only (not 8 through 66), no LCQ-family file (the
+  "LCQ Classic" files of PXD044152 are Orbitrap Exploris 480 by file
+  header, and the "TSQ Quantiva" file is TSQ Altis), and no UVPD, ECD or
+  correctly decoded MS3 data. The README gains a "Known issues and gaps"
+  section.
 - README and docs-site Rust examples buffer scan reads and compile against
   the current `read_scan_peaks` return type.
 - Python docstrings for `peaks()` and `iter_scans()`; two broken rustdoc

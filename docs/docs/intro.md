@@ -17,8 +17,7 @@ Python-native stack for proteomics raw-file access. Sibling readers:
 
 OpenTFRaw is a Rust library that reads Thermo Fisher `.raw`
 mass-spectrometry files - the binary format produced by Thermo
-instruments from the LCQ Classic (mid-1990s) through the Orbitrap
-Astral and modern TSQ triple quadrupoles.
+ion traps, Orbitrap instruments and TSQ triple quadrupoles.
 
 It runs on Linux, macOS, and Windows, with no dependency on the Thermo
 `.NET` runtime or `RawFileReader` library. The format was decoded by
@@ -44,8 +43,12 @@ Optional Python bindings are available via the
 | Device / instrument classification         | best-effort |
 | Full tune-method block                     | planned     |
 
-Supported format versions: 8, 47, 57, 60, 62, 63, 64, 66 (covering LCQ
-through Orbitrap Astral and modern TSQ).
+Tested format versions: 63, 64 and 66, on files from LTQ ion traps
+through Orbitrap Astral and TSQ Altis. The reader also has code paths for
+versions 8, 47, 57, 60 and 62, but the public test corpus has no file of
+those versions, so they are untested. The
+[README](https://github.com/Sigilweaver/OpenTFRaw#known-issues-and-gaps)
+lists known issues and coverage gaps.
 
 ## Next steps
 
