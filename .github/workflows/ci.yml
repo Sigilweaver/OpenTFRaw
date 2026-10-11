@@ -19,6 +19,8 @@
 #   python-tests  - build the opentfraw Python extension (maturin develop)
 #                   and run the pytest suite in tests/ against it, using the
 #                   same PRIDE RAW fixture as validate-mzml.
+#   semver-checks - cargo-semver-checks on opentfraw against its latest
+#                   crates.io release (Linux only).
 
 name: CI
 
@@ -245,3 +247,16 @@ jobs:
       - name: bun run build:cloudflare
         run: bun run build:cloudflare
 
+  # Public API compatibility of the crates.io-published crate against its
+  # latest published version. A breaking change without a matching version
+  # bump fails; a deliberate major bump passes. OS-independent, so Linux only.
+  semver-checks:
+    name: Semver checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: cargo semver-checks
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          package: opentfraw
