@@ -15,7 +15,7 @@
 /// ```
 use std::io::{Read, Seek, Write};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::extra::{scan_extras, ExtraFields};
 use crate::scan_event::ScanEvent;
 use crate::types::{Activation, MsPower, Polarity};
@@ -275,21 +275,27 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
 /// Extract a single spectrum's record from `raw` at scan-index `idx`
 /// (zero-based offset from the first scan).
 ///
-/// Returns `None` if the scan's peak arrays cannot be read (matches the
-/// silent-skip behaviour of [`write_mzml`]). `include_profile` controls
-/// whether profile-mode scans return the raw profile signal or the
-/// centroided peak list, matching [`write_mzml`].
+/// `include_profile` controls whether profile-mode scans return the raw
+/// profile signal or the centroided peak list, matching [`write_mzml`].
+///
+/// # Errors
+///
+/// [`Error::ScanIndexOutOfRange`] when `idx` is not below
+/// `raw.num_scans`, or the decode error when the scan's peak arrays cannot
+/// be read.
+///
+/// [`Error::ScanIndexOutOfRange`]: crate::Error::ScanIndexOutOfRange
 pub fn extract_spectrum<R: Read + Seek>(
     raw: &RawFileReader,
     source: &mut R,
     idx: u32,
     include_profile: bool,
-) -> Option<SpectrumRecord> {
+) -> Result<SpectrumRecord> {
     // `SpectrumRecord` has no field for the unconverted-bin count; the
     // `openmassspec_core` adapter reports it in `extra`.
     let (meta, mz, intensity, effective_scan_mode, _unconverted_mz_bins) =
         extract_parts(raw, source, idx, include_profile)?;
-    Some(SpectrumRecord {
+    Ok(SpectrumRecord {
         index: meta.index,
         scan_number: meta.scan_number,
         ms_level: meta.ms_level,
@@ -329,8 +335,8 @@ fn extract_parts<R: Read + Seek>(
     source: &mut R,
     idx: u32,
     include_profile: bool,
-) -> Option<ScanParts> {
-    let meta = scan_metadata(raw, idx)?;
+) -> Result<ScanParts> {
+    let meta = scan_metadata(raw, idx).ok_or(Error::ScanIndexOutOfRange(idx))?;
     let event = raw.scan_events.get(idx as usize);
     let (mz, intensity, effective_scan_mode, unconverted) = resolve_scan_arrays(
         raw,
@@ -340,31 +346,21 @@ fn extract_parts<R: Read + Seek>(
         event,
         meta.scan_mode,
     )?;
-    Some((meta, mz, intensity, effective_scan_mode, unconverted))
+    Ok((meta, mz, intensity, effective_scan_mode, unconverted))
 }
 
-/// Iterate every scan in `raw` as a [`SpectrumRecord`].
+/// Iterate every scan in `raw` as a [`SpectrumRecord`], in scan order.
 ///
-/// Skipped scans (those for which the peak arrays cannot be decoded) are
-/// dropped silently, matching [`write_mzml`]. The returned iterator borrows
-/// both `raw` and `source` for its lifetime.
+/// Yields one item per scan. A scan whose peak arrays cannot be decoded
+/// yields `Err` with the decode error; iteration continues with the next
+/// scan. The returned iterator borrows both `raw` and `source` for its
+/// lifetime.
 pub fn iter_spectra<'a, R: Read + Seek>(
     raw: &'a RawFileReader,
     source: &'a mut R,
     include_profile: bool,
-) -> impl Iterator<Item = SpectrumRecord> + 'a {
-    let n = raw.num_scans;
-    let mut idx: u32 = 0;
-    std::iter::from_fn(move || {
-        while idx < n {
-            let cur = idx;
-            idx += 1;
-            if let Some(rec) = extract_spectrum(raw, source, cur, include_profile) {
-                return Some(rec);
-            }
-        }
-        None
-    })
+) -> impl Iterator<Item = Result<SpectrumRecord>> + 'a {
+    (0..raw.num_scans).map(move |idx| extract_spectrum(raw, source, idx, include_profile))
 }
 // -- Helpers used by extract_spectrum --
 
@@ -395,7 +391,7 @@ type ScanArrays = (Vec<f64>, Vec<f32>, Option<crate::ScanMode>, usize);
 /// The last element counts profile bins dropped because their m/z is `NaN`
 /// (unknown calibration layout, see `scan_data::freq_to_mz`).
 ///
-/// Returns `None` when the scan cannot be read (caller should skip it).
+/// Returns the decode error when the scan cannot be read.
 fn resolve_scan_arrays<R: Read + Seek>(
     raw: &RawFileReader,
     source: &mut R,
@@ -403,9 +399,9 @@ fn resolve_scan_arrays<R: Read + Seek>(
     include_profile: bool,
     event: Option<&ScanEvent>,
     nominal_scan_mode: Option<crate::ScanMode>,
-) -> Option<ScanArrays> {
+) -> Result<ScanArrays> {
     if include_profile && !raw.flat_peaks {
-        let packet = raw.read_scan(source, scan_number).ok()?;
+        let packet = raw.read_scan(source, scan_number)?;
         if let Some(profile) = packet.profile {
             let coeffs = event.map(|e| e.coefficients.as_slice()).unwrap_or(&[]);
             let pairs = profile.to_mz_intensity(coeffs);
@@ -422,16 +418,16 @@ fn resolve_scan_arrays<R: Read + Seek>(
                 .filter(|(m, _)| *m > 0.0)
                 .map(|(_, i)| *i as f32)
                 .collect();
-            return Some((mz, int, Some(crate::ScanMode::Profile), unconverted));
+            return Ok((mz, int, Some(crate::ScanMode::Profile), unconverted));
         }
         let mz: Vec<f64> = packet.peaks.iter().map(|p| p.mz).collect();
         let int: Vec<f32> = packet.peaks.iter().map(|p| p.abundance).collect();
-        return Some((mz, int, nominal_scan_mode, 0));
+        return Ok((mz, int, nominal_scan_mode, 0));
     }
-    let peaks = raw.read_peaks_only(source, scan_number).ok()?;
+    let peaks = raw.read_peaks_only(source, scan_number)?;
     let mz: Vec<f64> = peaks.iter().map(|p| p.mz).collect();
     let int: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
-    Some((mz, int, nominal_scan_mode, 0))
+    Ok((mz, int, nominal_scan_mode, 0))
 }
 
 // -- Adapter / canonical writer wrappers --
@@ -628,45 +624,41 @@ fn to_msc_record(
     extra: ::std::collections::BTreeMap<String, String>,
 ) -> msc::SpectrumRecord {
     let (meta, mz, intensity, scan_mode, _) = parts;
-    let precursor = meta.precursor.map(|p| msc::PrecursorInfo {
-        target_mz: p.target_mz,
-        selected_mz: p.selected_mz,
-        isolation_width: p.isolation_width,
-        charge: p.charge,
-        intensity: None,
-        collision_energy: p.collision_energy,
-        ce_is_nce: p.ce_is_nce,
-        precursor_native_id: p.master_scan_number.map(native_id_for),
-        activation: convert_activation(p.activation),
-        analyzer: convert_analyzer(p.analyzer),
-        ccs: None,
+    let precursor = meta.precursor.map(|p| {
+        msc::PrecursorInfo::default()
+            .with_target_mz(p.target_mz)
+            .with_selected_mz(p.selected_mz)
+            .with_isolation_width(p.isolation_width)
+            .with_charge(p.charge)
+            .with_collision_energy(p.collision_energy)
+            .with_ce_is_nce(p.ce_is_nce)
+            .with_precursor_native_id(p.master_scan_number.map(native_id_for))
+            .with_activation(convert_activation(p.activation))
+            .with_analyzer(convert_analyzer(p.analyzer))
     });
-    msc::SpectrumRecord {
-        extra,
-        // 0xFFFF is a "no event" sentinel some files store.
-        acquisition_event_id: (meta.scan_event != u16::MAX).then_some(u32::from(meta.scan_event)),
-        index: meta.index,
-        scan_number: meta.scan_number,
-        native_id: native_id_for(meta.scan_number),
-        ms_level: meta.ms_level,
-        polarity: convert_polarity(meta.polarity),
-        scan_mode: convert_scan_mode(scan_mode),
-        analyzer: convert_analyzer(meta.analyzer),
-        filter: meta.filter,
-        retention_time_sec: meta.retention_time_min * 60.0,
-        total_ion_current: Some(meta.total_ion_current),
-        base_peak_mz: Some(meta.base_peak_mz),
-        base_peak_intensity: Some(meta.base_peak_intensity),
-        low_mz: Some(meta.low_mz),
-        high_mz: Some(meta.high_mz),
-        ion_injection_time_ms: meta.ion_injection_time_ms,
-        inv_mobility: None,
-        faims_cv: meta.faims_cv,
-        precursor,
-        mz,
-        intensity,
-        inv_mobility_per_peak: None,
-    }
+    msc::SpectrumRecord::new(
+        meta.index,
+        meta.scan_number,
+        native_id_for(meta.scan_number),
+    )
+    // 0xFFFF is a "no event" sentinel some files store.
+    .with_acquisition_event_id((meta.scan_event != u16::MAX).then_some(u32::from(meta.scan_event)))
+    .with_ms_level(meta.ms_level)
+    .with_polarity(convert_polarity(meta.polarity))
+    .with_scan_mode(convert_scan_mode(scan_mode))
+    .with_analyzer(convert_analyzer(meta.analyzer))
+    .with_filter(meta.filter)
+    .with_retention_time_sec(meta.retention_time_min * 60.0)
+    .with_total_ion_current(meta.total_ion_current)
+    .with_base_peak_mz(meta.base_peak_mz)
+    .with_base_peak_intensity(meta.base_peak_intensity)
+    .with_low_mz(meta.low_mz)
+    .with_high_mz(meta.high_mz)
+    .with_ion_injection_time_ms(meta.ion_injection_time_ms)
+    .with_faims_cv(meta.faims_cv)
+    .with_precursor(precursor)
+    .with_peaks(mz, intensity)
+    .with_extra_map(extra)
 }
 
 // -- Chromatogram records (TIC / BPC / SRM) --
@@ -690,18 +682,15 @@ fn tic_record(tic: &[(f64, f64)]) -> Option<msc::ChromatogramRecord> {
     if tic.is_empty() {
         return None;
     }
-    Some(msc::ChromatogramRecord {
-        index: 0,
-        id: "TIC".to_string(),
-        chromatogram_type: Some(msc::CvTerm::new(
-            "MS:1000235",
-            "total ion current chromatogram",
-        )),
-        precursor_mz: None,
-        product_mz: None,
-        time_sec: tic.iter().map(|&(rt, _)| (rt * 60.0) as f32).collect(),
-        intensity: tic.iter().map(|&(_, i)| i as f32).collect(),
-    })
+    Some(
+        msc::ChromatogramRecord::new(
+            0,
+            "TIC",
+            tic.iter().map(|&(rt, _)| (rt * 60.0) as f32).collect(),
+            tic.iter().map(|&(_, i)| i as f32).collect(),
+        )
+        .with_chromatogram_type(msc::CvTerm::from(msc::cv::TOTAL_ION_CURRENT_CHROMATOGRAM)),
+    )
 }
 
 /// Build the base-peak chromatogram from `(rt_min, base_intensity, base_mz)`
@@ -711,15 +700,15 @@ fn bpc_record(bpc: &[(f64, f64, f64)]) -> Option<msc::ChromatogramRecord> {
     if bpc.is_empty() {
         return None;
     }
-    Some(msc::ChromatogramRecord {
-        index: 0,
-        id: "BPC".to_string(),
-        chromatogram_type: Some(msc::CvTerm::new("MS:1000628", "basepeak chromatogram")),
-        precursor_mz: None,
-        product_mz: None,
-        time_sec: bpc.iter().map(|&(rt, _, _)| (rt * 60.0) as f32).collect(),
-        intensity: bpc.iter().map(|&(_, bpi, _)| bpi as f32).collect(),
-    })
+    Some(
+        msc::ChromatogramRecord::new(
+            0,
+            "BPC",
+            bpc.iter().map(|&(rt, _, _)| (rt * 60.0) as f32).collect(),
+            bpc.iter().map(|&(_, bpi, _)| bpi as f32).collect(),
+        )
+        .with_chromatogram_type(msc::CvTerm::new("MS:1000628", "basepeak chromatogram")),
+    )
 }
 
 /// Group SRM/flat-peak scans into one chromatogram per transition.
@@ -778,18 +767,20 @@ fn srm_chromatograms(
         } else {
             format!("{base_id} event={event}")
         };
-        out.push(msc::ChromatogramRecord {
-            index: 0,
-            id,
-            chromatogram_type: Some(msc::CvTerm::new(
+        out.push(
+            msc::ChromatogramRecord::new(
+                0,
+                id,
+                points.iter().map(|&(t, _)| t).collect(),
+                points.iter().map(|&(_, i)| i).collect(),
+            )
+            .with_chromatogram_type(msc::CvTerm::new(
                 "MS:1000627",
                 "selected reaction monitoring chromatogram",
-            )),
-            precursor_mz: Some(q1),
-            product_mz,
-            time_sec: points.iter().map(|&(t, _)| t).collect(),
-            intensity: points.iter().map(|&(_, i)| i).collect(),
-        });
+            ))
+            .with_precursor_mz(q1)
+            .with_product_mz(product_mz),
+        );
     }
     out
 }
@@ -995,43 +986,34 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
             extra.insert(format!("opentfraw.user_label.{i}.heading"), heading.clone());
             extra.insert(format!("opentfraw.user_label.{i}.value"), value.clone());
         }
-        msc::RunMetadata {
-            extra,
-            source_file_name: self.raw_filename.to_string(),
-            source_file_format: source_file_format_cv(),
-            native_id_format: native_id_format_cv(),
-            instrument: instrument_cv(self.raw),
-            instrument_serial_number: None,
-            software_name: SOFTWARE_NAME.into(),
-            software_version: SOFTWARE_VERSION.into(),
-            acquisition_software_name: None,
-            acquisition_software_version: None,
-            start_timestamp: start_timestamp(self.raw),
-            mobility_array_kind: None,
-            analyzers: run_analyzers(self.raw),
-        }
+        msc::RunMetadata::new(
+            self.raw_filename,
+            source_file_format_cv(),
+            native_id_format_cv(),
+            instrument_cv(self.raw),
+            SOFTWARE_NAME,
+            SOFTWARE_VERSION,
+        )
+        .with_start_timestamp(start_timestamp(self.raw))
+        .with_analyzers(run_analyzers(self.raw))
+        .with_extra_map(extra)
     }
 
-    fn iter_spectra<'s>(&'s mut self) -> Box<dyn Iterator<Item = msc::SpectrumRecord> + 's> {
-        let n = self.raw.num_scans;
+    /// One item per scan, in scan order. A scan whose peak arrays cannot be
+    /// decoded yields `Err` (an [`msc::Error::Vendor`] wrapping this crate's
+    /// [`Error`]).
+    fn iter_spectra<'s>(&'s mut self) -> msc::SpectrumIter<'s> {
         let raw = self.raw;
         let source = &mut *self.source;
         let include_profile = self.include_profile;
         let extra_fields = &self.extra_fields;
-        let mut idx: u32 = 0;
-        Box::new(std::iter::from_fn(move || {
-            while idx < n {
-                let cur = idx;
-                idx += 1;
-                if let Some(parts) = extract_parts(raw, source, cur, include_profile) {
-                    let mut extra = scan_extras(raw, &parts.0, extra_fields);
-                    if parts.4 > 0 {
-                        extra.insert(UNCONVERTED_PROFILE_BINS_KEY.into(), parts.4.to_string());
-                    }
-                    return Some(to_msc_record(parts, extra));
-                }
+        Box::new((0..raw.num_scans).map(move |idx| {
+            let parts = extract_parts(raw, source, idx, include_profile)?;
+            let mut extra = scan_extras(raw, &parts.0, extra_fields);
+            if parts.4 > 0 {
+                extra.insert(UNCONVERTED_PROFILE_BINS_KEY.into(), parts.4.to_string());
             }
-            None
+            Ok(to_msc_record(parts, extra))
         }))
     }
 
@@ -1039,10 +1021,8 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
         Some(self.raw.num_scans as usize)
     }
 
-    fn iter_chromatograms<'s>(
-        &'s mut self,
-    ) -> Box<dyn Iterator<Item = msc::ChromatogramRecord> + 's> {
-        Box::new(build_chromatograms(self.raw).into_iter())
+    fn iter_chromatograms<'s>(&'s mut self) -> msc::ChromatogramIter<'s> {
+        Box::new(build_chromatograms(self.raw).into_iter().map(Ok))
     }
 }
 
@@ -1056,22 +1036,24 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
 /// * `include_profile` - when `true`, profile-mode scans export the raw
 ///   profile signal instead of the centroid peak list.
 ///
-/// All spectra are written; no filtering is applied. Scans for which peak
-/// data cannot be read are skipped silently.
+/// All spectra are written; no filtering is applied. Writing stops at the
+/// first scan whose peak data cannot be decoded and returns that error. To
+/// skip such scans instead, build an [`OpenTfRawSource`] and call
+/// `openmassspec_core::write_mzml_with_options` with
+/// `RecordErrorPolicy::Skip`, then check [`msc::WriteSummary::skipped`].
 pub fn write_mzml<R, W>(
     raw: &RawFileReader,
     source: &mut R,
     out: &mut W,
     raw_filename: &str,
     include_profile: bool,
-) -> Result<()>
+) -> Result<msc::WriteSummary>
 where
     R: Read + Seek,
     W: Write,
 {
     let mut src = OpenTfRawSource::new(raw, source, raw_filename, include_profile);
-    msc::write_mzml(&mut src, out)?;
-    Ok(())
+    Ok(msc::write_mzml(&mut src, out)?)
 }
 
 /// Write the contents of `raw` as an indexed mzML 1.1.0 document.
@@ -1081,20 +1063,21 @@ where
 /// tools such as pyteomics and pymzml without a full file scan. The
 /// `<fileChecksum>` element contains the SHA-1 hash of the file content up
 /// to and including `</indexList>`.
+///
+/// Error handling matches [`write_mzml`].
 pub fn write_indexed_mzml<R, W>(
     raw: &RawFileReader,
     source: &mut R,
     out: &mut W,
     raw_filename: &str,
     include_profile: bool,
-) -> Result<()>
+) -> Result<msc::WriteSummary>
 where
     R: Read + Seek,
     W: Write,
 {
     let mut src = OpenTfRawSource::new(raw, source, raw_filename, include_profile);
-    msc::write_indexed_mzml(&mut src, out)?;
-    Ok(())
+    Ok(msc::write_indexed_mzml(&mut src, out)?)
 }
 
 #[cfg(test)]

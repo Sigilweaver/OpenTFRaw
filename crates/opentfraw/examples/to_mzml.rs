@@ -66,7 +66,7 @@ fn main() {
             write_mzml(&raw, &mut source, &mut out, raw_filename, include_profile)
         };
         match result {
-            Ok(()) => {
+            Ok(summary) => {
                 let mut flags = Vec::new();
                 if indexed {
                     flags.push("indexed");
@@ -81,7 +81,7 @@ fn main() {
                 };
                 eprintln!(
                     "Written {} spectra to {out_path} in {:.1}s{}",
-                    raw.num_scans,
+                    summary.spectra_written,
                     t0.elapsed().as_secs_f64(),
                     suffix
                 );

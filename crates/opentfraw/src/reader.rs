@@ -1047,7 +1047,7 @@ impl RawFileReader {
             srm_ce_by_event,
             source_cid_by_method_event: Default::default(),
         };
-        if let Some(text) = reader.instrument_method_text(&mut source) {
+        if let Some(text) = reader.instrument_method_text(&mut source)? {
             reader.source_cid_by_method_event =
                 crate::instrument_method::source_cid_settings(&text);
         }
@@ -1438,30 +1438,34 @@ impl RawFileReader {
     /// block of valid UTF-16LE text (at least 256 characters long) and returns
     /// it as a `String`.
     ///
-    /// Returns `None` if no suitable text block is found or if the method was
-    /// not embedded (`method_file_present == false`).
+    /// Returns `Ok(None)` if no suitable text block is found or if the method
+    /// was not embedded (`method_file_present == false`).
     ///
     /// Note: This is a best-effort extraction. The result is the raw text
     /// content; callers may wish to trim or parse it further.
-    pub fn instrument_method_text<R: Read + Seek>(&self, source: &mut R) -> Option<String> {
+    ///
+    /// # Errors
+    ///
+    /// An I/O error if the metadata region cannot be read from `source`.
+    pub fn instrument_method_text<R: Read + Seek>(&self, source: &mut R) -> Result<Option<String>> {
         if !self.raw_file_info.preamble.method_file_present {
-            return None;
+            return Ok(None);
         }
         // Read metadata region: from byte 0 up to (but not including) scan data.
         // Cap at 512 KB to avoid reading very large files entirely.
         const MAX_WINDOW: u64 = 512 * 1024;
         let window_len = MAX_WINDOW.min(self.data_addr) as usize;
         if window_len < 4 {
-            return None;
+            return Ok(None);
         }
-        source.seek(std::io::SeekFrom::Start(0)).ok()?;
+        source.seek(std::io::SeekFrom::Start(0))?;
         let mut buf = vec![0u8; window_len];
-        source.read_exact(&mut buf).ok()?;
+        source.read_exact(&mut buf)?;
 
         // Scan for the longest valid UTF-16LE text block (min 256 chars = 512 bytes).
         // Strategy: find aligned 2-byte sequences where every pair decodes to a
         // printable/whitespace Unicode scalar (U+0020..U+FFFD).
-        extract_utf16le_text(&buf, 256)
+        Ok(extract_utf16le_text(&buf, 256))
     }
 }
 

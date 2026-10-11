@@ -12,7 +12,7 @@ fn public_negative_plus_source_cid_method_fallback() {
     assert_eq!(raw.instrument_model, Some("Q Exactive Plus"));
     assert_eq!(raw.num_scans, 6674);
     let mut source = std::fs::File::open(path).unwrap();
-    let method = raw.instrument_method_text(&mut source).unwrap();
+    let method = raw.instrument_method_text(&mut source).unwrap().unwrap();
     assert_eq!(
         method
             .matches("<Fragmentation_Source unit=\"eV\" FullInternalName=\"decimal?\">70</Fragmentation_Source>")

@@ -117,8 +117,8 @@ fn normalize_record_json(value: &mut serde_json::Value) {
 #[pyclass(module = "opentfraw")]
 struct RecordIter {
     // `None` marks a complete stream, so a closed channel without it means
-    // the decode thread died.
-    receiver: Mutex<Receiver<Option<SpectrumRecord>>>,
+    // the decode thread died. `Err` carries a scan decode failure.
+    receiver: Mutex<Receiver<Option<Result<SpectrumRecord, String>>>>,
     finished: bool,
 }
 
@@ -141,7 +141,11 @@ impl RecordIter {
                 .map_err(|_| "record decode thread ended without a result")
         });
         match message {
-            Ok(Some(rec)) => record_object(py, rec).map(Some),
+            Ok(Some(Ok(rec))) => record_object(py, rec).map(Some),
+            Ok(Some(Err(error))) => {
+                slf.finished = true;
+                Err(PyIOError::new_err(error))
+            }
             Ok(None) => {
                 slf.finished = true;
                 Ok(None)
@@ -272,11 +276,17 @@ impl RawFile {
         let mut source = OpenTfRawSource::new(&self.reader, &mut *file, &filename, false);
         source
             .iter_chromatograms()
-            .map(|rec| json_object(py, &rec))
+            .map(|rec| {
+                let rec = rec.map_err(|e| PyIOError::new_err(e.to_string()))?;
+                json_object(py, &rec)
+            })
             .collect()
     }
 
     /// Stream full canonical spectrum records with a two-record buffer.
+    ///
+    /// Raises ``OSError`` at the first scan that cannot be decoded; the
+    /// stream ends there.
     fn iter_records(&self) -> PyResult<RecordIter> {
         let path = self.path.clone();
         let raw = RawFileReader::open_path(&path).map_err(to_py_err)?;
@@ -290,7 +300,12 @@ impl RawFile {
                 .unwrap_or_default();
             let mut source = OpenTfRawSource::new(&raw, &mut file, &filename, false);
             for record in source.iter_spectra() {
-                if sender.send(Some(record)).is_err() {
+                let failed = record.is_err();
+                if sender
+                    .send(Some(record.map_err(|e| e.to_string())))
+                    .is_err()
+                    || failed
+                {
                     return;
                 }
             }
@@ -854,13 +869,16 @@ impl RawFile {
     ///
     /// Thermo RAW files embed the acquisition method as a UTF-16LE text or
     /// XML blob in the metadata region. Returns `None` if no suitable text
-    /// block is found or if no method was embedded in the file. This is
+    /// block is found or if no method was embedded in the file, and raises
+    /// ``OSError`` if the file cannot be read. This is
     /// distinct from :attr:`sample_info`'s ``inst_method`` field, which is
     /// just the method file name (e.g. ``"Standard_HCD.meth"``) rather than
     /// its embedded contents.
     fn instrument_method_text(&self) -> PyResult<Option<String>> {
         let mut src = self.locked_source()?;
-        Ok(self.reader.instrument_method_text(&mut *src))
+        self.reader
+            .instrument_method_text(&mut *src)
+            .map_err(to_py_err)
     }
 
     /// Write the entire file out as mzML 1.1.0 to `out_path`.
