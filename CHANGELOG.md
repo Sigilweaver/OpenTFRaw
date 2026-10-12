@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Per-centroid descriptor words. FT scans store one u32 per centroid after
+  the peak list, which the reader skipped. `ScanDataPacket` gains
+  `descriptors` and Python `centroid_labels()` gains `descriptor` (uint32,
+  aligned with `mz`, 0 for scans without the stream). The word is passed
+  through as stored: bits 0-19 are the peak's position in the peak list,
+  bit 21 is set on the centroid of a lock mass found in the scan, and bits
+  24 and up hold a number that reads as an assigned charge state. What
+  bits 20, 22 and 23 mark is not established. Details are in the format
+  docs, section 16.2.
+
 ## [3.0.0] - 2026-10-11
 
 ### Breaking

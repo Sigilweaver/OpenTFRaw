@@ -50,6 +50,7 @@ Values cross-checked this way:
   instruments.
 - Which collision energy is reported when a scan carries both a normalized
   and an eV value.
+- Per-centroid descriptor words: the lock-mass bit (Q Exactive Plus files).
 
 ## Rust dependencies
 

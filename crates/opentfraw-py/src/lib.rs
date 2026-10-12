@@ -660,6 +660,7 @@ impl RawFile {
     /// - ``baseline`` : float32
     /// - ``signal_to_noise`` : float32
     ///   (``(intensity - baseline) / (noise - baseline)``)
+    /// - ``descriptor`` : uint32
     ///
     /// ``noise`` and ``baseline`` are the second and third f32 of each
     /// ``(m/z, noise, baseline)`` node in the scan's triplet stream, which
@@ -673,9 +674,19 @@ impl RawFile {
     /// software output and is not taken from a public source. It is ``NaN``
     /// where ``noise - baseline`` is not positive.
     ///
+    /// ``descriptor`` is the word stored for each centroid in the stream
+    /// that follows the peak list, unchanged. As far as the files show:
+    /// bits 0-19 are the peak's zero-based position in the peak list (and
+    /// the index of its profile chunk, where a profile is stored); bit 21 is
+    /// set on the centroid of a lock mass found in the scan; bits 24 and up
+    /// hold a number that reads as an assigned charge state, 0 on most
+    /// peaks. Bits 20, 22 and 23 are set on some peaks and what they mark is
+    /// not established. For example, ``(descriptor >> 21) & 1`` selects the
+    /// lock-mass centroids.
+    ///
     /// ``resolution`` / ``noise`` / ``baseline`` / ``signal_to_noise`` are
-    /// ``NaN`` for scans that carry no FT label data (e.g. ion-trap scans).
-    /// The profile signal is skipped for speed.
+    /// ``NaN`` and ``descriptor`` is 0 for scans that carry no FT label data
+    /// (e.g. ion-trap scans). The profile signal is skipped for speed.
     fn centroid_labels<'py>(
         &self,
         py: Python<'py>,
@@ -725,6 +736,14 @@ impl RawFile {
             }
         }
 
+        // Zero where the scan stores no descriptor stream, so the array stays
+        // aligned with the peak list.
+        let descriptor = if pkt.descriptors.len() == n {
+            pkt.descriptors
+        } else {
+            vec![0u32; n]
+        };
+
         let d = PyDict::new(py);
         d.set_item("mz", mz.to_pyarray(py))?;
         d.set_item("intensity", intensity.to_pyarray(py))?;
@@ -732,6 +751,7 @@ impl RawFile {
         d.set_item("noise", noise.to_pyarray(py))?;
         d.set_item("baseline", baseline.to_pyarray(py))?;
         d.set_item("signal_to_noise", signal_to_noise.to_pyarray(py))?;
+        d.set_item("descriptor", descriptor.to_pyarray(py))?;
         Ok(d)
     }
 

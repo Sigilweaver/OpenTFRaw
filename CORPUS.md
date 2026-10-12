@@ -255,3 +255,57 @@ zero-match scan retains the latest matched scan's nonzero correction; their
 MS1 event also contains both matched and zero-match scans. These are count
 and correction controls, not proof of the exact `lock` filter-token meaning.
 No vendor software, SDK, or vendor output was used to validate them.
+
+## Centroid descriptor words
+
+The per-centroid descriptor stream (format docs, section 16.2) was read on
+five public files: the three lock-mass acquisitions above, the GlycoPOST
+GPST000122 acquisition of the source-CID section, and the PXD054004 CI
+fixture.
+
+| File | Instrument | FT scans | Centroids | Profile stored | Scans without the stream |
+| --- | --- | ---: | ---: | --- | ---: |
+| MTBLS5657 | Q Exactive Plus | 138 | 97,664 | yes | 0 |
+| GPST000122 | Q Exactive Plus | 6,674 | 337,989 | yes | 0 |
+| PXD054004 | LTQ FT Ultra | 163 | 255,168 | yes | 894 (ion trap) |
+| PXD071477 | Q Exactive HF-X | 27,832 | 5,939,214 | no | 0 |
+| PXD064947 | Orbitrap Exploris 480 | 51,254 | 20,963,859 | no | 0 |
+
+- Every FT scan stores one word per centroid, and bits 0-19 equal the
+  centroid's position on all 86,061 scans. The three files that store
+  profiles (6,975 scans, 690,821 centroids) have one chunk per centroid:
+  686,535 centroids lie inside the m/z range of the chunk at their
+  position and the other 4,286 within 0.53 of a bin of its first or last
+  point.
+- Bit 21 against the trailer's `Number of LM Found:`. No scan differs:
+
+  | File | Report 1, one centroid flagged | Report 0, none flagged |
+  | --- | ---: | ---: |
+  | MTBLS5657 | 138 | 0 |
+  | GPST000122 | 0 | 6,674 |
+  | PXD071477 | 3,559 | 24,273 |
+  | PXD064947 | 16,033 | 35,221 |
+
+  Each flagged centroid is stored at the float32 nearest a lock mass of
+  its trailer: `Lock Mass #3 (m/z):` on 135 MTBLS5657 scans and
+  `Lock Mass #2 (m/z):` on 3, `Lock Mass #1 (m/z):` on the others. Of the
+  209 and 161 MS1 scans of PXD071477 and PXD064947 that report none found,
+  157 and 135 have a centroid within 5 ppm of the lock mass, and it is not
+  flagged. PXD054004's trailer has no lock-mass fields, and no centroid
+  there carries the bit. The opt-in
+  `public_lock_mass_centroids_carry_bit_21` test and its Python
+  counterpart check this through the three `OPENTFRAW_LOCK_MASS_*_RAW`
+  variables, on whichever of them are set.
+- Bits 24 and up, read as a number z. The share of centroids with another
+  centroid within 8 ppm of 1.0033548 / z away, against the share with one
+  at the spacing of another z (2 for z = 1, 3 for z = 2, 2 for z = 3):
+
+  | File | z = 1 | z = 2 | z = 3 | z = 0, tested as 1 |
+  | --- | --- | --- | --- | --- |
+  | MTBLS5657 | 53.4% / 0.1% of 16,265 | (4 centroids) | none | 26.3% of 81,383 |
+  | GPST000122 | 83.1% / 0.1% of 26,136 | 92.7% / 0.1% of 15,383 | 97.8% / 0.5% of 5,982 | 5.9% of 289,681 |
+  | PXD054004 | 81.1% / 1.9% of 7,379 | 84.5% / 4.0% of 2,564 | 86.8% / 4.5% of 1,310 | 15.7% of 239,187 |
+  | PXD071477 | 59.0% / 5.1% of 1,698,545 | 72.4% / 3.1% of 635,200 | 77.7% / 5.2% of 467,281 | 5.4% of 2,658,798 |
+  | PXD064947 | 64.5% / 2.4% of 7,670,257 | 86.4% / 2.9% of 1,967,754 | 87.6% / 3.2% of 1,222,044 | 8.3% of 9,776,524 |
+
+No vendor software, SDK, or vendor output was used for these counts.
