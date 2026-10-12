@@ -22,6 +22,12 @@ and uses CV terms from the PSI-MS ontology (psi-ms.obo):
 Instrument CV accessions were cross-referenced against the PSI-MS ontology instrument
 model branch (MS:1000031).
 
+The embedded method file is read as a Compound File Binary container, following Microsoft's
+open specification [MS-CFB](https://learn.microsoft.com/openspecs/windows_protocols/ms-cfb/)
+("Compound File Binary File Format"). Stream reads were checked during development against
+[olefile](https://github.com/decalage2/olefile) 0.47 (Philippe Lagadec, BSD-2-Clause), an
+independent open-source reader of that format. It is not a dependency.
+
 ## Validation corpus
 
 Corpus files were downloaded from the [PRIDE Archive](https://www.ebi.ac.uk/pride/):

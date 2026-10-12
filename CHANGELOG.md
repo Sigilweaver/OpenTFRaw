@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Source CID energy from the method XML no longer depends on how the embedded
+  method file is laid out. The XML is now read as the `Data` stream of the
+  method's compound file, by its sector chain and recorded length. The text
+  scan used before ended early where the stream's sectors were not adjacent,
+  and ran on into bytes left after the stream's end. Either way the XML did
+  not parse, and `sid=<energy>` and the source CID extra fields were left out.
+  `instrument_method_text()` is unchanged. (#57)
+
 ## [3.0.0] - 2026-10-11
 
 ### Breaking
