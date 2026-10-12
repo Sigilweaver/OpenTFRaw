@@ -19,6 +19,9 @@ on:
       - "**/Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/audit.yml"
+  # Manual runs, so a release commit can be audited before it is tagged
+  # (scripts/check-release-ready.sh needs an Audit run on that commit).
+  workflow_dispatch:
   schedule:
     - cron: "0 6 * * 1"
 
