@@ -453,10 +453,16 @@ pub struct RawFileReader {
     pub srm_q3_windows: HashMap<u16, Vec<(f32, f32)>>,
     /// For SRM (flat-peak) files: maps scan_event index → collision energy (eV).
     ///
-    /// Populated from the v63 transition table at open time.  For v66 files the
-    /// collision energy is read from per-scan parameters instead, so this map is
-    /// empty for v66/TSQ Altis files.
+    /// Populated from the transition table at open time for v63 and v66 files.
     pub srm_ce_by_event: HashMap<u16, f64>,
+    /// For SRM (flat-peak) files: maps scan_event index → list of collision energies (eV) across all channels.
+    pub srm_ces_by_event: HashMap<u16, Vec<f64>>,
+    /// For SRM (flat-peak) files: maps scan_event index → method configured dwell time (ms).
+    pub srm_dwell_by_event: HashMap<u16, f64>,
+    /// For SRM (flat-peak) files: maps scan_event index → RF lens / tube lens voltage (V).
+    pub srm_rf_lens_by_event: HashMap<u16, f64>,
+    /// For SRM (flat-peak) files: maps scan_event index → isolation window width (Th).
+    pub srm_iso_width_by_event: HashMap<u16, f64>,
     /// Declared source CID energy (eV), keyed by the method XML's one-based
     /// (segment, event) IDs. Applied only with explicit matching trailer IDs.
     pub source_cid_by_method_event: std::collections::BTreeMap<(u16, u16), f64>,
@@ -917,13 +923,40 @@ impl RawFileReader {
         let device_family = detected.family;
         let instrument_model = detected.model;
 
-        // For SRM files: extract Q1 masses, Q3 window pairs, and (for v63) collision energies
+        // For SRM files: extract Q1 masses, Q3 window pairs, and collision energies
         // from the pre-scan-data header region and/or the scan data records.
         //
         // v66 (TSQ Quantiva / TSQ Altis, FlatV66):
-        //   Transition table layout: [Q1: f64][Q3_lo: f64][Q3_hi: f64] per channel.
+        //   Transition channel records sit in the pre-scan metadata window.
+        //   Each entry appears to have an 8-byte aligned stride where fields are primarily 64-bit IEEE 754 floats:
+        //     [+0]:   scan_event (u32) + padding / flags (u32)
+        //     [+8]:   Q1 precursor m/z (f64)
+        //     [+16]:  Q3_lo product ion window lower bound (f64)
+        //     [+24]:  Q3_hi product ion window upper bound (f64)
+        //     [+32]:  collision energy in Volts (f64)
+        //     [+40]:  repeat collision energy in Volts (f64, exact duplicate of [+32])
+        //     [+48]:  likely base dwell time in ms (f64, observed 10.0 or 0.0)
+        //     [+56]:  repeat base dwell time in ms (f64)
+        //     [+64]:  zero / reserved (f64)
+        //     [+72]:  RF lens / tube lens voltage in Volts (f64, matches method RF Lens)
+        //     [+80]:  unknown parameter (f64, typically 100000.0 or 0.0)
+        //     [+88]:  zero / reserved (f64)
+        //     [+96]:  scheduled retention time start in minutes (f64, matches method Start Time)
+        //     [+104]: scheduled retention time end in minutes (f64, matches method End Time)
+        //     [+112]: method configured dwell time in ms (f64, matches method Dwell Time)
+        //     [+120]: Q1 isolation window width / FWHM (f64, matches method Q1 Resolution, e.g. 0.7)
+        //     [+128]: Q3 isolation window width / FWHM (f64, matches method Q3 Resolution, e.g. 0.7 or 1.2)
+        //
         //   Anchor: scan_index.high_mz equals the Q3_hi of the highest-Q3 channel for each
-        //   event class.  Q3 window pairs come from the per-scan record header.
+        //   event class. Q3 window pairs come from the per-scan record header.
+        //   Collision energy: extracted from CE at [+32] of the anchored transition channel.
+        //   Disambiguation: matched on both Q3_hi and scan_event at [+0] to disambiguate shared product ions.
+        //   Note: `srm_ce_by_event` stores a single scalar f64 per scan event representing the
+        //   highest-Q3 channel (surfaced in standard `collision_energy`). When a multi-channel
+        //   scan event defines disparate collision energies across its individual product ion
+        //   transitions, all individual channel CEs are recorded in `srm_ces_by_event` and
+        //   exposed via the `opentfraw.srm_collision_energies` extra field.
+
         //
         // v63 (TSQ Quantum / TSQ Vantage, FlatV63):
         //   Transition table layout: 72-byte records; Q1 at [+16], Q3_center at [+24],
@@ -931,21 +964,35 @@ impl RawFileReader {
         //   scan range (not per-transition values), so the high_mz anchor does not apply.
         //   Q3 centers come from the first scan's peak list; Q3 windows are computed as
         //   Q3_center ± Q3_width/2.
-        let (srm_q1_by_event, srm_q3_windows, srm_ce_by_event) = {
+        let (
+            srm_q1_by_event,
+            srm_q3_windows,
+            srm_ce_by_event,
+            srm_ces_by_event,
+            srm_dwell_by_event,
+            srm_rf_lens_by_event,
+            srm_iso_width_by_event,
+        ) = {
             use crate::scan_format::ScanDataFormat;
             match (flat_peaks, scan_format) {
                 (true, ScanDataFormat::FlatV66) if metadata_window.len() >= 24 => {
                     // --- v66 Q1 extraction: anchor on scan_index.high_mz ---
                     let mut event_q3_hi: HashMap<u16, f64> = HashMap::new();
                     for entry in &scan_index {
-                        if entry.high_mz > 50.0 && entry.high_mz < 2000.0 {
+                        if entry.high_mz > 5.0 && entry.high_mz < 2000.0 {
                             event_q3_hi.entry(entry.scan_event).or_insert(entry.high_mz);
                         }
                     }
                     let data = &metadata_window;
                     let mut q1_map: HashMap<u16, f64> = HashMap::new();
+                    let mut ce_map: HashMap<u16, f64> = HashMap::new();
+                    let mut ces_map: HashMap<u16, Vec<f64>> = HashMap::new();
+                    let mut dwell_map: HashMap<u16, f64> = HashMap::new();
+                    let mut rf_lens_map: HashMap<u16, f64> = HashMap::new();
+                    let mut iso_width_map: HashMap<u16, f64> = HashMap::new();
+
                     'outer_v66: for (&event, &q3_hi_target) in &event_q3_hi {
-                        let end = data.len().saturating_sub(8);
+                        let end = data.len().saturating_sub(128);
                         // First pass: match both Q3_hi AND scan_event at [i - 24] to disambiguate shared product ions
                         for i in 24..end {
                             let hi = crate::bytes::read_f64_le(data, i)?;
@@ -955,8 +1002,33 @@ impl RawFileReader {
                                     let ev = crate::bytes::read_u32_le(data, i - 24)? as u16;
                                     if ev == event {
                                         let q1 = crate::bytes::read_f64_le(data, i - 16)?;
-                                        if q1 > 50.0 && q1 < 3000.0 {
+                                        if q1 > 10.0 && q1 < 3000.0 {
                                             q1_map.insert(event, q1);
+                                            if let Ok(ce) = crate::bytes::read_f64_le(data, i + 8) {
+                                                if (0.0..500.0).contains(&ce) {
+                                                    ce_map.insert(event, ce);
+                                                }
+                                            }
+                                            if let Ok(rf) = crate::bytes::read_f64_le(data, i + 48)
+                                            {
+                                                if (0.0..500.0).contains(&rf) {
+                                                    rf_lens_map.insert(event, rf);
+                                                }
+                                            }
+                                            if let Ok(dwell) =
+                                                crate::bytes::read_f64_le(data, i + 88)
+                                            {
+                                                if (0.0..5000.0).contains(&dwell) && dwell > 0.0 {
+                                                    dwell_map.insert(event, dwell);
+                                                }
+                                            }
+                                            if let Ok(iso_w) =
+                                                crate::bytes::read_f64_le(data, i + 96)
+                                            {
+                                                if (0.0..50.0).contains(&iso_w) && iso_w > 0.0 {
+                                                    iso_width_map.insert(event, iso_w);
+                                                }
+                                            }
                                             continue 'outer_v66;
                                         }
                                     }
@@ -970,11 +1042,87 @@ impl RawFileReader {
                                 let lo = crate::bytes::read_f64_le(data, i - 8)?;
                                 if hi > lo && (hi - lo) < 0.1 {
                                     let q1 = crate::bytes::read_f64_le(data, i - 16)?;
-                                    if q1 > 50.0 && q1 < 3000.0 {
+                                    if q1 > 10.0 && q1 < 3000.0 {
                                         q1_map.insert(event, q1);
+                                        if let Ok(ce) = crate::bytes::read_f64_le(data, i + 8) {
+                                            if (0.0..500.0).contains(&ce) {
+                                                ce_map.insert(event, ce);
+                                            }
+                                        }
+                                        if let Ok(rf) = crate::bytes::read_f64_le(data, i + 48) {
+                                            if (0.0..500.0).contains(&rf) {
+                                                rf_lens_map.insert(event, rf);
+                                            }
+                                        }
+                                        if let Ok(dwell) = crate::bytes::read_f64_le(data, i + 88) {
+                                            if (0.0..5000.0).contains(&dwell) && dwell > 0.0 {
+                                                dwell_map.insert(event, dwell);
+                                            }
+                                        }
+                                        if let Ok(iso_w) = crate::bytes::read_f64_le(data, i + 96) {
+                                            if (0.0..50.0).contains(&iso_w) && iso_w > 0.0 {
+                                                iso_width_map.insert(event, iso_w);
+                                            }
+                                        }
                                         continue 'outer_v66;
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    // Collect all channel CEs per precursor
+                    if data.len() >= 48 {
+                        let mut all_channels: Vec<(u16, f64, f64)> = Vec::new();
+                        let end = data.len().saturating_sub(48);
+                        for i in 24..end {
+                            if let Ok(hi) = crate::bytes::read_f64_le(data, i) {
+                                if let Ok(lo) = crate::bytes::read_f64_le(data, i - 8) {
+                                    if hi > lo && (hi - lo) < 0.1 && (5.0..2000.0).contains(&hi) {
+                                        if let Ok(ev) = crate::bytes::read_u32_le(data, i - 24) {
+                                            let ev = ev as u16;
+                                            if event_q3_hi.contains_key(&ev) {
+                                                if let Ok(q1) =
+                                                    crate::bytes::read_f64_le(data, i - 16)
+                                                {
+                                                    if (10.0..3000.0).contains(&q1) {
+                                                        if let Ok(ce) =
+                                                            crate::bytes::read_f64_le(data, i + 8)
+                                                        {
+                                                            if (0.0..500.0).contains(&ce) {
+                                                                all_channels.push((ev, q1, ce));
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Determine if any scan event contains multiple channels (e.g. multi-transition SRM)
+                        let mut event_counts: HashMap<u16, usize> = HashMap::new();
+                        for &(ev, _, _) in &all_channels {
+                            *event_counts.entry(ev).or_default() += 1;
+                        }
+                        let multi_channel_events = event_counts.values().any(|&c| c > 1);
+
+                        if multi_channel_events {
+                            // Multiple transition channels grouped under each scan event
+                            for (ev, _, ce) in all_channels {
+                                ces_map.entry(ev).or_default().push(ce);
+                            }
+                        } else {
+                            // Single transition channel per scan event: group transitions sharing the same precursor m/z
+                            for &(ev, q1, _) in &all_channels {
+                                let same_precursor_ces: Vec<f64> = all_channels
+                                    .iter()
+                                    .filter(|&&(_, q, _)| (q - q1).abs() < 0.05)
+                                    .map(|&(_, _, ce)| ce)
+                                    .collect();
+                                ces_map.insert(ev, same_precursor_ces);
                             }
                         }
                     }
@@ -996,7 +1144,15 @@ impl RawFileReader {
                             }
                         }
                     }
-                    (q1_map, q3_map, HashMap::new())
+                    (
+                        q1_map,
+                        q3_map,
+                        ce_map,
+                        ces_map,
+                        dwell_map,
+                        rf_lens_map,
+                        iso_width_map,
+                    )
                 }
                 (true, ScanDataFormat::FlatV63) => {
                     // --- v63 Q1 + Q3 window + CE extraction ---
@@ -1036,9 +1192,25 @@ impl RawFileReader {
                             q3_map.insert(ev, windows);
                         }
                     }
-                    (q1_map, q3_map, ce_map)
+                    (
+                        q1_map,
+                        q3_map,
+                        ce_map,
+                        HashMap::new(),
+                        HashMap::new(),
+                        HashMap::new(),
+                        HashMap::new(),
+                    )
                 }
-                _ => (HashMap::new(), HashMap::new(), HashMap::new()),
+                _ => (
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                ),
             }
         };
 
@@ -1066,6 +1238,10 @@ impl RawFileReader {
             srm_q1_by_event,
             srm_q3_windows,
             srm_ce_by_event,
+            srm_ces_by_event,
+            srm_dwell_by_event,
+            srm_rf_lens_by_event,
+            srm_iso_width_by_event,
             source_cid_by_method_event: Default::default(),
         };
         if let Some(text) = reader.instrument_method_text(&mut source)? {
@@ -1473,8 +1649,8 @@ impl RawFileReader {
             return Ok(None);
         }
         // Read metadata region: from byte 0 up to (but not including) scan data.
-        // Cap at 512 KB to avoid reading very large files entirely.
-        const MAX_WINDOW: u64 = 512 * 1024;
+        // Cap at 4 MB to avoid reading very large files entirely.
+        const MAX_WINDOW: u64 = 4 * 1024 * 1024;
         let window_len = MAX_WINDOW.min(self.data_addr) as usize;
         if window_len < 4 {
             return Ok(None);

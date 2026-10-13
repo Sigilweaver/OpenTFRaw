@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 - Fixed incorrect `precursor_mz` in FlatV66 TSQ SRM files when multiple scan events share identical product ion m/z ranges.
+- Added comprehensive FlatV66 TSQ SRM transition parameter decoding from
+  the pre-scan method stream (particularly applicable to small molecule workflows):
+  - Extracted collision energy (`collision_energy`), isolation window
+    width (`isolation_width`), RF lens voltage
+    (`opentfraw.s_lens_rf_level`), and dwell time
+    (`opentfraw.dwell_time_ms`).
+  - Added `opentfraw.srm_collision_energies` extra field reporting
+    space-separated collision energies when transitions sharing a
+    precursor m/z specify disparate energies (e.g., quantitation vs.
+    confirmation transitions).
+  - Expanded `RawFileReader::instrument_method_text` window to 4 MB to
+    reliably extract large embedded OLE compound document instrument
+    methods in FlatV66 files.
+  - Lowered minimum Q1 and Q3 filtering thresholds (to 10.0 and
+    5.0) to support small metabolite SRM transitions.
 
 ## [3.0.0] - 2026-10-11
 

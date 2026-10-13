@@ -176,6 +176,11 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
     } else {
         None
     };
+    let srm_iso_width = if is_srm {
+        raw.srm_iso_width_by_event.get(&entry.scan_event).copied()
+    } else {
+        None
+    };
 
     let precursor = if !is_ms1 {
         let activation = event.and_then(|e| e.activation());
@@ -183,7 +188,7 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
             PrecursorInfo {
                 target_mz: Some(q1),
                 selected_mz: Some(q1),
-                isolation_width: Some(0.7),
+                isolation_width: srm_iso_width.or(Some(0.7)),
                 charge: None,
                 collision_energy: srm_ce,
                 ce_is_nce: false,
