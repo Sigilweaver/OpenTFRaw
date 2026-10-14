@@ -255,18 +255,11 @@ jobs:
 
   docs:
     name: Docs (Docusaurus)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: docs
-    steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
-      - name: bun install
-        run: bun install --frozen-lockfile
-      - name: bun run build:cloudflare
-        run: bun run build:cloudflare
-
+    permissions:
+      contents: read
+    uses: Sigilweaver/ops/.github/workflows/docs.yml@c2f3734fca95d586bf4203ef484f37a6190eb618
+    with:
+      tooling-ref: c2f3734fca95d586bf4203ef484f37a6190eb618
   # Public API compatibility of the crates.io-published crate against its
   # latest published version. A breaking change without a matching version
   # bump fails; a deliberate major bump passes. OS-independent, so Linux only.
