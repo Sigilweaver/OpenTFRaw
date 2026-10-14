@@ -8,6 +8,7 @@ fn find_flatv66_fixture() -> Option<PathBuf> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let candidates = [
         root.join("corpus/milla010603.raw"),
+        root.join("corpus/PXD041995_TSQ_Altis_milla010603.raw"),
         root.join("milla010603.raw"),
     ];
     candidates.into_iter().find(|p| p.exists())
@@ -16,7 +17,11 @@ fn find_flatv66_fixture() -> Option<PathBuf> {
 #[test]
 fn test_flatv66_shared_product_precursor_disambiguation() {
     let Some(path) = find_flatv66_fixture() else {
-        // Skip if corpus fixture is not downloaded locally
+        assert!(
+            std::env::var("REQUIRE_CORPUS").as_deref() != Ok("1"),
+            "REQUIRE_CORPUS=1 but public PXD041995 milla010603.raw is missing"
+        );
+        eprintln!("Skipping FlatV66 corpus test: public PXD041995 milla010603.raw is missing");
         return;
     };
 
