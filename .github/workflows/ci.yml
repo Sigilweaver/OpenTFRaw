@@ -253,13 +253,22 @@ jobs:
           REQUIRE_CORPUS: "1"
         run: uv run pytest tests -v
 
-  docs:
-    name: Docs (Docusaurus)
+  docs-validation:
+    name: Shared docs validation
     permissions:
       contents: read
-    uses: Sigilweaver/ops/.github/workflows/docs.yml@c2f3734fca95d586bf4203ef484f37a6190eb618
+    uses: Sigilweaver/ops/.github/workflows/docs.yml@757c6789b96e3ac05bbc7d1a092d01cbeb0cb9e2
     with:
-      tooling-ref: c2f3734fca95d586bf4203ef484f37a6190eb618
+      tooling-ref: 757c6789b96e3ac05bbc7d1a092d01cbeb0cb9e2
+  docs:
+    name: Docs (Docusaurus)
+    needs: docs-validation
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    env:
+      DOCS_RESULT: ${{ needs.docs-validation.result }}
+    steps:
+      - run: test "$DOCS_RESULT" = success
   # Public API compatibility of the crates.io-published crate against its
   # latest published version. A breaking change without a matching version
   # bump fails; a deliberate major bump passes. OS-independent, so Linux only.
