@@ -946,6 +946,24 @@ impl RawFileReader {
                     let mut q1_map: HashMap<u16, f64> = HashMap::new();
                     'outer_v66: for (&event, &q3_hi_target) in &event_q3_hi {
                         let end = data.len().saturating_sub(8);
+                        // First pass: match both Q3_hi AND scan_event at [i - 24] to disambiguate shared product ions
+                        for i in 24..end {
+                            let hi = crate::bytes::read_f64_le(data, i)?;
+                            if (hi - q3_hi_target).abs() < 0.002 {
+                                let lo = crate::bytes::read_f64_le(data, i - 8)?;
+                                if hi > lo && (hi - lo) < 0.1 {
+                                    let ev = crate::bytes::read_u32_le(data, i - 24)? as u16;
+                                    if ev == event {
+                                        let q1 = crate::bytes::read_f64_le(data, i - 16)?;
+                                        if q1 > 50.0 && q1 < 3000.0 {
+                                            q1_map.insert(event, q1);
+                                            continue 'outer_v66;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Fallback: match on Q3_hi alone if scan_event was unindexed
                         for i in 16..end {
                             let hi = crate::bytes::read_f64_le(data, i)?;
                             if (hi - q3_hi_target).abs() < 0.002 {
