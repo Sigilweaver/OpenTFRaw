@@ -48,6 +48,9 @@ env:
   PRIDE_RAW_URL: >-
     https://ftp.pride.ebi.ac.uk/pride/data/archive/2025/05/PXD054004/20171113_Map_NS1_1to139_4deg_50uM_001.raw
   PRIDE_RAW_NAME: PXD054004_LTQ_FT_20171113_Map_NS1_1to139_4deg_50uM_001.raw
+  FLATV66_RAW_URL: https://ftp.pride.ebi.ac.uk/pride/data/archive/2025/05/PXD041995/milla010603.raw
+  FLATV66_RAW_NAME: PXD041995_TSQ_Altis_milla010603.raw
+  FLATV66_RAW_SHA256: 547ef679e21d727e967ac13be54594de136bfbc0d6634eae468ebb05fe1a3aa0
 
 jobs:
   build:
@@ -84,6 +87,23 @@ jobs:
           dest="corpus/$PRIDE_RAW_NAME"
           curl -sSL --user-agent "OpenTFRaw-CI/1.0" -o "$dest" "$PRIDE_RAW_URL"
           echo "Downloaded $(du -sh "$dest" | cut -f1) corpus fixture"
+
+      - name: Download and verify FlatV66 shared-product fixture
+        shell: bash
+        run: |
+          curl --fail --location --retry 3 --user-agent "OpenTFRaw-CI/1.0" \
+            --output "corpus/$FLATV66_RAW_NAME" "$FLATV66_RAW_URL"
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          fixture = Path("corpus") / os.environ["FLATV66_RAW_NAME"]
+          actual = hashlib.sha256(fixture.read_bytes()).hexdigest()
+          expected = os.environ["FLATV66_RAW_SHA256"]
+          if actual != expected:
+              raise SystemExit(f"FlatV66 fixture SHA-256 mismatch: {actual}")
+          print(f"Verified {fixture}: {actual}")
+          PY
 
       - name: cargo test
         env:

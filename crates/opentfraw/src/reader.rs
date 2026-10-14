@@ -14,6 +14,61 @@ use crate::scan_event::{ScanEvent, ScanEventPreamble};
 use crate::scan_index::ScanIndexEntry;
 use crate::seq_row::SeqRow;
 
+// Match the full on-disk event ID before using a shared product-ion channel.
+fn flatv66_event_precursor(data: &[u8], event: u16, q3_hi: f64) -> Result<Option<f64>> {
+    for i in 24..data.len().saturating_sub(8) {
+        let hi = crate::bytes::read_f64_le(data, i)?;
+        if (hi - q3_hi).abs() < 0.002 {
+            let lo = crate::bytes::read_f64_le(data, i - 8)?;
+            if hi > lo && (hi - lo) < 0.1 {
+                let id = crate::bytes::read_u32_le(data, i - 24)?;
+                if id == u32::from(event) {
+                    let q1 = crate::bytes::read_f64_le(data, i - 16)?;
+                    if q1 > 50.0 && q1 < 3000.0 {
+                        return Ok(Some(q1));
+                    }
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(test)]
+mod flatv66_event_tests {
+    use super::flatv66_event_precursor;
+
+    fn transition(id: u32, q1: f64) -> Vec<u8> {
+        let mut data = vec![0; 33];
+        data[..4].copy_from_slice(&id.to_le_bytes());
+        data[8..16].copy_from_slice(&q1.to_le_bytes());
+        data[16..24].copy_from_slice(&513.32_f64.to_le_bytes());
+        data[24..32].copy_from_slice(&513.34_f64.to_le_bytes());
+        data
+    }
+
+    #[test]
+    fn shared_product_uses_matching_event() {
+        let mut data = transition(7, 357.213);
+        data.extend(transition(6, 306.707));
+        assert_eq!(
+            flatv66_event_precursor(&data, 6, 513.34).unwrap(),
+            Some(306.707)
+        );
+    }
+
+    #[test]
+    fn oversized_event_does_not_alias_valid_event() {
+        let mut data = transition(65542, 357.213);
+        assert_eq!(flatv66_event_precursor(&data, 6, 513.34).unwrap(), None);
+        data.extend(transition(6, 306.707));
+        assert_eq!(
+            flatv66_event_precursor(&data, 6, 513.34).unwrap(),
+            Some(306.707)
+        );
+    }
+}
+
 /// Decode little-endian UTF-16 code units from `raw` up to the first NUL
 /// (or the end). A trailing odd byte is ignored.
 fn utf16_units_until_nul(raw: &[u8]) -> Vec<u16> {
@@ -946,22 +1001,9 @@ impl RawFileReader {
                     let mut q1_map: HashMap<u16, f64> = HashMap::new();
                     'outer_v66: for (&event, &q3_hi_target) in &event_q3_hi {
                         let end = data.len().saturating_sub(8);
-                        // First pass: match both Q3_hi AND scan_event at [i - 24] to disambiguate shared product ions
-                        for i in 24..end {
-                            let hi = crate::bytes::read_f64_le(data, i)?;
-                            if (hi - q3_hi_target).abs() < 0.002 {
-                                let lo = crate::bytes::read_f64_le(data, i - 8)?;
-                                if hi > lo && (hi - lo) < 0.1 {
-                                    let ev = crate::bytes::read_u32_le(data, i - 24)? as u16;
-                                    if ev == event {
-                                        let q1 = crate::bytes::read_f64_le(data, i - 16)?;
-                                        if q1 > 50.0 && q1 < 3000.0 {
-                                            q1_map.insert(event, q1);
-                                            continue 'outer_v66;
-                                        }
-                                    }
-                                }
-                            }
+                        if let Some(q1) = flatv66_event_precursor(data, event, q3_hi_target)? {
+                            q1_map.insert(event, q1);
+                            continue 'outer_v66;
                         }
                         // Fallback: match on Q3_hi alone if scan_event was unindexed
                         for i in 16..end {
