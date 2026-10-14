@@ -253,20 +253,22 @@ jobs:
           REQUIRE_CORPUS: "1"
         run: uv run pytest tests -v
 
+  docs-validation:
+    name: Shared docs validation
+    permissions:
+      contents: read
+    uses: Sigilweaver/ops/.github/workflows/docs.yml@757c6789b96e3ac05bbc7d1a092d01cbeb0cb9e2
+    with:
+      tooling-ref: 757c6789b96e3ac05bbc7d1a092d01cbeb0cb9e2
   docs:
     name: Docs (Docusaurus)
+    needs: docs-validation
+    if: ${{ always() }}
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: docs
+    env:
+      DOCS_RESULT: ${{ needs.docs-validation.result }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
-      - name: bun install
-        run: bun install --frozen-lockfile
-      - name: bun run build:cloudflare
-        run: bun run build:cloudflare
-
+      - run: test "$DOCS_RESULT" = success
   # Public API compatibility of the crates.io-published crate against its
   # latest published version. A breaking change without a matching version
   # bump fails; a deliberate major bump passes. OS-independent, so Linux only.
