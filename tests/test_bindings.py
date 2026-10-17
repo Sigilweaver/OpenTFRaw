@@ -196,6 +196,7 @@ def test_centroid_labels(raw_file):
         "noise",
         "baseline",
         "signal_to_noise",
+        "descriptor",
     }
     assert set(labels.keys()) == expected_keys
     n = len(labels["mz"])
@@ -204,6 +205,30 @@ def test_centroid_labels(raw_file):
         assert len(labels[key]) == n
     assert labels["mz"].dtype == np.float64
     assert labels["intensity"].dtype == np.float32
+    assert labels["descriptor"].dtype == np.uint32
+
+
+def test_centroid_labels_descriptor(raw_file):
+    # The fixture alternates FT survey scans with ion-trap MS2 scans.
+    by_analyzer = {}
+    for n in range(raw_file.first_scan, raw_file.last_scan + 1):
+        analyzer = raw_file.scan_filter(n).split()[0]
+        if analyzer not in by_analyzer and len(raw_file.peaks(n)[0]) > 1:
+            by_analyzer[analyzer] = n
+        if len(by_analyzer) == 2:
+            break
+    assert set(by_analyzer) == {"FTMS", "ITMS"}
+
+    # FT scan: one stored word per centroid, whose low 20 bits are the
+    # centroid's position in the peak list.
+    ft = raw_file.centroid_labels(by_analyzer["FTMS"])
+    assert np.array_equal(ft["descriptor"] & 0xFFFFF, np.arange(len(ft["mz"])))
+    assert (ft["descriptor"] >> 20).any()
+
+    # Ion-trap scan: no descriptor stream, so the array is all zero.
+    it = raw_file.centroid_labels(by_analyzer["ITMS"])
+    assert len(it["descriptor"]) == len(it["mz"])
+    assert not it["descriptor"].any()
 
 
 def test_scan(raw_file):

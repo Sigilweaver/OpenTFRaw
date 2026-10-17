@@ -65,12 +65,52 @@ centroid form, or both.
 | 1 | 40 | PacketHeader | header | Sizes and M/z range (see §17) |
 | 2 | header.profile_size × 4 | bytes | profile_data | Raw profile data |
 | 3 | header.peak_list_size × 4 | bytes | centroid_data | Centroid peak list |
-| 4 | header.descriptor_list_size × 4 | bytes | descriptor_data | Additional descriptors |
+| 4 | header.descriptor_list_size × 4 | bytes | descriptor_data | One descriptor word per centroid (see §16.2) |
 | 5 | header.unknown_stream_size × 4 | bytes | unknown_data | Unknown stream |
 | 6 | header.triplet_stream_size × 4 | bytes | triplet_data | Triplet data |
 
 All size fields in the PacketHeader are in **4-byte words** (i.e., the actual
 byte size is 4× the stored value).
+
+### 16.2 Descriptor Stream
+
+FT scans store one UInt32 per centroid after the centroid list, in peak
+order and with no count word, so `descriptor_list_size` equals the peak
+count. Ion-trap scans store none (`descriptor_list_size` is 0).
+
+| Bits | Content |
+|------|---------|
+| 0-19 | Zero-based position of the peak in the centroid list |
+| 20 | Set on some peaks; not established |
+| 21 | Set on the centroid of a lock mass found in this scan |
+| 22-23 | Set on some peaks; not established |
+| 24 and up | A number that reads as an assigned charge state; 0 on most peaks |
+
+The evidence is from five public files (CORPUS.md, "Centroid descriptor
+words"): 86,061 FT scans with 27.6 million centroids.
+
+- **Bits 0-19.** The value equals the peak's position on every scan. Where
+  a profile is stored (6,975 of the scans) it has one ProfileChunk per
+  centroid, in the same order, so the position is also the index of the
+  peak's chunk: the centroid's M/z lies inside that chunk's M/z range, or
+  within a bin of its first or last point.
+- **Bit 21.** In the four files whose trailer has `Number of LM Found:`,
+  the number of centroids with this bit equals that count on every scan:
+  one on the 19,730 scans that report one found, none on the 66,168 that
+  report none. The flagged centroid's stored M/z is the float32 nearest
+  one of the trailer's `Lock Mass #N (m/z):` values. A scan that reports
+  none found has no flagged centroid even where it has a centroid within
+  5 ppm of the lock mass. Two further cases were seen only on files that
+  are not public: a scan that reports a lock mass found outside its stored
+  M/z range has no centroid to flag, and a scan that reports two found has
+  two flagged centroids, each within 0.4 ppm of its value and not on it.
+- **Bits 24 and up.** A centroid carrying 1, 2 or 3 has another centroid
+  1.00335 / z away far more often than one at the spacing of another z
+  (for 1: 53% to 83% of them against 0.1% to 5.1%, by file). Larger
+  numbers occur, up to 59 in these files; at their closer spacings the
+  comparison no longer discriminates.
+- **Bits 20, 22 and 23** are set on 0.01% to 15% of centroids, by file and
+  bit. Nothing else stored in the file was found to say what they mark.
 
 ---
 

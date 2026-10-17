@@ -67,6 +67,26 @@ pub struct ScanDataPacket {
     pub header: PacketHeader,
     pub profile: Option<Profile>,
     pub peaks: Vec<Peak>,
+    /// Per-peak descriptor words, aligned 1:1 with `peaks`: the stream that
+    /// follows the centroid peak list, as stored. Empty when the scan
+    /// carries no descriptor stream (e.g. ion-trap scans) or the stream is
+    /// not one word per peak.
+    ///
+    /// What the bits hold, as far as the files show (the evidence is in the
+    /// format docs, section 16.2):
+    ///
+    /// - Bits 0-19 are the peak's zero-based position in the peak list. A
+    ///   stored profile has one chunk per centroid, in the same order, so
+    ///   this is also the index of the peak's [`ProfileChunk`].
+    /// - Bit 21 is set on the centroid of a lock mass found in this scan.
+    ///   Where the trailer reports one found (`Number of LM Found:`), one
+    ///   peak carries the bit, and its m/z is one of the trailer's
+    ///   `Lock Mass #N (m/z):` values at the stored precision.
+    /// - Bits 24 and up hold a number that reads as an assigned charge
+    ///   state. It is 0 on most peaks.
+    /// - Bits 20, 22 and 23 are set on some peaks. What they mark is not
+    ///   established.
+    pub descriptors: Vec<u32>,
     /// Per-peak resolution, aligned 1:1 with `peaks`. Empty when the scan
     /// carries no FT label data (e.g. ion-trap scans) or its layout did not
     /// match the expected encoding.
@@ -89,12 +109,13 @@ impl ScanDataPacket {
         };
 
         let peaks = Self::read_peaks(r, &header)?;
-        let (resolutions, noise_nodes) = Self::read_labels(r, &header, peaks.len())?;
+        let (descriptors, resolutions, noise_nodes) = Self::read_labels(r, &header, peaks.len())?;
 
         Ok(Self {
             header,
             profile,
             peaks,
+            descriptors,
             resolutions,
             noise_nodes,
         })
@@ -111,12 +132,13 @@ impl ScanDataPacket {
         }
 
         let peaks = Self::read_peaks(r, &header)?;
-        let (resolutions, noise_nodes) = Self::read_labels(r, &header, peaks.len())?;
+        let (descriptors, resolutions, noise_nodes) = Self::read_labels(r, &header, peaks.len())?;
 
         Ok(Self {
             header,
             profile: None,
             peaks,
+            descriptors,
             resolutions,
             noise_nodes,
         })
@@ -165,24 +187,36 @@ impl ScanDataPacket {
     }
 
     /// Decode the per-peak label streams that follow the centroid peak list:
-    /// descriptor (peak index, skipped), unknown (per-peak resolution), and
+    /// descriptor (one word per peak), unknown (per-peak resolution), and
     /// triplet (`(m/z, noise, baseline)` nodes). Assumes the cursor sits immediately
     /// after the peak list.
     fn read_labels<R: Read + Seek>(
         r: &mut BinaryReader<R>,
         header: &PacketHeader,
         n_peaks: usize,
-    ) -> Result<(Vec<f32>, Vec<NoiseNode>)> {
-        // Descriptor stream: one u32 per peak (a peak index), not label data.
-        //
-        // Cast to usize *before* multiplying: `descriptor_list_size` is an
-        // untrusted u32 read straight from the file, and multiplying by 4 in
-        // u32 arithmetic first can overflow (and panic, in a debug/fuzz
-        // build) for values above ~1.07 billion. Widening first is safe
-        // because `usize` is 64-bit on every platform this crate targets.
-        if header.descriptor_list_size > 0 {
-            r.skip(header.descriptor_list_size as usize * 4)?;
-        }
+    ) -> Result<(Vec<u32>, Vec<f32>, Vec<NoiseNode>)> {
+        // Descriptor stream: one u32 per centroid peak, with no count word.
+        // Keep the words only when the size matches that layout; otherwise
+        // skip the stream so other encodings are left untouched.
+        let descriptors = if n_peaks > 0 && header.descriptor_list_size as usize == n_peaks {
+            r.check_count(n_peaks as u64, 4)?;
+            let mut words = Vec::with_capacity(n_peaks);
+            for _ in 0..n_peaks {
+                words.push(r.read_u32()?);
+            }
+            words
+        } else {
+            // Cast to usize *before* multiplying: `descriptor_list_size` is
+            // an untrusted u32 read straight from the file, and multiplying
+            // by 4 in u32 arithmetic first can overflow (and panic, in a
+            // debug/fuzz build) for values above ~1.07 billion. Widening
+            // first is safe because `usize` is 64-bit on every platform this
+            // crate targets.
+            if header.descriptor_list_size > 0 {
+                r.skip(header.descriptor_list_size as usize * 4)?;
+            }
+            Vec::new()
+        };
 
         // Unknown stream: for FT scans this is `[count_word, resolution...]`
         // with one f32 resolution per centroid peak. Decode it only when the
@@ -232,7 +266,7 @@ impl ScanDataPacket {
             r.skip((header.triplet_stream_size - consumed) as usize * 4)?;
         }
 
-        Ok((resolutions, noise_nodes))
+        Ok((descriptors, resolutions, noise_nodes))
     }
 
     /// Linearly interpolate the stored `(noise, baseline)` node values at
@@ -662,7 +696,9 @@ mod tests {
     fn read_labels_with_no_streams_returns_empty() {
         let header = header_with(0, 0, 0);
         let mut r = BinaryReader::new(Cursor::new(Vec::new()));
-        let (resolutions, noise_nodes) = ScanDataPacket::read_labels(&mut r, &header, 0).unwrap();
+        let (descriptors, resolutions, noise_nodes) =
+            ScanDataPacket::read_labels(&mut r, &header, 0).unwrap();
+        assert!(descriptors.is_empty());
         assert!(resolutions.is_empty());
         assert!(noise_nodes.is_empty());
     }
@@ -676,8 +712,148 @@ mod tests {
         bytes.extend_from_slice(&1.5f32.to_le_bytes());
         bytes.extend_from_slice(&2.5f32.to_le_bytes());
         let mut r = BinaryReader::new(Cursor::new(bytes));
-        let (resolutions, _) = ScanDataPacket::read_labels(&mut r, &header, 2).unwrap();
+        let (_, resolutions, _) = ScanDataPacket::read_labels(&mut r, &header, 2).unwrap();
         assert_eq!(resolutions, vec![1.5, 2.5]);
+    }
+
+    #[test]
+    fn read_labels_keeps_descriptors_when_size_matches() {
+        // descriptor_list_size == n_peaks: one word per peak, no count word.
+        let header = header_with(2, 0, 0);
+        let words = [0x0020_0000u32, 0x0100_0001];
+        let mut bytes = Vec::new();
+        for w in words {
+            bytes.extend_from_slice(&w.to_le_bytes());
+        }
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let (descriptors, _, _) = ScanDataPacket::read_labels(&mut r, &header, 2).unwrap();
+        assert_eq!(descriptors, words);
+    }
+
+    #[test]
+    fn read_labels_skips_descriptors_when_size_differs() {
+        // Three words for two peaks is not the one-word-per-peak layout: the
+        // stream is skipped whole, and the triplet stream after it still
+        // decodes from the right offset.
+        let header = header_with(3, 0, 3);
+        let mut bytes = Vec::new();
+        for w in [7u32, 8, 9] {
+            bytes.extend_from_slice(&w.to_le_bytes());
+        }
+        for v in [100.0f32, 5.0, 1.0] {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let (descriptors, _, noise_nodes) =
+            ScanDataPacket::read_labels(&mut r, &header, 2).unwrap();
+        assert!(descriptors.is_empty());
+        assert_eq!(noise_nodes.len(), 1);
+        assert_eq!(noise_nodes[0].mz, 100.0);
+    }
+
+    #[test]
+    fn read_labels_rejects_implausible_descriptor_count_before_allocating() {
+        // The size matches the claimed peak count, but the input cannot hold
+        // that many words.
+        let n = u32::MAX / 4 + 1;
+        let header = header_with(n, 0, 0);
+        let mut r = BinaryReader::new(Cursor::new(vec![0u8; 8]));
+        let err = ScanDataPacket::read_labels(&mut r, &header, n as usize).unwrap_err();
+        assert!(matches!(err, Error::AllocationTooLarge { .. }), "{err:?}");
+    }
+
+    /// One FT packet with every stream: a profile of two chunks, two wide
+    /// (f64 m/z) centroids, their descriptor words, their resolutions and
+    /// one triplet node.
+    fn synthetic_packet(descriptors: &[u32]) -> Vec<u8> {
+        let mut profile = Vec::new();
+        profile.extend_from_slice(&1000.0f64.to_le_bytes()); // first_value
+        profile.extend_from_slice(&(-0.5f64).to_le_bytes()); // step
+        profile.extend_from_slice(&2u32.to_le_bytes()); // chunk count
+        profile.extend_from_slice(&4u32.to_le_bytes()); // nbins
+        for (first_bin, signal) in [(0u32, [1.0f32, 2.0]), (10, [3.0, 4.0])] {
+            profile.extend_from_slice(&first_bin.to_le_bytes());
+            profile.extend_from_slice(&2u32.to_le_bytes());
+            profile.extend_from_slice(&0.0f32.to_le_bytes()); // fudge
+            for v in signal {
+                profile.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+
+        let mut peaks = 2u32.to_le_bytes().to_vec();
+        for (mz, abundance) in [(200.5f64, 10.0f32), (400.25, 20.0)] {
+            peaks.extend_from_slice(&mz.to_le_bytes());
+            peaks.extend_from_slice(&abundance.to_le_bytes());
+        }
+
+        let header = [
+            0,                          // unknown
+            (profile.len() / 4) as u32, // profile_size
+            (peaks.len() / 4) as u32,   // peak_list_size
+            0x10080,                    // layout: f64 m/z, fudge present
+            descriptors.len() as u32,   // descriptor_list_size
+            3,                          // unknown_stream_size: count word + 2
+            3,                          // triplet_stream_size: one node
+            0,                          // unknown
+        ];
+        let mut bytes = Vec::new();
+        for word in header {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        bytes.extend_from_slice(&200.0f32.to_le_bytes()); // low_mz
+        bytes.extend_from_slice(&500.0f32.to_le_bytes()); // high_mz
+        bytes.extend_from_slice(&profile);
+        bytes.extend_from_slice(&peaks);
+        for w in descriptors {
+            bytes.extend_from_slice(&w.to_le_bytes());
+        }
+        bytes.extend_from_slice(&2u32.to_le_bytes()); // resolution count word
+        for v in [70_000.0f32, 50_000.0] {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        for v in [300.0f32, 5.0, 1.0] {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn packet_carries_descriptors_aligned_with_peaks() {
+        // Peak 0 is plain. Peak 1 carries bit 21 and the number 1 in the top
+        // byte. The low 20 bits are each peak's position.
+        let words = [0x0000_0000u32, 0x0120_0001];
+        let bytes = synthetic_packet(&words);
+
+        let mut r = BinaryReader::new(Cursor::new(bytes.clone()));
+        let full = ScanDataPacket::read(&mut r).unwrap();
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let labels = ScanDataPacket::read_skip_profile(&mut r).unwrap();
+
+        assert_eq!(full.profile.as_ref().unwrap().chunks.len(), 2);
+        assert!(labels.profile.is_none());
+        for pkt in [&full, &labels] {
+            assert_eq!(pkt.peaks.len(), 2);
+            assert_eq!(pkt.peaks[1].mz, 400.25);
+            assert_eq!(pkt.descriptors, words);
+            for (i, w) in pkt.descriptors.iter().enumerate() {
+                assert_eq!((w & 0xF_FFFF) as usize, i);
+            }
+            // The streams after the descriptors still line up.
+            assert_eq!(pkt.resolutions, vec![70_000.0, 50_000.0]);
+            assert_eq!(pkt.noise_nodes.len(), 1);
+            assert_eq!(pkt.noise_nodes[0].mz, 300.0);
+        }
+    }
+
+    #[test]
+    fn packet_without_descriptor_stream_has_no_descriptors() {
+        let bytes = synthetic_packet(&[]);
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let pkt = ScanDataPacket::read(&mut r).unwrap();
+        assert_eq!(pkt.peaks.len(), 2);
+        assert!(pkt.descriptors.is_empty());
+        assert_eq!(pkt.resolutions, vec![70_000.0, 50_000.0]);
+        assert_eq!(pkt.noise_nodes.len(), 1);
     }
 
     #[test]
@@ -687,7 +863,7 @@ mod tests {
         bytes.extend_from_slice(&5.0f32.to_le_bytes());
         bytes.extend_from_slice(&1.0f32.to_le_bytes());
         let mut r = BinaryReader::new(Cursor::new(bytes));
-        let (_, noise_nodes) = ScanDataPacket::read_labels(&mut r, &header, 0).unwrap();
+        let (_, _, noise_nodes) = ScanDataPacket::read_labels(&mut r, &header, 0).unwrap();
         assert_eq!(noise_nodes.len(), 1);
         assert_eq!(noise_nodes[0].mz, 100.0);
         assert_eq!(noise_nodes[0].noise, 5.0);
