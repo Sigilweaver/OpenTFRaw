@@ -79,9 +79,11 @@ pub struct ScanDataPacket {
     ///   stored profile has one chunk per centroid, in the same order, so
     ///   this is also the index of the peak's [`ProfileChunk`].
     /// - Bit 21 is set on the centroid of a lock mass found in this scan.
-    ///   Where the trailer reports one found (`Number of LM Found:`), one
-    ///   peak carries the bit, and its m/z is one of the trailer's
-    ///   `Lock Mass #N (m/z):` values at the stored precision.
+    ///   In the tested public files, where the trailer reports one found
+    ///   (`Number of LM Found:`), one peak carries the bit, and its m/z
+    ///   matches a `Lock Mass #N (m/z):` value at the stored precision.
+    ///   A reported lock mass outside the stored m/z range may have no
+    ///   centroid to flag; absent flags alone do not imply none was found.
     /// - Bits 24 and up hold a number that reads as an assigned charge
     ///   state. It is 0 on most peaks.
     /// - Bits 20, 22 and 23 are set on some peaks. What they mark is not
