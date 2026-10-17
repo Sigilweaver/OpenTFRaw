@@ -1110,7 +1110,10 @@ impl RawFileReader {
             srm_ce_by_event,
             source_cid_by_method_event: Default::default(),
         };
-        if let Some(text) = reader.instrument_method_text(&mut source)? {
+        if let Some(text) = reader
+            .method_window(&mut source)?
+            .and_then(|window| method_settings_text(&window))
+        {
             reader.source_cid_by_method_event =
                 crate::instrument_method::source_cid_settings(&text);
         }
@@ -1505,12 +1508,26 @@ impl RawFileReader {
     /// was not embedded (`method_file_present == false`).
     ///
     /// Note: This is a best-effort extraction. The result is the raw text
-    /// content; callers may wish to trim or parse it further.
+    /// content; callers may wish to trim or parse it further. The method file
+    /// is a compound file, so a block of text is not always one whole stream:
+    /// it ends early where a stream's sectors are not adjacent, and it can
+    /// run on into the bytes that follow a stream's recorded end.
     ///
     /// # Errors
     ///
     /// An I/O error if the metadata region cannot be read from `source`.
     pub fn instrument_method_text<R: Read + Seek>(&self, source: &mut R) -> Result<Option<String>> {
+        // Scan for the longest valid UTF-16LE text block (min 256 chars = 512 bytes).
+        // Strategy: find aligned 2-byte sequences where every pair decodes to a
+        // printable/whitespace Unicode scalar (U+0020..U+FFFD).
+        Ok(self
+            .method_window(source)?
+            .and_then(|window| extract_utf16le_text(&window, 256)))
+    }
+
+    /// The metadata region that holds the embedded method file, or `None`
+    /// when the file has no embedded method.
+    fn method_window<R: Read + Seek>(&self, source: &mut R) -> Result<Option<Vec<u8>>> {
         if !self.raw_file_info.preamble.method_file_present {
             return Ok(None);
         }
@@ -1524,12 +1541,15 @@ impl RawFileReader {
         source.seek(std::io::SeekFrom::Start(0))?;
         let mut buf = vec![0u8; window_len];
         source.read_exact(&mut buf)?;
-
-        // Scan for the longest valid UTF-16LE text block (min 256 chars = 512 bytes).
-        // Strategy: find aligned 2-byte sequences where every pair decodes to a
-        // printable/whitespace Unicode scalar (U+0020..U+FFFD).
-        Ok(extract_utf16le_text(&buf, 256))
+        Ok(Some(buf))
     }
+}
+
+/// The text that method settings are parsed from: the method XML as the
+/// method file's stream holds it, or else the longest block of text, for a
+/// region that holds no such stream.
+fn method_settings_text(window: &[u8]) -> Option<String> {
+    crate::instrument_method::method_xml(window).or_else(|| extract_utf16le_text(window, 256))
 }
 
 /// Scan `buf` for the longest contiguous UTF-16LE text block of at least
@@ -2274,6 +2294,68 @@ mod tests {
         bytes.extend_from_slice(&[0u8; 8]); // far short of the declared length
         let mut r = BinaryReader::new(Cursor::new(bytes));
         assert!(r.read_pascal_string().is_err());
+    }
+
+    fn source_energies(text: &str) -> Vec<((u16, u16), f64)> {
+        crate::instrument_method::source_cid_settings(text)
+            .into_iter()
+            .collect()
+    }
+
+    /// The layout of the method file behind issue #57. The document is one
+    /// code unit longer than nine sectors, so its closing `>` is alone in a
+    /// sector that lies after a directory sector.
+    #[test]
+    fn method_settings_survive_a_fragmented_stream() {
+        let document = crate::test_util::method_document(&["20", "20"], 9 * 256 + 1);
+        let mut window = vec![0u8; 1356];
+        window.extend(crate::test_util::fragmented_method_file(&document, &[]));
+
+        // The text scan ends at the break in the chain and runs on into the
+        // directory sector, so what it returns is not a document.
+        let scanned = extract_utf16le_text(&window, 256).unwrap();
+        assert!(scanned.ends_with("</InstrumentSetupMethodAuditData"));
+        assert!(source_energies(&scanned).is_empty());
+
+        let text = method_settings_text(&window).unwrap();
+        assert_eq!(text, document);
+        assert_eq!(source_energies(&text), [((1, 1), 20.0), ((1, 2), 20.0)]);
+    }
+
+    /// A document that ends inside its last sector, with bytes of an earlier,
+    /// longer document left after its recorded end.
+    #[test]
+    fn method_settings_stop_at_the_recorded_stream_length() {
+        let document = crate::test_util::method_document(&["20"], 9 * 256 - 5);
+        let mut file = crate::test_util::CompoundFileBuilder::new(3);
+        file.directory_sector();
+        let data = crate::test_util::utf16(&document);
+        let sectors = file.sectors(&data, &crate::test_util::utf16("thod>"));
+        file.stream("Data", sectors[0], data.len() as u64);
+        let window = file.build();
+
+        let scanned = extract_utf16le_text(&window, 256).unwrap();
+        assert!(scanned.ends_with("</InstrumentSetupMethod>thod>"));
+        assert!(source_energies(&scanned).is_empty());
+
+        let text = method_settings_text(&window).unwrap();
+        assert_eq!(text, document);
+        assert_eq!(source_energies(&text), [((1, 1), 20.0)]);
+    }
+
+    /// A region with no compound file keeps the text scan.
+    #[test]
+    fn method_settings_fall_back_to_the_text_scan() {
+        let document = crate::test_util::method_document(&["35.5"], 400);
+        let mut window = vec![0u8; 1356];
+        window.extend(crate::test_util::utf16(&document));
+        window.extend([0u8; 64]);
+        assert_eq!(method_settings_text(&window).unwrap(), document);
+        assert_eq!(
+            source_energies(&method_settings_text(&window).unwrap()),
+            [((1, 1), 35.5)]
+        );
+        assert_eq!(method_settings_text(&[0u8; 2048]), None);
     }
 
     #[test]

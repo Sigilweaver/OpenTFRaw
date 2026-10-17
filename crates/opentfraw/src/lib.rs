@@ -1,4 +1,5 @@
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
+mod compound_file;
 mod error;
 mod instrument_method;
 mod reader;

@@ -135,9 +135,46 @@ instrument method files used during acquisition. The OLE2 container may contain
 sub-streams for each instrument module (e.g. MS method, LC method, autosampler
 method).
 
-Parsing the OLE2 container requires a separate OLE2/CDF decoder. The method
-file begins after the InstID structure(s) and extends to the `data_addr`
-offset.
+The method file begins after the InstID structure(s) and extends to the
+`data_addr` offset. Its layout is the public Compound File Binary format
+([MS-CFB](https://learn.microsoft.com/openspecs/windows_protocols/ms-cfb/)):
+a 512-byte header, a file allocation table, a directory of named streams, and
+the streams' bytes in fixed-size sectors.
+
+A stream is read by following its sector chain in the allocation table, for
+the length its directory entry records. Two properties of the format make any
+other way of reading it unreliable:
+
+- A stream's sectors need not be adjacent or in order. A directory sector, or
+  a sector of another stream, can lie between two of them.
+- The last sector is used only as far as the recorded length. The rest is
+  slack, and can hold bytes of an earlier, longer version of the stream.
+
+The reader takes the container at the first compound-file signature
+(`D0 CF 11 E0 A1 B1 1A E1`) in the region before `data_addr`. It reads
+version 3 files (512-byte sectors) and version 4 files (4096-byte sectors),
+including streams shorter than 4096 bytes, which the format keeps in the mini
+stream. A file whose allocation table needs more than the 109 sectors the
+header can list (over 7 MB) is not read.
+
+Where a method has `InstrumentSetupMethod` XML, it is a UTF-16LE stream named
+`Data`. The XML is used only when exactly one `Data` stream holds such a
+document (see section 22.3 of the ScanEvent page).
+
+`instrument_method_text()` does not read the container. It returns the longest
+block of UTF-16LE text in the region. That is one whole stream only when the
+stream's sectors are adjacent and no text is left in the slack of its last
+sector.
+
+Evidence: the public GlycoPOST acquisition
+`GPST000122.0/NGlycans_Serum_Fetuin_File1.raw` (Q Exactive Plus) has one
+container in the region, version 3 with 512-byte sectors. Its directory lists
+the streams `AuditData` and `LCQ Header`, and one storage that holds `Text` and
+`Data`. `Data` is 15,866 bytes of UTF-16LE in 31 adjacent sectors, with a
+zero-filled slack, and is the `InstrumentSetupMethod` document. In that file
+the text scan and the stream read return the same document. A stream with
+sectors out of order, and one with text in its slack, are covered by synthetic
+method files in the unit tests.
 
 ---
 

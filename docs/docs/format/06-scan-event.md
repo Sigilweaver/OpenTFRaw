@@ -135,7 +135,11 @@ byte 120 (section 22.5).
 The preamble's source-fragmentation flag remains undecoded. Source CID energy
 is obtained from `Source CID eV:` / `API Source CID Energy:` trailer fields.
 If those fields are absent, a supported embedded `InstrumentSetupMethod` XML
-can supply `Fragmentation_Source` with `unit="eV"`. The XML's one-based
+can supply `Fragmentation_Source` with `unit="eV"`. The XML is read as the
+`Data` stream of the embedded method file, by its sector chain and recorded
+length (see MethodFile on the RawFileInfo page). The longest block of text in
+the metadata region is used only when the region holds no such stream. The
+XML's one-based
 `Segment id` / `ScanEvent id` must match explicitly typed per-scan
 `Scan Segment:` / `Scan Event:` trailer IDs; the scan-index IDs are not used
 as a guessed fallback. Invalid or ambiguous XML is ignored, and unsupported
@@ -156,6 +160,11 @@ trailers, which omit a source-CID energy field. The ignored Rust regression
 in `crates/opentfraw/tests/source_cid.rs` can be run with
 `OPENTFRAW_SOURCE_CID_RAW` pointing to that acquisition. The Python regression
 uses the same environment variable.
+
+The stream read is covered by synthetic method files in the unit tests: one
+whose `Data` stream has its last sector after a directory sector, so that a
+text scan loses the closing `>` of the document, and one with text left after
+the stream's recorded end.
 
 ### 22.4 Filter Line Construction
 
