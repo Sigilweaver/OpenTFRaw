@@ -71,6 +71,7 @@ relative to the end of the 136-byte preamble:
 |--------|------------|---------------------------|--------------------------|
 | Fusion Lumos primary (PXD031322) | 96 | 8 | 24 |
 | Q Exactive / Exploris uniform events | 136 / 144 | 64 | 80 |
+| Q Exactive / Exploris, n reactions | 136 / 144 + 56 * (n - 1) | 8 + 56 * n | 24 + 56 * n |
 | Tribrid dependent events | 208 | 120 | 144 |
 
 For the 96-byte primary layout, using `body_size - 64` as the coefficient
@@ -96,9 +97,11 @@ tries these layouts in order and uses the first that fits:
    records. Used only if walking every record finds plausible preamble fields
    (section 22.1) and ends exactly at `scan_params_addr`.
 2. Named events (below), walked and checked the same way.
-3. One size for every record, when the stream length divides evenly by the
+3. Counted events (below), walked and checked the same way, with a 136-byte
+   and then a 144-byte fixed body.
+4. One size for every record, when the stream length divides evenly by the
    number of events.
-4. The 232/344 tribrid sizes by stream length alone, and otherwise the floor of
+5. The 232/344 tribrid sizes by stream length alone, and otherwise the floor of
    the average record size.
 
 **Named events.** In the 136-byte Exploris body, the last UInt32 (body offset
@@ -117,6 +120,42 @@ named inclusion list (not public; 462 records of 272, 286, 288 and 290 bytes).
 The walk ends exactly at `scan_params_addr`, and every name reads as text.
 Synthetic streams in the `reader.rs` unit tests cover mixed record sizes, a
 stream that divides evenly, and walks that do not end at the stream end.
+
+**Counted events.** Q Exactive and Exploris bodies follow the pre-v66 order
+(section 21.1) with a longer reaction record:
+
+| Body offset | Type | Field |
+|-------------|------|-------|
+| 0 | UInt32 | n_reactions (1 on single-precursor and MS1 events) |
+| 4 | Reaction56[n_reactions] | reactions |
+| 4 + 56n | UInt32 | unknown |
+| 8 + 56n | FractionCollector | acquisition window |
+| 24 + 56n | UInt32 | nparam |
+| 28 + 56n | Float64[nparam] | coefficients |
+| ... | | tail; its last UInt32 is the name count above |
+
+A 56-byte reaction holds the precursor m/z (Float64 at +0), an undecoded
+Float64 (+8), the activation energy (Float64 at +16) and 32 undecoded bytes,
+so its first 24 bytes match the pre-v66 reaction. The fixed body (one reaction,
+no name) is 136 bytes on Exploris and 144 on Q Exactive instruments. MS1
+events store one reaction too; it is not read as a precursor.
+
+Multiplexed scans store one reaction per precursor, so their records are 56
+bytes longer for each precursor after the first. The reader walks the records
+by the reaction count and the name count, and uses the walk only if at least
+one record differs from the fixed size and the walk ends exactly at
+`scan_params_addr`. Every precursor is then read and listed in the scan filter.
+The filter gets no token for multiplexing: no open reference for one was
+found.
+
+Evidence: public PRIDE PXD021080 (Q Exactive HF-X, PRM; see CORPUS.md). Its
+4,142 records are 280 bytes with one reaction or 336 bytes with two, and the
+walk ends exactly at `scan_params_addr`. Each scan's trailer names its
+injections in `Multiple Injection:` (`h ` or `h h  mpx`), and the reaction
+count equals the number of `h` tokens on every scan. On the three lock-mass
+fixtures and GPST000122 in CORPUS.md (Q Exactive Plus, HF-X and Exploris 480)
+the count is 1 on every record and the same walk ends exactly at the stream
+end, so those files keep the uniform size.
 
 ---
 

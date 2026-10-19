@@ -672,8 +672,43 @@ fn named_v66_body_sizes<R: Read + Seek>(
     n_events: u32,
     stream_end: u64,
 ) -> Result<Option<Vec<usize>>> {
+    walk_v66_bodies(r, n_events, stream_end, 136, false)
+}
+
+// Q Exactive and Exploris bodies start with a u32 reaction count followed by
+// that many 56-byte reactions (`ScanEvent::read_counted_v66`). The count is 1
+// on most events; multiplexed scans store one reaction per precursor, so
+// their records are 56 bytes longer for each precursor after the first. Walk
+// the records by the reaction count and the name count, for a 136-byte
+// (Exploris) or 144-byte (Q Exactive) fixed body, under the same conditions as
+// the named walk.
+fn counted_v66_body_sizes<R: Read + Seek>(
+    r: &mut BinaryReader<R>,
+    n_events: u32,
+    stream_end: u64,
+) -> Result<Option<Vec<usize>>> {
+    for fixed_body in [136, 144] {
+        if let Some(bodies) = walk_v66_bodies(r, n_events, stream_end, fixed_body, true)? {
+            return Ok(Some(bodies));
+        }
+    }
+    Ok(None)
+}
+
+// Walk v66 records whose sizes are written in the records. `fixed_body` is the
+// body size of an event with one reaction and no name; the name count is the
+// last u32 of that fixed part, shifted by any further reactions. Return the
+// body sizes when at least one differs from `fixed_body`, every preamble is
+// plausible, and the last record ends exactly at `stream_end`.
+fn walk_v66_bodies<R: Read + Seek>(
+    r: &mut BinaryReader<R>,
+    n_events: u32,
+    stream_end: u64,
+    fixed_body: u64,
+    by_reactions: bool,
+) -> Result<Option<Vec<usize>>> {
     const PREAMBLE: u64 = 136;
-    const FIXED_BODY: u64 = 136;
+    const REACTION: u64 = 56;
     let start = r.position();
     let result = (|| {
         if stream_end > r.length()? {
@@ -682,26 +717,37 @@ fn named_v66_body_sizes<R: Read + Seek>(
         // Grows only with records found inside the stream, so an implausible
         // n_events cannot drive the allocation.
         let mut bodies = Vec::new();
-        let mut named = false;
+        let mut varied = false;
         let mut preamble = [0u8; PREAMBLE as usize];
         for _ in 0..n_events {
-            if stream_end.saturating_sub(r.position()) < PREAMBLE + FIXED_BODY {
+            if stream_end.saturating_sub(r.position()) < PREAMBLE + fixed_body {
                 return Ok(None);
             }
             r.read_bytes_into(&mut preamble)?;
             if !is_plausible_v66_preamble(&preamble) {
                 return Ok(None);
             }
-            r.seek_to(r.position() + FIXED_BODY - 4)?;
+            let body_start = r.position();
+            let mut fixed = fixed_body;
+            if by_reactions {
+                let Some(extra) = u64::from(r.read_u32()?).checked_sub(1) else {
+                    return Ok(None);
+                };
+                fixed += extra * REACTION;
+                if stream_end.saturating_sub(body_start) < fixed {
+                    return Ok(None);
+                }
+            }
+            r.seek_to(body_start + fixed - 4)?;
             let name_bytes = 2 * u64::from(r.read_u32()?);
             if stream_end.saturating_sub(r.position()) < name_bytes {
                 return Ok(None);
             }
             r.seek_to(r.position() + name_bytes)?;
-            named |= name_bytes > 0;
-            bodies.push((FIXED_BODY + name_bytes) as usize);
+            varied |= fixed + name_bytes != fixed_body;
+            bodies.push((fixed + name_bytes) as usize);
         }
-        Ok((named && r.position() == stream_end).then_some(bodies))
+        Ok((varied && r.position() == stream_end).then_some(bodies))
     })();
     r.seek_to(start)?;
     result
@@ -714,6 +760,8 @@ enum V66BodySizes {
     ByLevel(usize, usize),
     /// Each record's own body size.
     PerRecord(Vec<usize>),
+    /// Each record's own body size, which starts with its reaction count.
+    Counted(Vec<usize>),
 }
 
 // Choose the body sizes of the v66 scan-event records between the reader's
@@ -731,10 +779,12 @@ enum V66BodySizes {
 //
 // Exploris events that carry a name (targeted MS2 with a named inclusion
 // list) are 272 bytes plus the name, so each record has its own size.
+// Multiplexed scans on Q Exactive and Exploris instruments are 56 bytes longer
+// per precursor after the first.
 //
-// Walk the tribrid and the named layouts first; each is used only if it ends
-// exactly at the end of the stream. A stream of named records can divide
-// evenly by n_events, so the named walk precedes the uniform case. Otherwise
+// Walk the tribrid, the named and the counted layouts first; each is used only
+// if it ends exactly at the end of the stream. A stream of such records can
+// divide evenly by n_events, so the walks precede the uniform case. Otherwise
 // infer the sizes from the stream length.
 fn v66_body_sizes<R: Read + Seek>(
     r: &mut BinaryReader<R>,
@@ -750,6 +800,9 @@ fn v66_body_sizes<R: Read + Seek>(
     }
     if let Some(bodies) = named_v66_body_sizes(r, n_events, stream_end)? {
         return Ok(V66BodySizes::PerRecord(bodies));
+    }
+    if let Some(bodies) = counted_v66_body_sizes(r, n_events, stream_end)? {
+        return Ok(V66BodySizes::Counted(bodies));
     }
     let stream_bytes = stream_end.saturating_sub(r.position());
     let n = u64::from(n_events);
@@ -886,16 +939,15 @@ impl RawFileReader {
         r.check_count(n_events as u64, preamble_size as u64)?;
         let mut scan_events = Vec::with_capacity(n_events as usize);
         for i in 0..n_events as usize {
-            let (body_primary, body_dependent) = match &v66_bodies {
-                V66BodySizes::ByLevel(primary, dependent) => (*primary, *dependent),
-                V66BodySizes::PerRecord(bodies) => (bodies[i], bodies[i]),
-            };
-            scan_events.push(ScanEvent::read(
-                &mut r,
-                version,
-                body_primary,
-                body_dependent,
-            )?);
+            scan_events.push(match &v66_bodies {
+                V66BodySizes::ByLevel(primary, dependent) => {
+                    ScanEvent::read(&mut r, version, *primary, *dependent)?
+                }
+                V66BodySizes::PerRecord(bodies) => {
+                    ScanEvent::read(&mut r, version, bodies[i], bodies[i])?
+                }
+                V66BodySizes::Counted(bodies) => ScanEvent::read_counted_v66(&mut r, bodies[i])?,
+            });
         }
 
         // 9. Error log
@@ -2765,5 +2817,182 @@ mod named_event_tests {
             v66_body_sizes(&mut r, 5, end, 136).unwrap(),
             V66BodySizes::ByLevel(96, 208)
         );
+    }
+}
+
+#[cfg(test)]
+mod counted_event_tests {
+    use super::*;
+    use crate::test_util::utf16;
+    use std::io::Cursor;
+
+    // A Q Exactive / Exploris record: a 136-byte preamble, then a body of
+    // `fixed_body + 56 * (precursors - 1)` bytes holding the reaction count,
+    // the 56-byte reactions, a u32, the acquisition window, two coefficients
+    // and, as the last u32, the character count of `name`; then the name.
+    fn record(fixed_body: usize, level: u8, index: usize, precursors: u32, name: &str) -> Vec<u8> {
+        let mut bytes = vec![0u8; 136];
+        bytes[..4].copy_from_slice(&[1, 0, 2, 1]);
+        bytes[4] = 1;
+        bytes[5] = 1;
+        bytes[6] = level;
+        bytes[11] = 5;
+        bytes[24] = 1;
+        bytes[40] = 4;
+        let n = precursors as usize;
+        let mut body = vec![0u8; fixed_body + 56 * (n - 1)];
+        body[..4].copy_from_slice(&precursors.to_le_bytes());
+        for k in 0..n {
+            let off = 4 + 56 * k;
+            let mz = 400.0 + 10.0 * index as f64 + k as f64;
+            body[off..off + 8].copy_from_slice(&mz.to_le_bytes());
+            body[off + 8..off + 16].copy_from_slice(&1.6f64.to_le_bytes());
+            body[off + 16..off + 24].copy_from_slice(&28.0f64.to_le_bytes());
+        }
+        let fc = 8 + 56 * n;
+        body[fc - 4..fc].copy_from_slice(&1u32.to_le_bytes());
+        body[fc..fc + 8].copy_from_slice(&110.0f64.to_le_bytes());
+        body[fc + 8..fc + 16].copy_from_slice(&(1000.0 + index as f64).to_le_bytes());
+        body[fc + 16..fc + 20].copy_from_slice(&2u32.to_le_bytes());
+        body[fc + 20..fc + 28].copy_from_slice(&(index as f64).to_le_bytes());
+        body[fc + 28..fc + 36].copy_from_slice(&1.5f64.to_le_bytes());
+        let name = utf16(name);
+        let count_at = body.len() - 4;
+        body[count_at..].copy_from_slice(&(name.len() as u32 / 2).to_le_bytes());
+        bytes.extend(body);
+        bytes.extend(name);
+        bytes
+    }
+
+    fn stream(fixed_body: usize, records: &[(u8, u32, &str)]) -> Vec<u8> {
+        records
+            .iter()
+            .enumerate()
+            .flat_map(|(index, &(level, n, name))| record(fixed_body, level, index, n, name))
+            .collect()
+    }
+
+    // An MS1 event, then targeted MS2 events with one to three precursors.
+    const MULTIPLEXED: [(u8, u32, &str); 6] = [
+        (1, 1, ""),
+        (2, 1, ""),
+        (2, 2, ""),
+        (2, 2, ""),
+        (2, 3, ""),
+        (2, 1, ""),
+    ];
+
+    #[test]
+    fn multiplexed_records_decode_every_precursor() {
+        let bytes = stream(144, &MULTIPLEXED);
+        let end = bytes.len() as u64;
+        // 280, 280, 336, 336, 392 and 280 bytes: no single size fits.
+        assert_ne!(end % MULTIPLEXED.len() as u64, 0);
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        let bodies = vec![144, 144, 200, 200, 256, 144];
+        assert_eq!(
+            v66_body_sizes(&mut r, 6, end, 136).unwrap(),
+            V66BodySizes::Counted(bodies.clone())
+        );
+        assert_eq!(r.position(), 0);
+        for (index, (&(level, n, _), body)) in MULTIPLEXED.iter().zip(bodies).enumerate() {
+            let event = ScanEvent::read_counted_v66(&mut r, body).unwrap();
+            assert_eq!(event.preamble.bytes[6], level);
+            if level == 1 {
+                assert!(event.reactions.is_empty());
+            } else {
+                let precursors: Vec<f64> =
+                    event.reactions.iter().map(|rx| rx.precursor_mz).collect();
+                let expected: Vec<f64> = (0..n)
+                    .map(|k| 400.0 + 10.0 * index as f64 + f64::from(k))
+                    .collect();
+                assert_eq!(precursors, expected);
+                assert!(event.reactions.iter().all(|rx| rx.energy == 28.0));
+            }
+            assert_eq!(event.fraction_collectors.len(), 1);
+            assert_eq!(event.fraction_collectors[0].low_mz, 110.0);
+            assert_eq!(event.fraction_collectors[0].high_mz, 1000.0 + index as f64);
+            assert_eq!(event.coefficients, vec![index as f64, 1.5]);
+        }
+        assert_eq!(r.position(), end);
+    }
+
+    #[test]
+    fn counted_walk_covers_exploris_bodies_and_names() {
+        let records = [(1, 1, ""), (2, 2, "target1"), (2, 1, "")];
+        let bytes = stream(136, &records);
+        let end = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        // The named walk does not land: the second record is 56 bytes longer
+        // than its name accounts for.
+        assert_eq!(named_v66_body_sizes(&mut r, 3, end).unwrap(), None);
+        assert_eq!(
+            v66_body_sizes(&mut r, 3, end, 136).unwrap(),
+            V66BodySizes::Counted(vec![136, 136 + 56 + 14, 136])
+        );
+        r.seek_to(272).unwrap();
+        let event = ScanEvent::read_counted_v66(&mut r, 206).unwrap();
+        assert_eq!(event.reactions.len(), 2);
+        assert_eq!(event.fraction_collectors[0].high_mz, 1001.0);
+    }
+
+    #[test]
+    fn counted_walk_precedes_an_evenly_dividing_stream() {
+        // 280 + 336 + 336 + 280 = 4 * 308: the uniform size would be wrong.
+        let bytes = stream(144, &[(2, 1, ""), (2, 2, ""), (2, 2, ""), (2, 1, "")]);
+        let end = bytes.len() as u64;
+        assert_eq!(end, 4 * 308);
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(
+            v66_body_sizes(&mut r, 4, end, 136).unwrap(),
+            V66BodySizes::Counted(vec![144, 200, 200, 144])
+        );
+    }
+
+    #[test]
+    fn single_reaction_streams_keep_the_uniform_size() {
+        let bytes = stream(144, &[(1, 1, ""), (2, 1, ""), (2, 1, "")]);
+        let end = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(counted_v66_body_sizes(&mut r, 3, end).unwrap(), None);
+        assert_eq!(
+            v66_body_sizes(&mut r, 3, end, 136).unwrap(),
+            V66BodySizes::ByLevel(144, 144)
+        );
+    }
+
+    #[test]
+    fn counted_walk_is_not_used_unless_it_ends_at_the_stream_end() {
+        let mut bytes = stream(144, &MULTIPLEXED);
+        bytes.extend([0u8; 8]);
+        let end = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(counted_v66_body_sizes(&mut r, 6, end).unwrap(), None);
+        assert_eq!(r.position(), 0);
+        assert!(matches!(
+            v66_body_sizes(&mut r, 6, end, 136).unwrap(),
+            V66BodySizes::ByLevel(..)
+        ));
+    }
+
+    #[test]
+    fn records_without_a_reaction_stop_the_walk() {
+        let mut bytes = stream(144, &MULTIPLEXED);
+        let end = bytes.len() as u64;
+        // The second record (after 280 bytes, one reaction) claims none.
+        bytes[280 + 136..280 + 140].copy_from_slice(&0u32.to_le_bytes());
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(counted_v66_body_sizes(&mut r, 6, end).unwrap(), None);
+        assert_eq!(r.position(), 0);
+    }
+
+    #[test]
+    fn implausible_reaction_counts_are_rejected() {
+        let mut bytes = stream(144, &MULTIPLEXED);
+        let end = bytes.len() as u64;
+        bytes[560 + 136..560 + 140].copy_from_slice(&u32::MAX.to_le_bytes());
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(counted_v66_body_sizes(&mut r, 6, end).unwrap(), None);
+        assert_eq!(r.position(), 0);
     }
 }

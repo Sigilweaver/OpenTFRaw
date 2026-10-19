@@ -256,6 +256,25 @@ MS1 event also contains both matched and zero-match scans. These are count
 and correction controls, not proof of the exact `lock` filter-token meaning.
 No vendor software, SDK, or vendor output was used to validate them.
 
+## Multiplexed PRM events
+
+The opt-in `public_multiplexed_prm_events` test reads one of the corpus's
+PXD021080 files (CC0) through `OPENTFRAW_MULTIPLEXED_PRM_RAW`:
+
+| Variable | Public acquisition | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| `OPENTFRAW_MULTIPLEXED_PRM_RAW` | [PXD021080/Aug1_A057_0-2fmol_CSP-NP_12fmolHeavy_Mucus_iRT_PRM_7min_r1.raw](https://ftp.pride.ebi.ac.uk/pride/data/archive/2022/01/PXD021080/Aug1_A057_0-2fmol_CSP-NP_12fmolHeavy_Mucus_iRT_PRM_7min_r1.raw) | 48640244 | `a9aa2fa49fcad5e7ac036f549c998042deac8ba43bd6fd73cb7380ed59f9584d` |
+
+The file reports a Q Exactive HF-X and holds 4,142 MS2 scans. 1,061 isolate
+one precursor and 3,081 isolate two. Their scan-event records are 280 and 336
+bytes: each holds one 56-byte reaction per precursor (format docs, section
+21.3). Each scan's trailer names its injections in `Multiple Injection:`,
+`h ` for the single-precursor scans and `h h  mpx` for the others, and the
+decoded reaction count equals the number of `h` tokens on every scan. Before
+the records were walked by their reaction count, every scan event after the
+first was read at a drifting offset. No vendor software, SDK, or vendor output
+was used to validate this file.
+
 ## Centroid descriptor words
 
 The per-centroid descriptor stream (format docs, section 16.2) was read on

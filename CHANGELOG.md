@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   order came out wrong, and most MS2 scans read as MS1. The records are now
   walked by that count, and the walk is used only when it ends exactly at the
   end of the stream. Files without named events read as before.
+- Scan events of multiplexed Q Exactive and Exploris scans are read at their
+  own record boundaries, with every precursor. Their v66 bodies start with a
+  reaction count and hold one 56-byte reaction per precursor, so a scan with
+  two precursors has a record 56 bytes longer than one with a single
+  precursor. As with named events, the reader read every record after the
+  first at a drifting offset. The records are now walked by the reaction
+  count, under the same exact-end condition, and each event reads all of its
+  reactions. Seen on the public PXD021080 Q Exactive HF-X PRM files.
 - Source CID energy from the method XML no longer depends on how the embedded
   method file is laid out. The XML is now read as the `Data` stream of the
   method's compound file, by its sector chain and recorded length. The text
