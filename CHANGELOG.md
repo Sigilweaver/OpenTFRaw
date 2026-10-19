@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Scan events of v66 files whose events carry a name are read at their own
+  record boundaries. Orbitrap Exploris targeted-MS2 events store the name of
+  their inclusion-list entry after the 136-byte body, as a UTF-16 character
+  count and the characters, so their records are longer than the others. The
+  reader inferred one record size from the stream length and read every record
+  after the first at a drifting offset: analyzer, polarity, scan mode and MS
+  order came out wrong, and most MS2 scans read as MS1. The records are now
+  walked by that count, and the walk is used only when it ends exactly at the
+  end of the stream. Files without named events read as before.
 - Source CID energy from the method XML no longer depends on how the embedded
   method file is laid out. The XML is now read as the `Data` stream of the
   method's compound file, by its sector chain and recorded length. The text

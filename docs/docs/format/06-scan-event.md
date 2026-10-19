@@ -86,6 +86,38 @@ layouts retain their separate handling.
 | last-1 | UInt32 | unknown_long[d] |
 | last | UInt32 | unknown_long[e] |
 
+### 21.3 Version 66 Record Sizes
+
+The v66 records lie back to back from `scan_trailer_addr + 4` to
+`RunHeader.scan_params_addr`, and no record stores its own size. The reader
+tries these layouts in order and uses the first that fits:
+
+1. Tribrid sizes: 232-byte primary records and 288- or 344-byte dependent
+   records. Used only if walking every record finds plausible preamble fields
+   (section 22.1) and ends exactly at `scan_params_addr`.
+2. Named events (below), walked and checked the same way.
+3. One size for every record, when the stream length divides evenly by the
+   number of events.
+4. The 232/344 tribrid sizes by stream length alone, and otherwise the floor of
+   the average record size.
+
+**Named events.** In the 136-byte Exploris body, the last UInt32 (body offset
+132) counts the UTF-16LE characters stored right after the body. The count is
+0 on most events. Targeted-MS2 events from a method with a named inclusion list
+store the name of the event's inclusion-list entry there, so their records are
+`272 + 2 * count` bytes, and one stream mixes record sizes. The fixed part of
+the body keeps the uniform layout above (acquisition window at offset 64,
+coefficient count at 80). The reader walks the records by the count and uses
+the walk only if at least one record carries a name and the walk ends exactly
+at `scan_params_addr`. A stream of named records can happen to divide evenly by
+the number of events, so the walk is tried before the uniform size.
+
+Evidence: an Orbitrap Exploris 120 targeted-MS2 acquisition with a 9-entry
+named inclusion list (not public; 462 records of 272, 286, 288 and 290 bytes).
+The walk ends exactly at `scan_params_addr`, and every name reads as text.
+Synthetic streams in the `reader.rs` unit tests cover mixed record sizes, a
+stream that divides evenly, and walks that do not end at the stream end.
+
 ---
 
 ## 22. ScanEventPreamble

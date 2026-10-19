@@ -565,6 +565,21 @@ pub struct ControllerInfo {
     pub end_time: f64,
 }
 
+// Check the documented enum fields of a v66 preamble, to reject body bytes that
+// merely resemble a scan level.
+fn is_plausible_v66_preamble(preamble: &[u8; 136]) -> bool {
+    crate::Polarity::from_byte(preamble[4]).is_some()
+        && crate::ScanMode::from_byte(preamble[5]).is_some()
+        && (1..=8).contains(&preamble[6])
+        && matches!(
+            crate::ScanType::from_byte(preamble[7]),
+            Some(scan_type) if scan_type != crate::ScanType::Undefined
+        )
+        && preamble[10] <= 1
+        && crate::Ionization::from_byte(preamble[11]).is_some()
+        && crate::Analyzer::from_byte(preamble[40]).is_some()
+}
+
 // Validate known variable-length v66 event families against every preamble and
 // the exact end of the trailer stream. Stream length alone is ambiguous: a
 // 232/288-byte Lumos DIA stream can also fit the older 232/344-byte equation.
@@ -592,18 +607,7 @@ fn matches_v66_event_layout<R: Read + Seek>(
             // fields, to reject body bytes that merely resemble a scan level.
             let prefix = [preamble[0], preamble[1], preamble[2], preamble[3]];
             let expected = *signature.get_or_insert(prefix);
-            if prefix != expected
-                || crate::Polarity::from_byte(preamble[4]).is_none()
-                || crate::ScanMode::from_byte(preamble[5]).is_none()
-                || !(1..=8).contains(&preamble[6])
-                || !matches!(
-                    crate::ScanType::from_byte(preamble[7]),
-                    Some(scan_type) if scan_type != crate::ScanType::Undefined
-                )
-                || preamble[10] > 1
-                || crate::Ionization::from_byte(preamble[11]).is_none()
-                || crate::Analyzer::from_byte(preamble[40]).is_none()
-            {
+            if prefix != expected || !is_plausible_v66_preamble(&preamble) {
                 return Ok(false);
             }
             let body = if preamble[6] == 1 && preamble[10] == 0 {
@@ -653,6 +657,133 @@ fn known_v66_body_sizes<R: Read + Seek>(
         }
     }
     Ok(None)
+}
+
+// Exploris-family events are a 136-byte preamble and a 136-byte body whose
+// last u32 is a count of UTF-16LE characters stored right after the body.
+// The count is 0 on most events; targeted-MS2 events store the name of their
+// inclusion-list entry there, so one stream mixes record sizes and no size
+// inferred from the stream length fits. Walk the records by the count and
+// return each body size (fixed part plus name) when at least one record
+// carries a name, every preamble is plausible, and the last record ends
+// exactly at the end of the stream.
+fn named_v66_body_sizes<R: Read + Seek>(
+    r: &mut BinaryReader<R>,
+    n_events: u32,
+    stream_end: u64,
+) -> Result<Option<Vec<usize>>> {
+    const PREAMBLE: u64 = 136;
+    const FIXED_BODY: u64 = 136;
+    let start = r.position();
+    let result = (|| {
+        if stream_end > r.length()? {
+            return Ok(None);
+        }
+        // Grows only with records found inside the stream, so an implausible
+        // n_events cannot drive the allocation.
+        let mut bodies = Vec::new();
+        let mut named = false;
+        let mut preamble = [0u8; PREAMBLE as usize];
+        for _ in 0..n_events {
+            if stream_end.saturating_sub(r.position()) < PREAMBLE + FIXED_BODY {
+                return Ok(None);
+            }
+            r.read_bytes_into(&mut preamble)?;
+            if !is_plausible_v66_preamble(&preamble) {
+                return Ok(None);
+            }
+            r.seek_to(r.position() + FIXED_BODY - 4)?;
+            let name_bytes = 2 * u64::from(r.read_u32()?);
+            if stream_end.saturating_sub(r.position()) < name_bytes {
+                return Ok(None);
+            }
+            r.seek_to(r.position() + name_bytes)?;
+            named |= name_bytes > 0;
+            bodies.push((FIXED_BODY + name_bytes) as usize);
+        }
+        Ok((named && r.position() == stream_end).then_some(bodies))
+    })();
+    r.seek_to(start)?;
+    result
+}
+
+/// Body sizes of the v66 scan-event records in one stream.
+#[derive(Debug, PartialEq)]
+enum V66BodySizes {
+    /// One body size for primary (MS1) events and one for dependent events.
+    ByLevel(usize, usize),
+    /// Each record's own body size.
+    PerRecord(Vec<usize>),
+}
+
+// Choose the body sizes of the v66 scan-event records between the reader's
+// position and `stream_end`. Each event = preamble (136 bytes) + body.
+//
+// Simple instruments (Q Exactive, Exploris): all events are usually identical
+// in size, so stream_bytes divides evenly by n_events.
+//
+// Tribrid instruments (Eclipse, Fusion Lumos): primary (MS1) scans and
+// dependent (MS2+) scans have different body layouts:
+//   Primary event:   232 bytes total (preamble 136 + body 96)
+//   Dependent event: 288 or 344 bytes total (body 152 or 208)
+// Lumos DIA (PXD031322) uses 232/288; Eclipse EThcD and other Lumos
+// workflows use 232/344.
+//
+// Exploris events that carry a name (targeted MS2 with a named inclusion
+// list) are 272 bytes plus the name, so each record has its own size.
+//
+// Walk the tribrid and the named layouts first; each is used only if it ends
+// exactly at the end of the stream. A stream of named records can divide
+// evenly by n_events, so the named walk precedes the uniform case. Otherwise
+// infer the sizes from the stream length.
+fn v66_body_sizes<R: Read + Seek>(
+    r: &mut BinaryReader<R>,
+    n_events: u32,
+    stream_end: u64,
+    preamble_size: usize,
+) -> Result<V66BodySizes> {
+    if n_events == 0 {
+        return Ok(V66BodySizes::ByLevel(0, 0));
+    }
+    if let Some((primary, dependent)) = known_v66_body_sizes(r, n_events, stream_end)? {
+        return Ok(V66BodySizes::ByLevel(primary, dependent));
+    }
+    if let Some(bodies) = named_v66_body_sizes(r, n_events, stream_end)? {
+        return Ok(V66BodySizes::PerRecord(bodies));
+    }
+    let stream_bytes = stream_end.saturating_sub(r.position());
+    let n = u64::from(n_events);
+    if stream_bytes.is_multiple_of(n) {
+        // Uniform event size (Q Exactive, Exploris, etc.)
+        let body = ((stream_bytes / n) as usize).saturating_sub(preamble_size);
+        return Ok(V66BodySizes::ByLevel(body, body));
+    }
+    // Variable-length events: tribrid Orbitrap instruments.
+    // Known sizes: primary=232, dependent=344 (body 96 and 208).
+    const PRIMARY_EVENT: u64 = 232;
+    const DEPENDENT_EVENT: u64 = 344;
+    let gap = DEPENDENT_EVENT - PRIMARY_EVENT;
+    // n_primary * PRIMARY_EVENT + n_dependent * DEPENDENT_EVENT = stream_bytes
+    // n_primary + n_dependent = n
+    // => n_primary = (n * DEPENDENT_EVENT - stream_bytes) / gap
+    let n_primary_numerator = n
+        .saturating_mul(DEPENDENT_EVENT)
+        .saturating_sub(stream_bytes);
+    if n_primary_numerator % gap == 0 {
+        let n_primary = n_primary_numerator / gap;
+        let n_dependent = n.saturating_sub(n_primary);
+        let total_check = n_primary * PRIMARY_EVENT + n_dependent * DEPENDENT_EVENT;
+        if total_check == stream_bytes {
+            // Verified: use the tribrid sizes.
+            return Ok(V66BodySizes::ByLevel(
+                (PRIMARY_EVENT as usize).saturating_sub(preamble_size),
+                (DEPENDENT_EVENT as usize).saturating_sub(preamble_size),
+            ));
+        }
+    }
+    // Fallback: use floor-average uniform body
+    let body = ((stream_bytes / n) as usize).saturating_sub(preamble_size);
+    Ok(V66BodySizes::ByLevel(body, body))
 }
 
 impl RawFileReader {
@@ -744,82 +875,26 @@ impl RawFileReader {
         };
         // For v66, compute per-event body sizes from the stream's address range.
         // The scan event stream spans [scan_trailer_addr+4 .. scan_params_addr).
-        // Each event = preamble (136 bytes) + body.
-        //
-        // Simple instruments (Q Exactive, Exploris): all events are identical in
-        // size so stream_bytes divides evenly by n_events.
-        //
-        // Tribrid instruments (Eclipse, Fusion Lumos): primary (MS1) scans and
-        // dependent (MS2+) scans have different body layouts:
-        //   Primary event:   232 bytes total (preamble 136 + body 96)
-        //   Dependent event: 288 or 344 bytes total (body 152 or 208)
-        // Lumos DIA (PXD031322) uses 232/288; Eclipse EThcD and other Lumos
-        // workflows use 232/344. Check those boundaries first, then infer the sizes
-        // from the stream length.
         let preamble_size = ScanEventPreamble::size_for_version(version);
-        let (v66_body_primary, v66_body_dependent): (usize, usize) =
-            if version >= 66 && n_events > 0 {
-                let stream_bytes = run_header
-                    .scan_params_addr
-                    .saturating_sub(run_header.scan_trailer_addr)
-                    .saturating_sub(4);
-                let remainder = stream_bytes % n_events as u64;
-                if let Some(sizes) =
-                    known_v66_body_sizes(&mut r, n_events, run_header.scan_params_addr)?
-                {
-                    sizes
-                } else if remainder == 0 {
-                    // Uniform event size (Q Exactive, Exploris, etc.)
-                    let body = (stream_bytes / n_events as u64) as usize;
-                    let body = body.saturating_sub(preamble_size);
-                    (body, body)
-                } else {
-                    // Variable-length events: tribrid Orbitrap instruments.
-                    // Known sizes: primary=232, dependent=344 (body 96 and 208).
-                    const PRIMARY_EVENT: u64 = 232;
-                    const DEPENDENT_EVENT: u64 = 344;
-                    let gap = DEPENDENT_EVENT - PRIMARY_EVENT;
-                    let n = n_events as u64;
-                    // n_primary * PRIMARY_EVENT + n_dependent * DEPENDENT_EVENT = stream_bytes
-                    // n_primary + n_dependent = n
-                    // => n_primary = (n * DEPENDENT_EVENT - stream_bytes) / gap
-                    let n_primary_numerator = n
-                        .saturating_mul(DEPENDENT_EVENT)
-                        .saturating_sub(stream_bytes);
-                    if n_primary_numerator % gap == 0 {
-                        let n_primary = n_primary_numerator / gap;
-                        let n_dependent = n.saturating_sub(n_primary);
-                        let total_check = n_primary * PRIMARY_EVENT + n_dependent * DEPENDENT_EVENT;
-                        if total_check == stream_bytes {
-                            // Verified: use the tribrid sizes.
-                            (
-                                (PRIMARY_EVENT as usize).saturating_sub(preamble_size),
-                                (DEPENDENT_EVENT as usize).saturating_sub(preamble_size),
-                            )
-                        } else {
-                            // Fallback: use floor-average uniform body
-                            let body = ((stream_bytes / n) as usize).saturating_sub(preamble_size);
-                            (body, body)
-                        }
-                    } else {
-                        // Fallback: use floor-average uniform body
-                        let body = ((stream_bytes / n) as usize).saturating_sub(preamble_size);
-                        (body, body)
-                    }
-                }
-            } else {
-                (0, 0)
-            };
+        let v66_bodies = if version >= 66 {
+            v66_body_sizes(&mut r, n_events, run_header.scan_params_addr, preamble_size)?
+        } else {
+            V66BodySizes::ByLevel(0, 0)
+        };
         // Each event consumes at least its preamble on disk (the body may add
         // more, but the preamble alone is a safe lower bound for the count check).
         r.check_count(n_events as u64, preamble_size as u64)?;
         let mut scan_events = Vec::with_capacity(n_events as usize);
-        for _ in 0..n_events {
+        for i in 0..n_events as usize {
+            let (body_primary, body_dependent) = match &v66_bodies {
+                V66BodySizes::ByLevel(primary, dependent) => (*primary, *dependent),
+                V66BodySizes::PerRecord(bodies) => (bodies[i], bodies[i]),
+            };
             scan_events.push(ScanEvent::read(
                 &mut r,
                 version,
-                v66_body_primary,
-                v66_body_dependent,
+                body_primary,
+                body_dependent,
             )?);
         }
 
@@ -2382,7 +2457,7 @@ mod dia_layout_tests {
     use super::*;
     use std::io::Cursor;
 
-    fn events(levels: &[u8], primary_body: usize, dependent_body: usize) -> Vec<u8> {
+    pub(super) fn events(levels: &[u8], primary_body: usize, dependent_body: usize) -> Vec<u8> {
         let mut bytes = Vec::new();
         for (index, &level) in levels.iter().enumerate() {
             let body_size = if level == 1 {
@@ -2500,5 +2575,195 @@ mod dia_layout_tests {
         let mut r = BinaryReader::new(Cursor::new(bytes));
         assert!(!matches_v66_event_layout(&mut r, 4, end, 96, 152).unwrap());
         assert_eq!(r.position(), 0);
+    }
+}
+
+#[cfg(test)]
+mod named_event_tests {
+    use super::*;
+    use crate::test_util::utf16;
+    use std::io::Cursor;
+
+    // An Exploris-style record: a 136-byte preamble, a 136-byte body whose
+    // last u32 counts the UTF-16 characters of `name`, then the name.
+    fn record(level: u8, index: usize, name: &str) -> Vec<u8> {
+        let mut bytes = vec![0u8; 136];
+        bytes[..4].copy_from_slice(&[1, 1, 0, 0]);
+        bytes[4] = 1;
+        bytes[5] = 1;
+        bytes[6] = level;
+        bytes[11] = 5;
+        bytes[40] = 4;
+        let mut body = vec![0u8; 136];
+        body[..4].copy_from_slice(&1u32.to_le_bytes());
+        if level > 1 {
+            body[4..12].copy_from_slice(&(300.0 + index as f64).to_le_bytes());
+            body[20..28].copy_from_slice(&30.0f64.to_le_bytes());
+        }
+        body[64..72].copy_from_slice(&50.0f64.to_le_bytes());
+        body[72..80].copy_from_slice(&(500.0 + index as f64).to_le_bytes());
+        body[80..84].copy_from_slice(&2u32.to_le_bytes());
+        body[84..92].copy_from_slice(&(index as f64).to_le_bytes());
+        body[92..100].copy_from_slice(&1.5f64.to_le_bytes());
+        let name = utf16(name);
+        body[132..136].copy_from_slice(&(name.len() as u32 / 2).to_le_bytes());
+        bytes.extend(body);
+        bytes.extend(name);
+        bytes
+    }
+
+    fn stream(records: &[(u8, &str)]) -> Vec<u8> {
+        records
+            .iter()
+            .enumerate()
+            .flat_map(|(index, &(level, name))| record(level, index, name))
+            .collect()
+    }
+
+    // Full MS events carry no name; targeted-MS2 events carry 7 to 9 characters.
+    const MIXED: [(u8, &str); 7] = [
+        (1, ""),
+        (2, "target1"),
+        (2, "target02"),
+        (2, "target003"),
+        (1, ""),
+        (2, "target003"),
+        (2, "target1"),
+    ];
+
+    #[test]
+    fn mixed_named_records_decode_at_their_own_offsets() {
+        let bytes = stream(&MIXED);
+        let end = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        // 272, 286, 288, 290, 272, 290 and 286 bytes: no single size fits.
+        assert_ne!(end % MIXED.len() as u64, 0);
+        let sizes = v66_body_sizes(&mut r, MIXED.len() as u32, end, 136).unwrap();
+        let bodies = vec![136, 150, 152, 154, 136, 154, 150];
+        assert_eq!(sizes, V66BodySizes::PerRecord(bodies.clone()));
+        assert_eq!(r.position(), 0);
+        for (index, (&(level, _), body)) in MIXED.iter().zip(bodies).enumerate() {
+            let event = ScanEvent::read(&mut r, 66, body, body).unwrap();
+            assert_eq!(event.preamble.bytes[6], level);
+            assert_eq!(event.preamble.bytes[40], 4);
+            if level == 2 {
+                assert_eq!(event.reactions.len(), 1);
+                assert_eq!(event.reactions[0].precursor_mz, 300.0 + index as f64);
+                assert_eq!(event.reactions[0].energy, 30.0);
+            } else {
+                assert!(event.reactions.is_empty());
+            }
+            assert_eq!(event.fraction_collectors.len(), 1);
+            assert_eq!(event.fraction_collectors[0].low_mz, 50.0);
+            assert_eq!(event.fraction_collectors[0].high_mz, 500.0 + index as f64);
+            assert_eq!(event.coefficients, vec![index as f64, 1.5]);
+        }
+        assert_eq!(r.position(), end);
+    }
+
+    #[test]
+    fn named_walk_precedes_an_evenly_dividing_stream() {
+        // 272 + 290 + 272 + 290 = 4 * 281: the uniform size would be wrong.
+        let records = [(1, ""), (2, "target003"), (1, ""), (2, "target003")];
+        let bytes = stream(&records);
+        let end = bytes.len() as u64;
+        assert_eq!(end, 4 * 281);
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(
+            v66_body_sizes(&mut r, 4, end, 136).unwrap(),
+            V66BodySizes::PerRecord(vec![136, 154, 136, 154])
+        );
+        assert_eq!(r.position(), 0);
+    }
+
+    #[test]
+    fn walk_is_not_used_unless_it_ends_at_the_stream_end() {
+        let bytes = stream(&MIXED);
+        let records_end = bytes.len() as u64;
+        let n = MIXED.len() as u32;
+
+        // Bytes after the last record.
+        let mut padded = bytes.clone();
+        padded.extend([0u8; 2]);
+        let end = padded.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(padded));
+        assert_eq!(named_v66_body_sizes(&mut r, n, end).unwrap(), None);
+        assert_eq!(r.position(), 0);
+        // The stream-length inference is left to decide, as before.
+        assert!(matches!(
+            v66_body_sizes(&mut r, n, end, 136).unwrap(),
+            V66BodySizes::ByLevel(..)
+        ));
+
+        // A stream that ends inside the last name.
+        let mut r = BinaryReader::new(Cursor::new(bytes.clone()));
+        assert_eq!(
+            named_v66_body_sizes(&mut r, n, records_end - 2).unwrap(),
+            None
+        );
+        assert_eq!(r.position(), 0);
+
+        // One record fewer than the stream holds.
+        let mut r = BinaryReader::new(Cursor::new(bytes.clone()));
+        assert_eq!(
+            named_v66_body_sizes(&mut r, n - 1, records_end).unwrap(),
+            None
+        );
+
+        // A stream that claims one more record than the input holds.
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(
+            named_v66_body_sizes(&mut r, n + 1, records_end + 272).unwrap(),
+            None
+        );
+        assert_eq!(r.position(), 0);
+    }
+
+    #[test]
+    fn records_without_names_keep_the_uniform_size() {
+        let bytes = stream(&[(1, ""), (2, ""), (2, ""), (1, "")]);
+        let end = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(named_v66_body_sizes(&mut r, 4, end).unwrap(), None);
+        assert_eq!(
+            v66_body_sizes(&mut r, 4, end, 136).unwrap(),
+            V66BodySizes::ByLevel(136, 136)
+        );
+    }
+
+    #[test]
+    fn implausible_preamble_stops_the_walk() {
+        let mut bytes = stream(&MIXED);
+        let end = bytes.len() as u64;
+        // The third record starts after 272 + 286 bytes; give it no analyzer.
+        bytes[272 + 286 + 40] = 9;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(named_v66_body_sizes(&mut r, 7, end).unwrap(), None);
+        assert_eq!(r.position(), 0);
+    }
+
+    #[test]
+    fn implausible_counts_are_rejected() {
+        let mut bytes = stream(&MIXED);
+        let end = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes.clone()));
+        assert_eq!(named_v66_body_sizes(&mut r, u32::MAX, end).unwrap(), None);
+
+        // The second record's character count, at the end of its fixed body.
+        bytes[272 + 268..272 + 272].copy_from_slice(&u32::MAX.to_le_bytes());
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(named_v66_body_sizes(&mut r, 7, end).unwrap(), None);
+        assert_eq!(r.position(), 0);
+    }
+
+    #[test]
+    fn tribrid_layouts_are_tried_first() {
+        let bytes = super::dia_layout_tests::events(&[1, 2, 2, 3, 2], 96, 208);
+        let end = bytes.len() as u64;
+        let mut r = BinaryReader::new(Cursor::new(bytes));
+        assert_eq!(
+            v66_body_sizes(&mut r, 5, end, 136).unwrap(),
+            V66BodySizes::ByLevel(96, 208)
+        );
     }
 }
