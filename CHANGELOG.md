@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   24 and up hold a number that reads as an assigned charge state. What
   bits 20, 22 and 23 mark is not established. Details are in the format
   docs, section 16.2.
+- Python `profile_chunks()`: how a scan's profile is stored, or `None` when
+  it stores none. It returns the profile header's `first_value`, `step`
+  and `nbins`, each chunk's `first_bin`, `n_points` and `fudge` (the m/z
+  correction stored with the chunk, `NaN` where the packet layout stores
+  none) and the scan event's `coefficients`. `profile()` folds the fudge
+  into its m/z values; this keeps it apart from the frequency-to-m/z
+  conversion.
 
 ## [3.0.0] - 2026-10-11
 

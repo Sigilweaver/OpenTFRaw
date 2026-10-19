@@ -309,3 +309,36 @@ fixture.
   | PXD064947 | 64.5% / 2.4% of 7,670,257 | 86.4% / 2.9% of 1,967,754 | 87.6% / 3.2% of 1,222,044 | 8.3% of 9,776,524 |
 
 No vendor software, SDK, or vendor output was used for these counts.
+
+## Profile chunk layout
+
+Python `profile_chunks()` returns how a scan's profile is stored (format
+docs, sections 18 and 19). It was read on every scan of the three public
+files above that store profiles:
+
+| File | Instrument | Scans with a profile | Chunks | Points | Per-chunk fudge | Coefficients |
+| --- | --- | ---: | ---: | ---: | --- | ---: |
+| MTBLS5657 | Q Exactive Plus | 138 of 138 | 97,664 | 728,472 | on every chunk, none zero | 5 |
+| GPST000122 | Q Exactive Plus | 6,674 of 6,674 | 337,989 | 2,064,972 | on every chunk, none zero | 5 |
+| PXD054004 | LTQ FT Ultra | 163 of 1,057 | 255,168 | 1,632,018 | not stored (layout) | 4 |
+
+- On every scan with a profile, each point's frequency
+  (`first_value + (first_bin + j) * step`), converted with the scan
+  event's coefficients, plus its chunk's fudge, equals `profile()`'s m/z
+  exactly, and the chunks' `n_points` add up to `profile()`'s length. The
+  chunks are in rising bin order, do not overlap, and end at or below the
+  header's `nbins`. There is one chunk per centroid.
+- `step` is negative on every scan, so m/z rises with the bin.
+  `first_value` is 359.4 on PXD054004 and 477.9 to 989.4 on the Q Exactive
+  Plus files, frequencies in kHz: PXD054004's first bin converts to m/z 300,
+  and a singly charged ion of m/z 300 in a 7 T cyclotron turns at about
+  358 kHz.
+- The largest `|fudge|` is 0.037 m/z on MTBLS5657 and 0.065 on GPST000122.
+- The 894 ion-trap scans of PXD054004 store no profile, and
+  `profile_chunks()` returns `None` for them.
+
+The opt-in `test_public_profile_chunks_rebuild_profile` checks the two
+Q Exactive Plus files through `OPENTFRAW_LOCK_MASS_PLUS_RAW` and
+`OPENTFRAW_SOURCE_CID_PLUS_RAW`; `test_profile_chunks` checks the
+PXD054004 CI fixture. No vendor software, SDK, or vendor output was used
+for these counts.
