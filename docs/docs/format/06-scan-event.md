@@ -115,11 +115,10 @@ the walk only if at least one record carries a name and the walk ends exactly
 at `scan_params_addr`. A stream of named records can happen to divide evenly by
 the number of events, so the walk is tried before the uniform size.
 
-Evidence: an Orbitrap Exploris 120 targeted-MS2 acquisition with a 9-entry
-named inclusion list (not public; 462 records of 272, 286, 288 and 290 bytes).
-The walk ends exactly at `scan_params_addr`, and every name reads as text.
-Synthetic streams in the `reader.rs` unit tests cover mixed record sizes, a
-stream that divides evenly, and walks that do not end at the stream end.
+Evidence: synthetic streams in the `reader.rs` unit tests cover mixed record
+sizes, a stream that divides evenly, and walks that do not end at the stream
+end. No public corpus file has named events, so no public-file test covers
+this layout yet.
 
 **Counted events.** Q Exactive and Exploris bodies follow the pre-v66 order
 (section 21.1) with a longer reaction record:
