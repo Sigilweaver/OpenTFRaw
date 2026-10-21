@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after the first at a drifting offset: analyzer, polarity, scan mode and MS
   order came out wrong, and most MS2 scans read as MS1. The records are now
   walked by that count, and the walk is used only when it ends exactly at the
-  end of the stream. Files without named events read as before.
+  end of the stream. Files without named events read as before. No public
+  corpus file has named events; the layout is covered by unit tests only.
 - Source CID energy from the method XML no longer depends on how the embedded
   method file is laid out. The XML is now read as the `Data` stream of the
   method's compound file, by its sector chain and recorded length. The text

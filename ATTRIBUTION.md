@@ -69,9 +69,6 @@ Values cross-checked this way:
 - Which collision energy is reported when a scan carries both a normalized
   and an eV value.
 - Per-centroid descriptor words: the lock-mass bit (Q Exactive Plus files).
-- Scan-event record boundaries of Orbitrap Exploris targeted-MS2 files with a
-  named inclusion list: the scan filter of every scan (Orbitrap Exploris 120
-  file).
 
 ## Rust dependencies
 
