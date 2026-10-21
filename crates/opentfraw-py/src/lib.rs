@@ -256,6 +256,31 @@ impl RawFile {
             .lock()
             .map_err(|_| PyIOError::new_err("internal error: source mutex poisoned"))
     }
+
+    /// The frequency-to-m/z coefficients of `scan_number`'s scan event, as the
+    /// profile accessors use them. Empty for ITMS / already-m/z-domain scans,
+    /// in which case `to_mz_intensity` passes the profile axis through.
+    /// `method` names the caller in the error raised for flat-peak SRM files,
+    /// which store no profile.
+    fn profile_coefficients(&self, method: &str, scan_number: u32) -> PyResult<Vec<f64>> {
+        use ::opentfraw::scan_format::ScanDataFormat;
+        if self.reader.scan_format != ScanDataFormat::PacketHeader {
+            return Err(PyValueError::new_err(format!(
+                "{method}() is only available for PacketHeader files (Orbitrap/ion-trap); \
+                 this file uses a flat-peak SRM format"
+            )));
+        }
+        let first = self.first_scan();
+        let idx = scan_number.checked_sub(first).ok_or_else(|| {
+            PyIndexError::new_err(format!("scan {scan_number} < first scan {first}"))
+        })? as usize;
+        Ok(self
+            .reader
+            .scan_events
+            .get(idx)
+            .map(|e| e.coefficients().to_vec())
+            .unwrap_or_default())
+    }
 }
 
 #[pymethods]
@@ -614,26 +639,7 @@ impl RawFile {
         py: Python<'py>,
         scan_number: u32,
     ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
-        use ::opentfraw::scan_format::ScanDataFormat;
-        if self.reader.scan_format != ScanDataFormat::PacketHeader {
-            return Err(PyValueError::new_err(
-                "profile() is only available for PacketHeader files (Orbitrap/ion-trap); \
-                 this file uses a flat-peak SRM format",
-            ));
-        }
-        let first = self.first_scan();
-        let idx = scan_number.checked_sub(first).ok_or_else(|| {
-            PyIndexError::new_err(format!("scan {scan_number} < first scan {first}"))
-        })? as usize;
-
-        // Frequency->m/z coefficients live on the scan event (empty for ITMS /
-        // already-m/z-domain scans, in which case to_mz_intensity passes through).
-        let coefficients: Vec<f64> = self
-            .reader
-            .scan_events
-            .get(idx)
-            .map(|e| e.coefficients().to_vec())
-            .unwrap_or_default();
+        let coefficients = self.profile_coefficients("profile", scan_number)?;
 
         let mut src = self.locked_source()?;
         let packet = self
@@ -646,6 +652,72 @@ impl RawFile {
             None => (Vec::new(), Vec::new()),
         };
         Ok((mz.to_pyarray(py), intensity.to_pyarray(py)))
+    }
+
+    /// Read how the **profile** of `scan_number` is stored: where each chunk
+    /// sits on the scan's frequency axis and the m/z correction stored with
+    /// it. Returns ``None`` for scans with no stored profile.
+    ///
+    /// The dict holds:
+    ///
+    /// - ``first_value`` : float, the axis value of bin 0
+    /// - ``step`` : float, the axis spacing of one bin
+    /// - ``nbins`` : int, the bin count recorded in the profile header
+    /// - ``first_bin`` : uint32, per chunk, the bin of its first point
+    /// - ``n_points`` : uint32, per chunk, its number of points
+    /// - ``fudge`` : float32, per chunk, the stored m/z correction, ``NaN``
+    ///   where the packet layout stores none
+    /// - ``coefficients`` : float64, the scan event's frequency-to-m/z
+    ///   coefficients, the same ones :meth:`profile` uses
+    ///
+    /// Point ``j`` of chunk ``i`` sits at
+    /// ``first_value + (first_bin[i] + j) * step``. On the FT files tested
+    /// that is a frequency in kHz and ``step`` is negative, so m/z rises
+    /// with the bin. :meth:`profile` returns the chunks' points in this
+    /// order, so ``numpy.cumsum(n_points)[:-1]`` splits its arrays per
+    /// chunk, and each of its m/z values is that axis value converted with
+    /// ``coefficients``, plus the chunk's ``fudge``. Where ``coefficients``
+    /// is empty, the axis is m/z already and nothing is converted.
+    ///
+    /// This reads the whole scan packet, like :meth:`profile`, but returns
+    /// no signal.
+    fn profile_chunks<'py>(
+        &self,
+        py: Python<'py>,
+        scan_number: u32,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let coefficients = self.profile_coefficients("profile_chunks", scan_number)?;
+
+        let packet = {
+            let mut src = self.locked_source()?;
+            self.reader
+                .read_scan(&mut *src, scan_number)
+                .map_err(to_py_err)?
+        };
+        let Some(profile) = packet.profile else {
+            return Ok(None);
+        };
+
+        let k = profile.chunks.len();
+        let mut first_bin = Vec::with_capacity(k);
+        let mut n_points = Vec::with_capacity(k);
+        let mut fudge = Vec::with_capacity(k);
+        for chunk in &profile.chunks {
+            first_bin.push(chunk.first_bin);
+            // The length was stored as a u32 in the packet, so it fits.
+            n_points.push(chunk.signal.len() as u32);
+            fudge.push(chunk.fudge.unwrap_or(f32::NAN));
+        }
+
+        let d = PyDict::new(py);
+        d.set_item("first_value", profile.first_value)?;
+        d.set_item("step", profile.step)?;
+        d.set_item("nbins", profile.nbins)?;
+        d.set_item("first_bin", first_bin.to_pyarray(py))?;
+        d.set_item("n_points", n_points.to_pyarray(py))?;
+        d.set_item("fudge", fudge.to_pyarray(py))?;
+        d.set_item("coefficients", coefficients.to_pyarray(py))?;
+        Ok(Some(d))
     }
 
     /// Read per-peak FT label data for `scan_number`.
