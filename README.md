@@ -22,15 +22,17 @@ Documentation: [sigilweaver.app/opentfraw/docs](https://sigilweaver.app/opentfra
 
 Measured on the public test corpus (291 files from 56 PRIDE datasets).
 
-- **Scan metadata is wrong on 38 of 291 corpus files (13%).** On these
+- **Scan metadata is wrong on 34 of 291 corpus files (12%).** On these
   files the scan event is misread: MS level, polarity, analyzer,
   activation and precursor fields can be wrong, for example MS2 scans
   reported as negative-polarity MS1 in a positive-mode run. Peak m/z and
   intensity values are not affected. Affected: 30 of 52 Orbitrap Fusion
   Lumos files (PXD007683, PXD025230, PXD037285, PXD064117, PXD067311,
-  PXD070648), 4 of 12 Q Exactive HF-X files (PXD021080), 2 of 2 Orbitrap
-  Ascend files (PXD061791), 1 of 18 Orbitrap Eclipse files (PXD054530) and
-  1 LTQ file (PXD039587).
+  PXD070648), 2 of 2 Orbitrap Ascend files (PXD061791), 1 of 18 Orbitrap
+  Eclipse files (PXD054530) and 1 LTQ file (PXD039587).
+- **Precursor m/z reads as 0.5** on the MS2 scans of 4 Orbitrap Fusion
+  Lumos files (PXD023217): `target_mz` and `selected_mz` are 0.5 while the
+  scan filter and the reaction hold the real precursor (for example 652.9).
 - **Activation methods:** CID, HCD, ETD and EThcD are identified. ETD and
   EThcD are read only from format version 66 files (no older ETD file is in
   the corpus). Other methods (UVPD, ECD, PQD and so on) decode as unknown,
