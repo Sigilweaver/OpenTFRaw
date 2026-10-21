@@ -124,7 +124,7 @@ guide, format specification, and API reference.
 
 | Project | Description |
 |---------|-------------|
-| [Mascope](https://github.com/karsa-oy/mascope) by [Karsa Oy](https://github.com/karsa-oy) | Mass spectrometry data analysis platform using OpenTFRaw to ingest Thermo `.raw` files. |
+| [Mascope](https://github.com/ultra-trace-systems/mascope) by [Ultra Trace](https://github.com/ultra-trace-systems) | Mass spectrometry data analysis platform using OpenTFRaw to ingest Thermo `.raw` files. |
 
 ## License
 
