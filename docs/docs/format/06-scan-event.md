@@ -71,6 +71,7 @@ relative to the end of the 136-byte preamble:
 |--------|------------|---------------------------|--------------------------|
 | Fusion Lumos primary (PXD031322) | 96 | 8 | 24 |
 | Q Exactive / Exploris uniform events | 136 / 144 | 64 | 80 |
+| Q Exactive / Exploris, n reactions | 136 / 144 + 56 * (n - 1) | 8 + 56 * n | 24 + 56 * n |
 | Tribrid dependent events | 208 | 120 | 144 |
 
 For the 96-byte primary layout, using `body_size - 64` as the coefficient
@@ -85,6 +86,75 @@ layouts retain their separate handling.
 | last-2 | UInt32 | unknown_long[c] |
 | last-1 | UInt32 | unknown_long[d] |
 | last | UInt32 | unknown_long[e] |
+
+### 21.3 Version 66 Record Sizes
+
+The v66 records lie back to back from `scan_trailer_addr + 4` to
+`RunHeader.scan_params_addr`, and no record stores its own size. The reader
+tries these layouts in order and uses the first that fits:
+
+1. Tribrid sizes: 232-byte primary records and 288- or 344-byte dependent
+   records. Used only if walking every record finds plausible preamble fields
+   (section 22.1) and ends exactly at `scan_params_addr`.
+2. Named events (below), walked and checked the same way.
+3. Counted events (below), walked and checked the same way, with a 136-byte
+   and then a 144-byte fixed body.
+4. One size for every record, when the stream length divides evenly by the
+   number of events.
+5. The 232/344 tribrid sizes by stream length alone, and otherwise the floor of
+   the average record size.
+
+**Named events.** In the 136-byte Exploris body, the last UInt32 (body offset
+132) counts the UTF-16LE characters stored right after the body. The count is
+0 on most events. Targeted-MS2 events from a method with a named inclusion list
+store the name of the event's inclusion-list entry there, so their records are
+`272 + 2 * count` bytes, and one stream mixes record sizes. The fixed part of
+the body keeps the uniform layout above (acquisition window at offset 64,
+coefficient count at 80). The reader walks the records by the count and uses
+the walk only if at least one record carries a name and the walk ends exactly
+at `scan_params_addr`. A stream of named records can happen to divide evenly by
+the number of events, so the walk is tried before the uniform size.
+
+Evidence: synthetic streams in the `reader.rs` unit tests cover mixed record
+sizes, a stream that divides evenly, and walks that do not end at the stream
+end. No public corpus file has named events, so no public-file test covers
+this layout yet.
+
+**Counted events.** Q Exactive and Exploris bodies follow the pre-v66 order
+(section 21.1) with a longer reaction record:
+
+| Body offset | Type | Field |
+|-------------|------|-------|
+| 0 | UInt32 | n_reactions (1 on single-precursor and MS1 events) |
+| 4 | Reaction56[n_reactions] | reactions |
+| 4 + 56n | UInt32 | unknown |
+| 8 + 56n | FractionCollector | acquisition window |
+| 24 + 56n | UInt32 | nparam |
+| 28 + 56n | Float64[nparam] | coefficients |
+| ... | | tail; its last UInt32 is the name count above |
+
+A 56-byte reaction holds the precursor m/z (Float64 at +0), an undecoded
+Float64 (+8), the activation energy (Float64 at +16) and 32 undecoded bytes,
+so its first 24 bytes match the pre-v66 reaction. The fixed body (one reaction,
+no name) is 136 bytes on Exploris and 144 on Q Exactive instruments. MS1
+events store one reaction too; it is not read as a precursor.
+
+Multiplexed scans store one reaction per precursor, so their records are 56
+bytes longer for each precursor after the first. The reader walks the records
+by the reaction count and the name count, and uses the walk only if at least
+one record differs from the fixed size and the walk ends exactly at
+`scan_params_addr`. Every precursor is then read and listed in the scan filter.
+The filter gets no token for multiplexing: no open reference for one was
+found.
+
+Evidence: public PRIDE PXD021080 (Q Exactive HF-X, PRM; see CORPUS.md). Its
+4,142 records are 280 bytes with one reaction or 336 bytes with two, and the
+walk ends exactly at `scan_params_addr`. Each scan's trailer names its
+injections in `Multiple Injection:` (`h ` or `h h  mpx`), and the reaction
+count equals the number of `h` tokens on every scan. On the three lock-mass
+fixtures and GPST000122 in CORPUS.md (Q Exactive Plus, HF-X and Exploris 480)
+the count is 1 on every record and the same walk ends exactly at the stream
+end, so those files keep the uniform size.
 
 ---
 

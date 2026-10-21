@@ -6,29 +6,77 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-- Fixed incorrect `precursor_mz` in FlatV66 TSQ SRM files when multiple scan events share identical product ion m/z ranges.
 
-### Fixed
-
-- Source CID energy from the method XML no longer depends on how the embedded
-  method file is laid out. The XML is now read as the `Data` stream of the
-  method's compound file, by its sector chain and recorded length. The text
-  scan used before ended early where the stream's sectors were not adjacent,
-  and ran on into bytes left after the stream's end. Either way the XML did
-  not parse, and `sid=<energy>` and the source CID extra fields were left out.
-  `instrument_method_text()` is unchanged. (#57)
+## [3.1.0] - 2026-10-20
 
 ### Added
 
-- Per-centroid descriptor words. FT scans store one u32 per centroid after
-  the peak list, which the reader skipped. `ScanDataPacket` gains
-  `descriptors` and Python `centroid_labels()` gains `descriptor` (uint32,
-  aligned with `mz`, 0 for scans without the stream). The word is passed
-  through as stored: bits 0-19 are the peak's position in the peak list,
-  bit 21 is set on the centroid of a lock mass found in the scan, and bits
-  24 and up hold a number that reads as an assigned charge state. What
-  bits 20, 22 and 23 mark is not established. Details are in the format
-  docs, section 16.2.
+- Per-centroid descriptor words in Rust `ScanDataPacket.descriptors` and
+  Python `centroid_labels()["descriptor"]`. (#79)
+  FT scans store one u32 per centroid after the peak list, which the reader
+  skipped. The Python array is uint32, aligned with `mz`, and zero-filled for
+  scans without the stream. The word is passed through as stored: bits 0-19
+  are the peak's position in the peak list, bit 21 marks a matched lock-mass
+  centroid in the tested public acquisitions, and bits 24 and up hold a number
+  that reads as an assigned charge state. What bits 20, 22 and 23 mark is not
+  established. Details are in the format docs, section 16.2.
+- Python `profile_chunks()`: how a scan's profile is stored, or `None` when
+  it stores none. (#88)
+  It returns the profile header's `first_value`, `step` and `nbins`, each
+  chunk's `first_bin`, `n_points` and `fudge` (the m/z correction stored with
+  the chunk, `NaN` where the packet layout stores none) and the scan event's
+  `coefficients`. `profile()` folds the fudge into its m/z values; this keeps
+  it apart from the frequency-to-m/z conversion.
+- `Error::InvalidPrecursorMz` for a scan-event reaction whose precursor m/z is
+  negative or non-finite. (#87)
+
+### Fixed
+
+- Multiplexed Q Exactive and Exploris scan events are read at their own record
+  boundaries, with every precursor. (#87)
+  Their v66 bodies start with a reaction count and hold one 56-byte reaction
+  per precursor, so a scan with two precursors has a record 56 bytes longer
+  than one with a single precursor. The reader inferred one record size from
+  the stream length and read every record after the first at a drifting
+  offset. The records are now walked by the reaction count, and the walk is
+  used only when it ends exactly at the end of the stream. On the public
+  PXD021080 Q Exactive HF and HF-X PRM files, MS2 scans, most of which read as
+  MS1 before, now report the right MS order, scan filter and every precursor.
+  A reaction with a negative or non-finite precursor m/z is now a decode error
+  instead of being dropped.
+- Scan events of v66 files whose events carry a name are read at their own
+  record boundaries. (#86)
+  Orbitrap Exploris targeted-MS2 events store the name of their
+  inclusion-list entry after the 136-byte body, as a UTF-16 character count
+  and the characters, so their records are longer than the others and were
+  read at a drifting offset like the multiplexed ones. The records are now
+  walked by that count, under the same exact-end condition. Files without
+  named events read as before. No public corpus file has named events; the
+  layout is covered by unit tests only.
+- Read the method XML as a compound-file stream. (#77, fixes #57)
+  Source CID energy no longer depends on how the embedded method file is laid
+  out. The XML is now read as the `Data` stream of the method's compound file,
+  by its sector chain and recorded length. The text scan used before ended
+  early where the stream's sectors were not adjacent, and ran on into bytes
+  left after the stream's end. Either way the XML did not parse, and
+  `sid=<energy>` and the source CID extra fields were left out.
+  `instrument_method_text()` is unchanged.
+- Disambiguate FlatV66 SRM transitions sharing a product m/z by scan event,
+  fixing incorrect `precursor_mz` and filter strings in TSQ SRM files. (#80)
+- Match full-width FlatV66 event IDs and enforce the shared-product corpus
+  regression. (#82)
+
+### Documentation
+
+- Qualify the centroid lock-mass flag guarantee: bit 21 is evidenced by
+  tested public acquisitions, not guaranteed for every instrument or
+  firmware. (#84)
+- Generate and validate docs indexes with shared tooling. (#83)
+- Point the Mascope entry under "Used by" at Ultra Trace. (#89)
+
+### Maintenance
+
+- Allow manual Audit runs. (#76)
 
 ## [3.0.0] - 2026-10-11
 

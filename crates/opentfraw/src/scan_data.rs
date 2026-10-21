@@ -858,6 +858,89 @@ mod tests {
         assert_eq!(pkt.noise_nodes.len(), 1);
     }
 
+    /// The bytes of a profile holding `chunks` of `(first_bin, fudge,
+    /// signal)`, with each fudge written only when `with_fudge`.
+    fn profile_bytes(with_fudge: bool, chunks: &[(u32, f32, &[f32])]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&900.0f64.to_le_bytes()); // first_value
+        bytes.extend_from_slice(&(-0.25f64).to_le_bytes()); // step
+        bytes.extend_from_slice(&(chunks.len() as u32).to_le_bytes()); // chunk count
+        bytes.extend_from_slice(&64u32.to_le_bytes()); // nbins
+        for (first_bin, fudge, signal) in chunks {
+            bytes.extend_from_slice(&first_bin.to_le_bytes());
+            bytes.extend_from_slice(&(signal.len() as u32).to_le_bytes());
+            if with_fudge {
+                bytes.extend_from_slice(&fudge.to_le_bytes());
+            }
+            for v in *signal {
+                bytes.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        bytes
+    }
+
+    #[test]
+    fn profile_chunks_keep_their_bins_and_fudge_in_either_layout() {
+        let chunks: [(u32, f32, &[f32]); 2] =
+            [(3, 0.002, &[1.0, 2.0, 3.0]), (40, -0.001, &[4.0, 5.0])];
+        // The fudge is stored when the layout's low byte is set; bit 16
+        // (f64 centroid m/z) does not count.
+        for (layout, with_fudge) in [(0x10080, true), (0x10000, false)] {
+            let mut bytes = profile_bytes(with_fudge, &chunks);
+            bytes.extend_from_slice(&0xDEAD_BEEFu32.to_le_bytes()); // what follows
+            let mut r = BinaryReader::new(Cursor::new(bytes));
+            let profile = Profile::read(&mut r, layout).unwrap();
+
+            assert_eq!(profile.first_value, 900.0);
+            assert_eq!(profile.step, -0.25);
+            assert_eq!(profile.nbins, 64);
+            assert_eq!(profile.chunks.len(), 2);
+            for (chunk, (first_bin, fudge, signal)) in profile.chunks.iter().zip(chunks) {
+                assert_eq!(chunk.first_bin, first_bin);
+                assert_eq!(chunk.signal, signal);
+                assert_eq!(chunk.fudge, with_fudge.then_some(fudge));
+            }
+            // The read ends exactly where the profile does.
+            assert_eq!(r.read_u32().unwrap(), 0xDEAD_BEEF, "layout {layout:#x}");
+        }
+    }
+
+    #[test]
+    fn to_mz_intensity_returns_the_chunks_in_order_each_with_its_fudge() {
+        // nparam=4 with A = 0, B = 1000, C = 0: mz = 1000 / f. The bins step
+        // down from f = 100, so bin b sits at f = 100 - b.
+        let coeffs = [0.0, 0.0, 1000.0, 0.0];
+        let profile = Profile {
+            first_value: 100.0,
+            step: -1.0,
+            peak_count: 2,
+            nbins: 64,
+            chunks: vec![
+                ProfileChunk {
+                    first_bin: 0,
+                    signal: vec![1.0, 2.0],
+                    fudge: Some(0.5),
+                },
+                ProfileChunk {
+                    first_bin: 50,
+                    signal: vec![3.0],
+                    fudge: Some(-0.25),
+                },
+            ],
+        };
+        let expected = [
+            (1000.0 / 100.0 + 0.5, 1.0),
+            (1000.0 / 99.0 + 0.5, 2.0),
+            (1000.0 / 50.0 - 0.25, 3.0),
+        ];
+        let result = profile.to_mz_intensity(&coeffs);
+        assert_eq!(result.len(), expected.len());
+        for ((mz, intensity), (want_mz, want_intensity)) in result.into_iter().zip(expected) {
+            assert!((mz - want_mz).abs() < 1e-12, "got {mz}, want {want_mz}");
+            assert_eq!(intensity, want_intensity);
+        }
+    }
+
     #[test]
     fn read_labels_decodes_noise_nodes() {
         let header = header_with(0, 0, 3); // one (mz, noise, baseline) node

@@ -31,7 +31,7 @@ Contributed in v1.3.0:
   in the Rust core using Howard Hinnant's public-domain civil-calendar
   arithmetic.
 
-## Oskari Kausiala ([@oskarsari](https://github.com/oskarsari)) - [Karsa Oy](https://github.com/karsa-oy)
+## Oskari Kausiala ([@oskarsari](https://github.com/oskarsari)) - [Ultra Trace](https://github.com/ultra-trace-systems)
 
 Contributed in v1.2.0:
 
