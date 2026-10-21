@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::reader::BinaryReader;
 use std::io::{Read, Seek};
 
@@ -486,6 +486,7 @@ impl ScanEvent {
         let preamble = ScanEventPreamble {
             bytes: r.read_bytes(ScanEventPreamble::size_for_version(66))?,
         };
+        let body_start = r.position();
         let body = r.read_bytes(body_size)?;
         let n_reactions = crate::bytes::read_u32_le(&body, 0)? as usize;
         // Every event stores at least one reaction; a primary MS1 event's is
@@ -497,12 +498,16 @@ impl ScanEvent {
             for i in 0..n_reactions {
                 let off = 4 + i * REACTION;
                 let mz = crate::bytes::read_f64_le(&body, off)?;
-                if mz.is_finite() && mz >= 0.0 {
-                    reactions.push(Reaction {
-                        precursor_mz: mz,
-                        energy: crate::bytes::read_f64_le(&body, off + 16)?,
+                if !(mz.is_finite() && mz >= 0.0) {
+                    return Err(Error::InvalidPrecursorMz {
+                        offset: body_start + off as u64,
+                        mz,
                     });
                 }
+                reactions.push(Reaction {
+                    precursor_mz: mz,
+                    energy: crate::bytes::read_f64_le(&body, off + 16)?,
+                });
             }
         }
         let fc_off = n_reactions.saturating_mul(REACTION).saturating_add(8);

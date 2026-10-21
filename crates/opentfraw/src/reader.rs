@@ -2918,6 +2918,21 @@ mod counted_event_tests {
     }
 
     #[test]
+    fn counted_event_rejects_an_invalid_precursor() {
+        for bad in [f64::NAN, -1.0] {
+            let mut bytes = record(144, 2, 0, 2, "");
+            // The second reaction's m/z: 136-byte preamble, 4-byte count, one
+            // 56-byte reaction.
+            bytes[196..204].copy_from_slice(&bad.to_le_bytes());
+            let mut r = BinaryReader::new(Cursor::new(bytes));
+            match ScanEvent::read_counted_v66(&mut r, 200) {
+                Err(Error::InvalidPrecursorMz { offset, .. }) => assert_eq!(offset, 196),
+                other => panic!("expected InvalidPrecursorMz, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn counted_walk_covers_exploris_bodies_and_names() {
         let records = [(1, 1, ""), (2, 2, "target1"), (2, 1, "")];
         let bytes = stream(136, &records);
