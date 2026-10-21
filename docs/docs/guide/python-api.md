@@ -44,7 +44,7 @@ for scan in raw.iter_scans():             # equivalent to scan(n) for n in range
 raw.scan_table()                          # {key: [one value per scan]} for every scan() key but mz/intensity; no peak reads
 raw.scan_filter(3)                        # scan filter string, or None
 raw.profile(3)                            # (mz, intensity) from the raw profile signal
-raw.centroid_labels(3)                    # mz/intensity/resolution/noise/baseline/signal_to_noise
+raw.centroid_labels(3)                    # mz/intensity/resolution/noise/baseline/signal_to_noise/descriptor
 ```
 
 `centroid_labels()` `noise` and `baseline` are the second and third f32 of
@@ -57,6 +57,19 @@ values measure, so treat them as raw stored values.
 `(intensity - baseline) / (noise - baseline)`, and is `NaN` where
 `noise - baseline` is not positive. The formula was matched against vendor
 software output and is not taken from a public source.
+
+`descriptor` is the uint32 word stored for each centroid after the peak
+list, unchanged. Bits 0-19 are the peak's zero-based position in the peak
+list, bit 21 is set on the centroid of a lock mass found in the scan, and
+bits 24 and up hold a number that reads as an assigned charge state (0 on
+most peaks). Bits 20, 22 and 23 are set on some peaks and what they mark is
+not established. See the format docs, section 16.2.
+
+```python
+labels = raw.centroid_labels(3)
+lock = (labels["descriptor"] >> 21) & 1 == 1   # centroids of the lock masses found
+labels["mz"][lock]
+```
 
 `resolution`, `noise`, `baseline` and `signal_to_noise` are `NaN` for scans
 without FT label data.

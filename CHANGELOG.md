@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 - Fixed incorrect `precursor_mz` in FlatV66 TSQ SRM files when multiple scan events share identical product ion m/z ranges.
+
+### Fixed
+
+- Source CID energy from the method XML no longer depends on how the embedded
+  method file is laid out. The XML is now read as the `Data` stream of the
+  method's compound file, by its sector chain and recorded length. The text
+  scan used before ended early where the stream's sectors were not adjacent,
+  and ran on into bytes left after the stream's end. Either way the XML did
+  not parse, and `sid=<energy>` and the source CID extra fields were left out.
+  `instrument_method_text()` is unchanged. (#57)
+
+### Added
+
 - Added comprehensive FlatV66 TSQ SRM transition parameter decoding from
   the pre-scan method stream (particularly applicable to small molecule workflows):
   - Extracted collision energy (`collision_energy`), isolation window
@@ -22,6 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     methods in FlatV66 files.
   - Lowered minimum Q1 and Q3 filtering thresholds (to 10.0 and
     5.0) to support small metabolite SRM transitions.
+- Per-centroid descriptor words. FT scans store one u32 per centroid after
+  the peak list, which the reader skipped. `ScanDataPacket` gains
+  `descriptors` and Python `centroid_labels()` gains `descriptor` (uint32,
+  aligned with `mz`, 0 for scans without the stream). The word is passed
+  through as stored: bits 0-19 are the peak's position in the peak list,
+  bit 21 is set on the centroid of a lock mass found in the scan, and bits
+  24 and up hold a number that reads as an assigned charge state. What
+  bits 20, 22 and 23 mark is not established. Details are in the format
+  docs, section 16.2.
 
 ## [3.0.0] - 2026-10-11
 

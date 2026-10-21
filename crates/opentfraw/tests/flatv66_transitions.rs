@@ -11,21 +11,45 @@ use opentfraw::extra::scan_extras;
 use opentfraw::{scan_metadata, ExtraFields, RawFileReader};
 use std::path::PathBuf;
 
-const MILLA_FIXTURE_NAME: &str = "PXD041995_TSQ_Altis_milla010603.raw";
-
 fn corpus_path(filename: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../corpus")
         .join(filename)
 }
 
+fn find_flatv66_fixture() -> Option<PathBuf> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let candidates = [
+        root.join("corpus/milla010603.raw"),
+        root.join("corpus/PXD041995_TSQ_Altis_milla010603.raw"),
+        root.join("milla010603.raw"),
+    ];
+    candidates.into_iter().find(|p| p.exists())
+}
+
+// CI downloads milla010603.raw and sets REQUIRE_CORPUS=1, so a missing fixture
+// fails there instead of skipping.
+fn open_milla_fixture() -> Option<RawFileReader> {
+    let Some(path) = find_flatv66_fixture() else {
+        assert!(
+            std::env::var("REQUIRE_CORPUS").as_deref() != Ok("1"),
+            "REQUIRE_CORPUS=1 but public PXD041995 milla010603.raw is missing"
+        );
+        eprintln!("Skipping FlatV66 corpus test: public PXD041995 milla010603.raw is missing");
+        return None;
+    };
+    let file = std::fs::File::open(&path).expect("open file");
+    Some(RawFileReader::open(file).expect("open raw file"))
+}
+
 // Public PRIDE PXD041995 milla010603.raw.
 // Verifies FlatV66 precursor disambiguation when multiple scan events share
 // product ion channels (e.g. event 6 and event 31).
 #[test]
-#[ignore = "requires public PXD041995 milla010603.raw fixture"]
-fn public_flatv66_shared_product_precursor_disambiguation() {
-    let raw = RawFileReader::open_path(corpus_path(MILLA_FIXTURE_NAME)).unwrap();
+fn test_flatv66_shared_product_precursor_disambiguation() {
+    let Some(raw) = open_milla_fixture() else {
+        return;
+    };
 
     // Event 6 is VVVPAK(+2) with true precursor 306.707.
     // Prior to disambiguation, shared product 513.34 caused it to report 357.213.
@@ -81,9 +105,10 @@ fn public_flatv66_shared_product_precursor_disambiguation() {
 // Verifies extraction of SRM collision energy, dwell time, and isolation window
 // width, as well as omission of opentfraw.srm_collision_energies when CEs are uniform.
 #[test]
-#[ignore = "requires public PXD041995 milla010603.raw fixture"]
 fn public_flatv66_srm_metadata_parsing() {
-    let raw = RawFileReader::open_path(corpus_path(MILLA_FIXTURE_NAME)).unwrap();
+    let Some(raw) = open_milla_fixture() else {
+        return;
+    };
 
     // Event 6: VVVPAK(+2), Q1=306.707, CE=12.1, dwell=100.0, iso_width=0.7
     assert!(

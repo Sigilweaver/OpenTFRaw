@@ -22,6 +22,12 @@ and uses CV terms from the PSI-MS ontology (psi-ms.obo):
 Instrument CV accessions were cross-referenced against the PSI-MS ontology instrument
 model branch (MS:1000031).
 
+The embedded method file is read as a Compound File Binary container, following Microsoft's
+open specification [MS-CFB](https://learn.microsoft.com/openspecs/windows_protocols/ms-cfb/)
+("Compound File Binary File Format"). Stream reads were checked during development against
+[olefile](https://github.com/decalage2/olefile) 0.47 (Philippe Lagadec, BSD-2-Clause), an
+independent open-source reader of that format. It is not a dependency.
+
 ## Validation corpus
 
 Corpus files were downloaded from the [PRIDE Archive](https://www.ebi.ac.uk/pride/):
@@ -31,6 +37,18 @@ Corpus files were downloaded from the [PRIDE Archive](https://www.ebi.ac.uk/prid
     doi:10.1093/nar/gky1106
 
 ## Cross-checks against vendor software
+
+The FlatV66 shared-product transition regression uses the public PRIDE
+PXD041995 `milla010603.raw` file (TSQ Altis), already listed in
+`scripts/sources.json`. SHA-256:
+`547ef679e21d727e967ac13be54594de136bfbc0d6634eae468ebb05fe1a3aa0`.
+Its bytes independently associate event 6 with Q1 306.707 and Q3 high
+513.340509 at record offset 1158030, and event 31 with Q1 365.216 and
+Q3 high 587.352137 at record offset 1254845. Offsets are decimal bytes
+from the file start; each record has the u32 event ID, Q1 at +8, Q3 low
+at +16, and Q3 high at +24. PR #80 additionally disclosed the
+contributor's Thermo FreeStyle comparison for these precursor values;
+the follow-up validation used only the public file bytes.
 
 The format layouts in this reader come from public data files and the
 sources listed above. Contributors have also compared some decoded values
@@ -50,6 +68,7 @@ Values cross-checked this way:
   instruments.
 - Which collision energy is reported when a scan carries both a normalized
   and an eV value.
+- Per-centroid descriptor words: the lock-mass bit (Q Exactive Plus files).
 
 ## Rust dependencies
 

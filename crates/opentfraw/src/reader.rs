@@ -14,6 +14,72 @@ use crate::scan_event::{ScanEvent, ScanEventPreamble};
 use crate::scan_index::ScanIndexEntry;
 use crate::seq_row::SeqRow;
 
+// Match the full on-disk event ID before using a shared product-ion channel.
+// Returns the matched Q3_hi offset with Q1 so callers can read the rest of the
+// transition record.
+fn flatv66_event_transition(data: &[u8], event: u16, q3_hi: f64) -> Result<Option<(usize, f64)>> {
+    for i in 24..data.len().saturating_sub(8) {
+        let hi = crate::bytes::read_f64_le(data, i)?;
+        if (hi - q3_hi).abs() < 0.002 {
+            let lo = crate::bytes::read_f64_le(data, i - 8)?;
+            if hi > lo && (hi - lo) < 0.1 {
+                let id = crate::bytes::read_u32_le(data, i - 24)?;
+                if id == u32::from(event) {
+                    let q1 = crate::bytes::read_f64_le(data, i - 16)?;
+                    if q1 > 10.0 && q1 < 3000.0 {
+                        return Ok(Some((i, q1)));
+                    }
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(test)]
+mod flatv66_event_tests {
+    use super::flatv66_event_transition;
+
+    fn transition(id: u32, q1: f64) -> Vec<u8> {
+        let mut data = vec![0; 33];
+        data[..4].copy_from_slice(&id.to_le_bytes());
+        data[8..16].copy_from_slice(&q1.to_le_bytes());
+        data[16..24].copy_from_slice(&513.32_f64.to_le_bytes());
+        data[24..32].copy_from_slice(&513.34_f64.to_le_bytes());
+        data
+    }
+
+    #[test]
+    fn shared_product_uses_matching_event() {
+        let mut data = transition(7, 357.213);
+        data.extend(transition(6, 306.707));
+        assert_eq!(
+            flatv66_event_transition(&data, 6, 513.34)
+                .unwrap()
+                .map(|(_, q1)| q1),
+            Some(306.707)
+        );
+    }
+
+    #[test]
+    fn oversized_event_does_not_alias_valid_event() {
+        let mut data = transition(65542, 357.213);
+        assert_eq!(
+            flatv66_event_transition(&data, 6, 513.34)
+                .unwrap()
+                .map(|(_, q1)| q1),
+            None
+        );
+        data.extend(transition(6, 306.707));
+        assert_eq!(
+            flatv66_event_transition(&data, 6, 513.34)
+                .unwrap()
+                .map(|(_, q1)| q1),
+            Some(306.707)
+        );
+    }
+}
+
 /// Decode little-endian UTF-16 code units from `raw` up to the first NUL
 /// (or the end). A trailing odd byte is ignored.
 fn utf16_units_until_nul(raw: &[u8]) -> Vec<u16> {
@@ -992,48 +1058,31 @@ impl RawFileReader {
                     let mut iso_width_map: HashMap<u16, f64> = HashMap::new();
 
                     'outer_v66: for (&event, &q3_hi_target) in &event_q3_hi {
-                        let end = data.len().saturating_sub(128);
-                        // First pass: match both Q3_hi AND scan_event at [i - 24] to disambiguate shared product ions
-                        for i in 24..end {
-                            let hi = crate::bytes::read_f64_le(data, i)?;
-                            if (hi - q3_hi_target).abs() < 0.002 {
-                                let lo = crate::bytes::read_f64_le(data, i - 8)?;
-                                if hi > lo && (hi - lo) < 0.1 {
-                                    let ev = crate::bytes::read_u32_le(data, i - 24)? as u16;
-                                    if ev == event {
-                                        let q1 = crate::bytes::read_f64_le(data, i - 16)?;
-                                        if q1 > 10.0 && q1 < 3000.0 {
-                                            q1_map.insert(event, q1);
-                                            if let Ok(ce) = crate::bytes::read_f64_le(data, i + 8) {
-                                                if (0.0..500.0).contains(&ce) {
-                                                    ce_map.insert(event, ce);
-                                                }
-                                            }
-                                            if let Ok(rf) = crate::bytes::read_f64_le(data, i + 48)
-                                            {
-                                                if (0.0..500.0).contains(&rf) {
-                                                    rf_lens_map.insert(event, rf);
-                                                }
-                                            }
-                                            if let Ok(dwell) =
-                                                crate::bytes::read_f64_le(data, i + 88)
-                                            {
-                                                if (0.0..5000.0).contains(&dwell) && dwell > 0.0 {
-                                                    dwell_map.insert(event, dwell);
-                                                }
-                                            }
-                                            if let Ok(iso_w) =
-                                                crate::bytes::read_f64_le(data, i + 96)
-                                            {
-                                                if (0.0..50.0).contains(&iso_w) && iso_w > 0.0 {
-                                                    iso_width_map.insert(event, iso_w);
-                                                }
-                                            }
-                                            continue 'outer_v66;
-                                        }
-                                    }
+                        let end = data.len().saturating_sub(8);
+                        if let Some((i, q1)) = flatv66_event_transition(data, event, q3_hi_target)?
+                        {
+                            q1_map.insert(event, q1);
+                            if let Ok(ce) = crate::bytes::read_f64_le(data, i + 8) {
+                                if (0.0..500.0).contains(&ce) {
+                                    ce_map.insert(event, ce);
                                 }
                             }
+                            if let Ok(rf) = crate::bytes::read_f64_le(data, i + 48) {
+                                if (0.0..500.0).contains(&rf) {
+                                    rf_lens_map.insert(event, rf);
+                                }
+                            }
+                            if let Ok(dwell) = crate::bytes::read_f64_le(data, i + 88) {
+                                if (0.0..5000.0).contains(&dwell) && dwell > 0.0 {
+                                    dwell_map.insert(event, dwell);
+                                }
+                            }
+                            if let Ok(iso_w) = crate::bytes::read_f64_le(data, i + 96) {
+                                if (0.0..50.0).contains(&iso_w) && iso_w > 0.0 {
+                                    iso_width_map.insert(event, iso_w);
+                                }
+                            }
+                            continue 'outer_v66;
                         }
                         // Fallback: match on Q3_hi alone if scan_event was unindexed
                         for i in 16..end {
@@ -1244,7 +1293,10 @@ impl RawFileReader {
             srm_iso_width_by_event,
             source_cid_by_method_event: Default::default(),
         };
-        if let Some(text) = reader.instrument_method_text(&mut source)? {
+        if let Some(text) = reader
+            .method_window(&mut source)?
+            .and_then(|window| method_settings_text(&window))
+        {
             reader.source_cid_by_method_event =
                 crate::instrument_method::source_cid_settings(&text);
         }
@@ -1639,12 +1691,26 @@ impl RawFileReader {
     /// was not embedded (`method_file_present == false`).
     ///
     /// Note: This is a best-effort extraction. The result is the raw text
-    /// content; callers may wish to trim or parse it further.
+    /// content; callers may wish to trim or parse it further. The method file
+    /// is a compound file, so a block of text is not always one whole stream:
+    /// it ends early where a stream's sectors are not adjacent, and it can
+    /// run on into the bytes that follow a stream's recorded end.
     ///
     /// # Errors
     ///
     /// An I/O error if the metadata region cannot be read from `source`.
     pub fn instrument_method_text<R: Read + Seek>(&self, source: &mut R) -> Result<Option<String>> {
+        // Scan for the longest valid UTF-16LE text block (min 256 chars = 512 bytes).
+        // Strategy: find aligned 2-byte sequences where every pair decodes to a
+        // printable/whitespace Unicode scalar (U+0020..U+FFFD).
+        Ok(self
+            .method_window(source)?
+            .and_then(|window| extract_utf16le_text(&window, 256)))
+    }
+
+    /// The metadata region that holds the embedded method file, or `None`
+    /// when the file has no embedded method.
+    fn method_window<R: Read + Seek>(&self, source: &mut R) -> Result<Option<Vec<u8>>> {
         if !self.raw_file_info.preamble.method_file_present {
             return Ok(None);
         }
@@ -1658,12 +1724,15 @@ impl RawFileReader {
         source.seek(std::io::SeekFrom::Start(0))?;
         let mut buf = vec![0u8; window_len];
         source.read_exact(&mut buf)?;
-
-        // Scan for the longest valid UTF-16LE text block (min 256 chars = 512 bytes).
-        // Strategy: find aligned 2-byte sequences where every pair decodes to a
-        // printable/whitespace Unicode scalar (U+0020..U+FFFD).
-        Ok(extract_utf16le_text(&buf, 256))
+        Ok(Some(buf))
     }
+}
+
+/// The text that method settings are parsed from: the method XML as the
+/// method file's stream holds it, or else the longest block of text, for a
+/// region that holds no such stream.
+fn method_settings_text(window: &[u8]) -> Option<String> {
+    crate::instrument_method::method_xml(window).or_else(|| extract_utf16le_text(window, 256))
 }
 
 /// Scan `buf` for the longest contiguous UTF-16LE text block of at least
@@ -2408,6 +2477,68 @@ mod tests {
         bytes.extend_from_slice(&[0u8; 8]); // far short of the declared length
         let mut r = BinaryReader::new(Cursor::new(bytes));
         assert!(r.read_pascal_string().is_err());
+    }
+
+    fn source_energies(text: &str) -> Vec<((u16, u16), f64)> {
+        crate::instrument_method::source_cid_settings(text)
+            .into_iter()
+            .collect()
+    }
+
+    /// The layout of the method file behind issue #57. The document is one
+    /// code unit longer than nine sectors, so its closing `>` is alone in a
+    /// sector that lies after a directory sector.
+    #[test]
+    fn method_settings_survive_a_fragmented_stream() {
+        let document = crate::test_util::method_document(&["20", "20"], 9 * 256 + 1);
+        let mut window = vec![0u8; 1356];
+        window.extend(crate::test_util::fragmented_method_file(&document, &[]));
+
+        // The text scan ends at the break in the chain and runs on into the
+        // directory sector, so what it returns is not a document.
+        let scanned = extract_utf16le_text(&window, 256).unwrap();
+        assert!(scanned.ends_with("</InstrumentSetupMethodAuditData"));
+        assert!(source_energies(&scanned).is_empty());
+
+        let text = method_settings_text(&window).unwrap();
+        assert_eq!(text, document);
+        assert_eq!(source_energies(&text), [((1, 1), 20.0), ((1, 2), 20.0)]);
+    }
+
+    /// A document that ends inside its last sector, with bytes of an earlier,
+    /// longer document left after its recorded end.
+    #[test]
+    fn method_settings_stop_at_the_recorded_stream_length() {
+        let document = crate::test_util::method_document(&["20"], 9 * 256 - 5);
+        let mut file = crate::test_util::CompoundFileBuilder::new(3);
+        file.directory_sector();
+        let data = crate::test_util::utf16(&document);
+        let sectors = file.sectors(&data, &crate::test_util::utf16("thod>"));
+        file.stream("Data", sectors[0], data.len() as u64);
+        let window = file.build();
+
+        let scanned = extract_utf16le_text(&window, 256).unwrap();
+        assert!(scanned.ends_with("</InstrumentSetupMethod>thod>"));
+        assert!(source_energies(&scanned).is_empty());
+
+        let text = method_settings_text(&window).unwrap();
+        assert_eq!(text, document);
+        assert_eq!(source_energies(&text), [((1, 1), 20.0)]);
+    }
+
+    /// A region with no compound file keeps the text scan.
+    #[test]
+    fn method_settings_fall_back_to_the_text_scan() {
+        let document = crate::test_util::method_document(&["35.5"], 400);
+        let mut window = vec![0u8; 1356];
+        window.extend(crate::test_util::utf16(&document));
+        window.extend([0u8; 64]);
+        assert_eq!(method_settings_text(&window).unwrap(), document);
+        assert_eq!(
+            source_energies(&method_settings_text(&window).unwrap()),
+            [((1, 1), 35.5)]
+        );
+        assert_eq!(method_settings_text(&[0u8; 2048]), None);
     }
 
     #[test]
