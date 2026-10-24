@@ -253,8 +253,19 @@ PXD071477 has 27832 Q Exactive HF-X scans, of which 3559 report a match and
 16033 report a match and 35221 report zero matches. In both files every
 zero-match scan retains the latest matched scan's nonzero correction; their
 MS1 event also contains both matched and zero-match scans. These are count
-and correction controls, not proof of the exact `lock` filter-token meaning.
-No vendor software, SDK, or vendor output was used to validate them.
+and correction controls. No vendor software, SDK, or vendor output was used
+to validate them.
+
+The `public_scan_filter_renders_lock_only_for_matched_scans` test and its
+Python counterpart check the `lock` filter token on the same three files.
+It renders on every scan with at least one match and on no other scan.
+Byte 42 of the scan-event preamble follows the same split on the Q Exactive
+Plus and HF-X files: 0 on every scan with a match and 1 on every zero-match
+scan (all 24,273 in the HF-X file, which keep a nonzero correction). It is 2
+on every Exploris 480 scan, matched or not, and on the Q Exactive files whose
+trailer reports no configured lock mass (GPST000122 and PXD068962), and it
+holds other values on Orbitrap Fusion Lumos. Its meaning is not in public
+documentation, so the test characterises it and the filter does not use it.
 
 ## Multiplexed PRM events
 

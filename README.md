@@ -37,6 +37,16 @@ Measured on the public test corpus (291 files from 56 PRIDE datasets).
   EThcD are read only from format version 66 files (no older ETD file is in
   the corpus). Other methods (UVPD, ECD, PQD and so on) decode as unknown,
   and mzML then has no dissociation-method term.
+- **Scan filter `lock` token:** `scan_filter()` renders `lock` only on a
+  scan whose trailer reports at least one found lock mass. A scan that
+  reports zero found but keeps the previous scan's nonzero correction
+  renders no `lock`. This is the case for 24,273 of 27,832 scans in the
+  public Q Exactive HF-X acquisition PXD071477 and 35,221 of 51,254 in the
+  Exploris 480 acquisition PXD064947. The files do not show whether such a
+  scan counts as lock-corrected: on the Q Exactive Plus and HF-X files a
+  preamble byte separates it from both a found lock mass and a method with
+  no lock mass, but the byte has no public documentation and is constant on
+  Exploris 480, so it is not used.
 - **Analyzer is not reported** for Orbitrap Astral MS2 scans and for TSQ
   triple-quadrupole scans.
 - **SRM data:** polarity is always reported as positive and isolation width

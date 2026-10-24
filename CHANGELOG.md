@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `scan_filter()` renders `lock` between the scan type and `ms<n>` on a scan
+  whose trailer reports a found lock mass (`Number of LM Found:` above zero),
+  for example `FTMS + p NSI Full lock ms [350.0000-1500.0000]`. (#58)
+  The configured count (`Number of Lock Masses:`) alone does not render it.
+  A scan with zero matches renders no `lock`, including the scans in the
+  public Q Exactive HF-X and Exploris 480 acquisitions that keep the
+  previous scan's nonzero correction. Whether such a scan should render
+  `lock` is undecided and is listed under Known issues and gaps in the
+  README. The distinct matched and configured count accessors and extra
+  fields, and the compatibility aliases, are unchanged from 3.0.0.
+
 ## [3.1.0] - 2026-10-20
 
 ### Added
