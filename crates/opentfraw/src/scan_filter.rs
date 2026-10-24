@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! <analyzer> <polarity> <scan_mode> <ionization> [sid=<eV>] [d] <scan_type>
-//!   ms<n>  [<precursor>@<method><energy> ...]  [<low>-<high>]
+//!   [lock] ms<n>  [<precursor>@<method><energy> ...]  [<low>-<high>]
 //! ```
 //!
 //! Token order follows the filter line rendered by the `stringify` methods
@@ -47,6 +47,16 @@
 //! - Multiple precursors are separated by a space.
 //! - `sid=<eV>` is rendered after ionization when a positive source CID
 //!   energy is known.
+//! - `lock` is rendered between the scan type and `ms<n>` when the scan's
+//!   trailer reports at least one matched lock mass (`Number of LM Found:`
+//!   greater than zero). The position follows the example in a comment in
+//!   `ScanEventPreamble.pm` `stringify` of the Finnigan module
+//!   (`FTMS {1;1}  + p ESI Full lock ms [60.00-1200.00]`, same URL as
+//!   above). A scan that reports zero matches renders no `lock`, including
+//!   one that keeps the previous scan's nonzero correction; whether such a
+//!   scan should render it is not settled (README, "Known issues and gaps").
+//!   The configured count (`Number of Lock Masses:`) alone
+//!   never renders `lock`.
 //! - Missing values fall back to `MS` for the analyzer, `+` for polarity and
 //!   `Full` for the scan type; an unknown activation code omits the
 //!   `@<method>` clause.
@@ -54,6 +64,7 @@
 //! ## Examples
 //!
 //! - `FTMS + p NSI Full ms [350.0000-1500.0000]`
+//! - `FTMS + p NSI Full lock ms [350.0000-1500.0000]`
 //! - `FTMS + c NSI d Full ms2 645.8311@hcd28.00 [150.0000-2000.0000]`
 //! - `ITMS + c NSI d Full ms2 520.2400@cid35.00 [135.0000-1060.0000]`
 //! - `ITMS + c NSI d Full ms3 810.5000@cid35.00 265.2700@cid35.00 [100.0000-1000.0000]` (MS3)
@@ -76,6 +87,16 @@ pub fn activation_str(analyzer: Option<Analyzer>, act: Activation) -> &'static s
     }
 }
 
+/// Whether a scan's trailer reports a found lock mass, which is the only
+/// condition that renders the `lock` token. The matched count is read
+/// strictly: a missing, mistyped or negative count, a configured count alone
+/// and a nonzero lock-mass correction do not qualify.
+pub(crate) fn lock_mass_matched(params: &crate::ScanParams<'_>) -> bool {
+    params
+        .number_of_matched_lock_masses()
+        .is_some_and(|n| n > 0)
+}
+
 /// Build the scan filter string for a single scan event, in the grammar
 /// described in the module documentation.
 ///
@@ -96,17 +117,29 @@ pub(crate) fn build_filter(
     precursor_mz: Option<f64>,
     activation_energy: Option<f64>,
 ) -> String {
-    build_filter_with_source_cid(event, index_entry, precursor_mz, activation_energy, None)
+    build_filter_with_source_cid(
+        event,
+        index_entry,
+        precursor_mz,
+        activation_energy,
+        None,
+        false,
+    )
 }
 
 /// Build a filter with an explicitly sourced energy. Zero does not establish
 /// that source CID is off, so it is omitted rather than rendered as `!sid`.
+///
+/// `lock_mass_matched` is true when the scan's trailer reports at least one
+/// matched lock mass (see [`crate::ScanParams::number_of_matched_lock_masses`]);
+/// it renders the `lock` token between the scan type and `ms<n>`.
 pub(crate) fn build_filter_with_source_cid(
     event: &ScanEvent,
     index_entry: &ScanIndexEntry,
     precursor_mz: Option<f64>,
     activation_energy: Option<f64>,
     source_cid_energy_ev: Option<f64>,
+    lock_mass_matched: bool,
 ) -> String {
     let mut out = String::with_capacity(96);
     let p = &event.preamble;
@@ -162,6 +195,11 @@ pub(crate) fn build_filter_with_source_cid(
         _ => out.push_str("Full"),
     }
     out.push(' ');
+
+    // Lock-mass token, between the scan type and the MS level.
+    if lock_mass_matched {
+        out.push_str("lock ");
+    }
 
     // ms<n> level
     let n = match p.ms_power() {
@@ -313,6 +351,76 @@ mod tests {
     }
 
     #[test]
+    fn lock_token_sits_between_scan_type_and_ms_level() {
+        let ms1 = ScanEvent {
+            preamble: make_preamble(1, 1, 1, 0),
+            reactions: vec![],
+            fraction_collectors: vec![],
+            coefficients: vec![],
+        };
+        let idx = make_index(350.0, 1500.0);
+        assert_eq!(
+            build_filter_with_source_cid(&ms1, &idx, None, None, None, true),
+            "FTMS + p NSI Full lock ms [350.0000-1500.0000]"
+        );
+        assert_eq!(
+            build_filter_with_source_cid(&ms1, &idx, None, None, None, false),
+            "FTMS + p NSI Full ms [350.0000-1500.0000]"
+        );
+        // After `sid=` and `d`, before `ms2`.
+        let mut preamble = make_preamble(1, 1, 2, 0);
+        preamble.bytes[10] = 1;
+        let ms2 = ScanEvent {
+            preamble,
+            reactions: vec![],
+            fraction_collectors: vec![],
+            coefficients: vec![],
+        };
+        assert_eq!(
+            build_filter_with_source_cid(&ms2, &idx, None, None, Some(20.0), true),
+            "FTMS + p NSI sid=20.00 d Full lock ms2 [350.0000-1500.0000]"
+        );
+    }
+
+    #[test]
+    fn only_a_positive_matched_count_renders_lock() {
+        use crate::generic_data::{GenericRecord, GenericValue};
+        use crate::ScanParams;
+        let rec = |fields: &[(&str, GenericValue)]| {
+            GenericRecord::new(
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.clone()))
+                    .collect(),
+            )
+        };
+        let matched = |n| ("Number of LM Found:", GenericValue::Int32(n));
+        let configured = |n| ("Number of Lock Masses:", GenericValue::Int32(n));
+        let correction = ("LM Correction (ppm):", GenericValue::Float64(1.5));
+        let cases = [
+            (rec(&[matched(1), configured(9), correction.clone()]), true),
+            (rec(&[matched(2), configured(1)]), true),
+            (rec(&[matched(1)]), true),
+            // Zero matches that keep an earlier nonzero correction: undecided,
+            // rendered without `lock`.
+            (rec(&[matched(0), configured(1), correction.clone()]), false),
+            (rec(&[matched(0), configured(0)]), false),
+            // Configuration alone is not a found lock mass.
+            (rec(&[configured(9)]), false),
+            (rec(&[configured(9), correction.clone()]), false),
+            (rec(&[matched(-1), configured(9)]), false),
+            (
+                rec(&[("Number of LM Found:", GenericValue::String("1".into()))]),
+                false,
+            ),
+            (rec(&[]), false),
+        ];
+        for (record, want) in &cases {
+            assert_eq!(lock_mass_matched(&ScanParams::new(record)), *want);
+        }
+    }
+
+    #[test]
     fn source_cid_token_placement_and_unknown_values() {
         let ev = ScanEvent {
             preamble: make_preamble(0, 1, 1, 2),
@@ -322,7 +430,7 @@ mod tests {
         };
         let idx = make_index(100.0, 200.0);
         assert_eq!(
-            build_filter_with_source_cid(&ev, &idx, None, None, Some(20.0)),
+            build_filter_with_source_cid(&ev, &idx, None, None, Some(20.0), false),
             "FTMS - p NSI sid=20.00 SIM ms [100.0000-200.0000]"
         );
         for energy in [
@@ -333,7 +441,7 @@ mod tests {
             Some(f64::INFINITY),
         ] {
             assert_eq!(
-                build_filter_with_source_cid(&ev, &idx, None, None, energy),
+                build_filter_with_source_cid(&ev, &idx, None, None, energy, false),
                 build_filter(&ev, &idx, None, None)
             );
         }

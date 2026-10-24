@@ -1,3 +1,5 @@
+mod common;
+
 use opentfraw::generic_data::{GenericRecord, GenericValue};
 use opentfraw::{extra::scan_extras, scan_metadata, ExtraFields, RawFileReader, ScanParams};
 
@@ -238,5 +240,73 @@ fn public_lock_mass_counts_and_inherited_correction() {
                 want_m.or(want_c)
             );
         }
+    }
+}
+
+/// Byte of the scan-event preamble that tracks the lock-mass state in the
+/// public Q Exactive Plus and HF-X acquisitions (see CORPUS.md, "Lock-mass
+/// count controls"). It is characterised here, not used to render the filter:
+/// it is 2 on every Exploris 480 scan, matched or not.
+const LOCK_STATE_BYTE: usize = 42;
+
+#[test]
+fn fixture_without_lock_mass_fields_renders_no_lock() {
+    let Some(path) = common::fixture() else {
+        eprintln!("skipping: no Thermo fixture available");
+        return;
+    };
+    let raw = RawFileReader::open_path(&path).unwrap();
+    let first = raw.run_header.sample_info.first_scan_number;
+    for n in first..=raw.run_header.sample_info.last_scan_number {
+        assert_eq!(raw.scan_params(n).unwrap().number_of_lock_masses(), None);
+        let filter = raw.scan_filter(n).unwrap();
+        assert!(!filter.contains("lock"), "scan {n}: {filter}");
+    }
+}
+
+#[test]
+#[ignore = "requires public MTBLS5657, PXD071477 and PXD064947 lock-mass fixtures"]
+fn public_scan_filter_renders_lock_only_for_matched_scans() {
+    for (variable, state_byte_tracks_matches) in [
+        ("OPENTFRAW_LOCK_MASS_PLUS_RAW", true),
+        ("OPENTFRAW_LOCK_MASS_HFX_RAW", true),
+        ("OPENTFRAW_LOCK_MASS_EXPLORIS_RAW", false),
+    ] {
+        let path = std::env::var(variable).unwrap_or_else(|_| panic!("set {variable}"));
+        let raw = RawFileReader::open_path(path).unwrap();
+        let first = raw.run_header.sample_info.first_scan_number;
+        let (mut with_lock, mut zero_match) = (0u32, 0u32);
+        for n in first..=raw.run_header.sample_info.last_scan_number {
+            let matched = raw
+                .scan_params(n)
+                .unwrap()
+                .number_of_matched_lock_masses()
+                .unwrap();
+            let filter = raw.scan_filter(n).unwrap();
+            let tokens: Vec<&str> = filter.split(' ').collect();
+            let lock_at = tokens.iter().position(|t| *t == "lock");
+            if matched > 0 {
+                with_lock += 1;
+                // The token sits directly before `ms<n>`, after the scan type.
+                let i = lock_at.unwrap_or_else(|| panic!("{variable} scan {n}: {filter}"));
+                assert_eq!(tokens[i - 1], "Full", "{filter}");
+                assert!(tokens[i + 1].starts_with("ms"), "{filter}");
+            } else {
+                zero_match += 1;
+                assert_eq!(lock_at, None, "{variable} scan {n}: {filter}");
+            }
+            // On these two files the preamble tracks the same split: 0 where
+            // a lock mass was found, 1 where none was found although the
+            // method configures one (the zero-match scans that keep the
+            // earlier correction).
+            let state = raw.scan_events[(n - first) as usize].preamble().bytes()[LOCK_STATE_BYTE];
+            if state_byte_tracks_matches {
+                assert_eq!(state, u8::from(matched == 0), "{variable} scan {n}");
+            } else {
+                assert_eq!(state, 2, "{variable} scan {n}");
+            }
+        }
+        assert!(with_lock > 0, "{variable}");
+        eprintln!("{variable}: {with_lock} lock, {zero_match} zero-match");
     }
 }

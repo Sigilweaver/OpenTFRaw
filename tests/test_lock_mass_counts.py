@@ -72,3 +72,31 @@ def test_public_plus_counts_reach_canonical_records_and_mzml(tmp_path):
         assert extra[MATCHED] == "1"
         assert extra[CONFIGURED] == "9"
         assert extra[LEGACY] == "1"
+
+
+@pytest.mark.parametrize(
+    "variable",
+    [
+        "OPENTFRAW_LOCK_MASS_PLUS_RAW",
+        "OPENTFRAW_LOCK_MASS_HFX_RAW",
+        "OPENTFRAW_LOCK_MASS_EXPLORIS_RAW",
+    ],
+)
+def test_public_scan_filter_lock_follows_matched_count(variable):
+    path = os.environ.get(variable)
+    if not path:
+        pytest.skip(f"set {variable} to the public fixture listed in CORPUS.md")
+    raw = opentfraw.RawFile(path)
+    seen_lock = seen_zero = False
+    for n in range(raw.first_scan, min(raw.last_scan + 1, raw.first_scan + 2000)):
+        scan = raw.scan(n)
+        tokens = raw.scan_filter(n).split(" ")
+        if scan["extra"][MATCHED] == "0":
+            seen_zero = True
+            assert "lock" not in tokens
+        else:
+            seen_lock = True
+            i = tokens.index("lock")
+            assert tokens[i - 1] == "Full" and tokens[i + 1].startswith("ms")
+    assert seen_lock
+    assert seen_zero or variable.endswith("PLUS_RAW")
