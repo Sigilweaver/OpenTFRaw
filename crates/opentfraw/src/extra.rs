@@ -81,6 +81,22 @@ fn possible_charge_states(p: &ScanParams<'_>) -> Option<String> {
     )
 }
 
+fn srm_collision_energies(scan: &Scan<'_>) -> Option<String> {
+    let ces = scan.raw.srm_ces_by_event.get(&scan.meta.scan_event)?;
+    let first = *ces.first()?;
+    let has_multiple = ces.iter().any(|&ce| (ce - first).abs() > 1e-4);
+    if has_multiple {
+        Some(
+            ces.iter()
+                .map(|ce| ce.to_string())
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    } else {
+        None
+    }
+}
+
 /// Every registered extra field: its key and how it is read. Fields that
 /// `openmassspec_core::SpectrumRecord` already carries (injection time,
 /// charge, precursor m/z, isolation window, collision energy, FAIMS CV,
@@ -141,7 +157,22 @@ const EXTRA_FIELDS: &[(&str, Getter)] = &[
         param(s, |p| p.faims_voltage_on())
     }),
     ("opentfraw.s_lens_rf_level", |s| {
-        param(s, |p| p.s_lens_rf_level())
+        param(s, |p| p.s_lens_rf_level()).or_else(|| {
+            s.raw
+                .srm_rf_lens_by_event
+                .get(&s.meta.scan_event)
+                .filter(|&&v| v > 0.0)
+                .map(|v| v.to_string())
+        })
+    }),
+    ("opentfraw.dwell_time_ms", |s| {
+        s.raw
+            .srm_dwell_by_event
+            .get(&s.meta.scan_event)
+            .map(|v| v.to_string())
+    }),
+    ("opentfraw.srm_collision_energies", |s| {
+        srm_collision_energies(s)
     }),
     ("opentfraw.analyzer_temperature", |s| {
         param(s, |p| p.analyzer_temperature())

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- FlatV66 TSQ SRM transition parameters are decoded from the pre-scan method
+  stream. (#81, @fdingler)
+  Scans report `collision_energy`, `isolation_width`, the RF lens voltage
+  (`opentfraw.s_lens_rf_level`) and the dwell time
+  (`opentfraw.dwell_time_ms`). `opentfraw.srm_collision_energies` lists the
+  collision energies when transitions that share a precursor m/z differ.
+  `RawFileReader::instrument_method_text` reads up to 4 MB so large embedded
+  method files are found, and the minimum Q1 and Q3 limits are lowered to 10.0
+  and 5.0 to admit small-molecule transitions.
+
 ## [3.1.0] - 2026-10-20
 
 ### Added
