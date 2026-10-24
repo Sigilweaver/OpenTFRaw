@@ -49,6 +49,9 @@ pub enum Error {
         available: u64,
     },
 
+    #[error("invalid precursor m/z {mz} in scan-event reaction at offset {offset:#x}")]
+    InvalidPrecursorMz { offset: u64, mz: f64 },
+
     /// Error from `openmassspec_core`, such as a failure while writing mzML.
     #[error(transparent)]
     Core(#[from] openmassspec_core::Error),

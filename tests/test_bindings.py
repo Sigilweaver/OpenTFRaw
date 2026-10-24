@@ -186,6 +186,62 @@ def test_profile(raw_file):
     assert mz.shape == intensity.shape
 
 
+def test_profile_chunks(raw_file):
+    # The fixture alternates FT survey scans, which store a profile, with
+    # ion-trap MS2 scans, which store none.
+    by_analyzer = {}
+    for n in range(raw_file.first_scan, raw_file.last_scan + 1):
+        by_analyzer.setdefault(raw_file.scan_filter(n).split()[0], n)
+        if len(by_analyzer) == 2:
+            break
+    assert set(by_analyzer) == {"FTMS", "ITMS"}
+
+    ft = by_analyzer["FTMS"]
+    chunks = raw_file.profile_chunks(ft)
+    assert set(chunks) == {
+        "first_value",
+        "step",
+        "nbins",
+        "first_bin",
+        "n_points",
+        "fudge",
+        "coefficients",
+    }
+    assert isinstance(chunks["first_value"], float)
+    assert isinstance(chunks["step"], float)
+    assert isinstance(chunks["nbins"], int)
+    assert chunks["first_bin"].dtype == np.uint32
+    assert chunks["n_points"].dtype == np.uint32
+    assert chunks["fudge"].dtype == np.float32
+    assert chunks["coefficients"].dtype == np.float64
+    k = len(chunks["first_bin"])
+    assert k > 0
+    assert len(chunks["n_points"]) == len(chunks["fudge"]) == k
+    # This file's packet layout stores no per-chunk m/z correction.
+    assert np.isnan(chunks["fudge"]).all()
+
+    # The chunks hold profile()'s points in order: each point's frequency,
+    # converted with the scan event's coefficients ([_, A, B, C], an LTQ
+    # FT's A + B/f + C/f^2), is profile()'s m/z.
+    mz, _ = raw_file.profile(ft)
+    first_bin = chunks["first_bin"].astype(np.int64)
+    n_points = chunks["n_points"].astype(np.int64)
+    assert n_points.sum() == len(mz)
+    bins = np.concatenate([b + np.arange(m) for b, m in zip(first_bin, n_points)])
+    f = chunks["first_value"] + bins * chunks["step"]
+    assert len(chunks["coefficients"]) == 4
+    _, a, b, c = chunks["coefficients"]
+    np.testing.assert_allclose(a + b / f + c / f**2, mz, rtol=1e-12)
+    # The chunks do not overlap and lie inside the header's bin count.
+    assert (first_bin[1:] >= first_bin[:-1] + n_points[:-1]).all()
+    assert (first_bin + n_points <= chunks["nbins"]).all()
+
+    # Ion-trap scan: no profile stored.
+    it = by_analyzer["ITMS"]
+    assert raw_file.profile_chunks(it) is None
+    assert len(raw_file.profile(it)[0]) == 0
+
+
 def test_centroid_labels(raw_file):
     labels = raw_file.centroid_labels(raw_file.first_scan)
     assert isinstance(labels, dict)

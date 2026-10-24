@@ -20,8 +20,8 @@ abstract: >
   instrument families.
 license: "Apache-2.0"
 license-url: "https://github.com/Sigilweaver/OpenTFRaw/blob/main/LICENSE"
-date-released: "2026-05-31"
-version: "1.0.6"
+date-released: "2026-10-20"
+version: "3.1.0"
 keywords:
   - mass spectrometry
   - proteomics

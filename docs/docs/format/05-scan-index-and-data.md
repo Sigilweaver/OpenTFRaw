@@ -157,7 +157,7 @@ conversion function in the associated ScanEvent).
 | 0x00 | 8 | Float64 | first_value | First bin's frequency (or M/z in pre-FTMS) |
 | 0x08 | 8 | Float64 | step | Bin width (negative for frequency domain) |
 | 0x10 | 4 | UInt32 | peak_count | Number of ProfileChunks (non-zero signal regions) |
-| 0x14 | 4 | UInt32 | nbins | Total number of bins across all chunks |
+| 0x14 | 4 | UInt32 | nbins | Number of bins on the profile's axis; every chunk ends at or below it |
 
 **Preamble size**: 24 bytes
 
@@ -211,6 +211,10 @@ mz = convert(frequency) + chunk.fudge
 
 Applying it in the frequency domain instead shifts Orbitrap profile bins by
 roughly 1e-3 m/z relative to the centroid peak list.
+
+Python `profile()` returns the converted m/z with the fudge added.
+`profile_chunks()` returns the parts: `first_value`, `step` and `nbins`,
+each chunk's `first_bin`, point count and fudge, and the coefficients.
 
 ---
 

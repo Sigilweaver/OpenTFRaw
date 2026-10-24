@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::reader::BinaryReader;
 use std::io::{Read, Seek};
 
@@ -342,27 +342,10 @@ impl ScanEvent {
             legacy_candidates = [64usize, 8, 128, body_size.saturating_sub(80)];
             &legacy_candidates
         };
-        let fc_match = candidates.iter().copied().find_map(|off| {
-            if off + 16 > body_size {
-                return None;
-            }
-            let low_mz = crate::bytes::read_f64_le(&body, off).ok()?;
-            let high_mz = crate::bytes::read_f64_le(&body, off + 8).ok()?;
-            // A valid scan window must be finite, monotonic, and within
-            // physically realistic m/z bounds (instruments top out well
-            // below 1e5 m/z). Accept lo == hi as well because some
-            // SIM / tSIM scans use a single-point window.
-            if low_mz.is_finite()
-                && high_mz.is_finite()
-                && low_mz >= 0.1
-                && low_mz <= high_mz
-                && high_mz <= 50_000.0
-            {
-                Some((off, FractionCollector { low_mz, high_mz }))
-            } else {
-                None
-            }
-        });
+        let fc_match = candidates
+            .iter()
+            .copied()
+            .find_map(|off| Some((off, plausible_window(&body, off)?)));
         let (fc_offset, fraction_collectors) = match fc_match {
             Some((off, fc)) => (Some(off), vec![fc]),
             None => (None, Vec::new()),
@@ -388,19 +371,7 @@ impl ScanEvent {
             }
             _ => body_size.saturating_sub(64),
         };
-        let mut coefficients = Vec::new();
-        if np_off + 4 <= body_size {
-            let nparam_raw = crate::bytes::read_u32_le(&body, np_off)? as usize;
-            // Cap nparam at the number of f64s that actually fit in the remaining body.
-            // Without this cap, a garbage nparam (e.g. 0xFFFFFFFF from uninitialised
-            // bytes) causes billions of loop iterations just to evaluate the guard.
-            let max_nparam = (body_size.saturating_sub(np_off + 4)) / 8;
-            let nparam = nparam_raw.min(max_nparam);
-            for i in 0..nparam {
-                let off = np_off + 4 + i * 8;
-                coefficients.push(crate::bytes::read_f64_le(&body, off)?);
-            }
-        }
+        let coefficients = read_coefficients(&body, np_off)?;
 
         // Parse precursor reactions from the v66 body for dependent scans and for
         // non-dependent MS2+ scans (DIA mode). In DIA, MS2 scans are not flagged as
@@ -499,6 +470,57 @@ impl ScanEvent {
         })
     }
 
+    /// Read a v66 event whose body starts with its reaction count, as on
+    /// Q Exactive and Exploris instruments: a u32 count, that many 56-byte
+    /// reactions (precursor m/z at +0, activation energy at +16), a u32, the
+    /// acquisition window, the coefficient count and the coefficients. This is
+    /// the pre-v66 order with a longer reaction record.
+    ///
+    /// `body_size` comes from the stream walk, which sized the record by the
+    /// same count.
+    pub(crate) fn read_counted_v66<R: Read + Seek>(
+        r: &mut BinaryReader<R>,
+        body_size: usize,
+    ) -> Result<Self> {
+        const REACTION: usize = 56;
+        let preamble = ScanEventPreamble {
+            bytes: r.read_bytes(ScanEventPreamble::size_for_version(66))?,
+        };
+        let body_start = r.position();
+        let body = r.read_bytes(body_size)?;
+        let n_reactions = crate::bytes::read_u32_le(&body, 0)? as usize;
+        // Every event stores at least one reaction; a primary MS1 event's is
+        // not a precursor.
+        let is_primary =
+            preamble.bytes.get(6).copied().unwrap_or(0) <= 1 && !preamble.is_dependent();
+        let mut reactions = Vec::new();
+        if !is_primary {
+            for i in 0..n_reactions {
+                let off = 4 + i * REACTION;
+                let mz = crate::bytes::read_f64_le(&body, off)?;
+                if !(mz.is_finite() && mz >= 0.0) {
+                    return Err(Error::InvalidPrecursorMz {
+                        offset: body_start + off as u64,
+                        mz,
+                    });
+                }
+                reactions.push(Reaction {
+                    precursor_mz: mz,
+                    energy: crate::bytes::read_f64_le(&body, off + 16)?,
+                });
+            }
+        }
+        let fc_off = n_reactions.saturating_mul(REACTION).saturating_add(8);
+        let fraction_collectors = plausible_window(&body, fc_off).into_iter().collect();
+        let coefficients = read_coefficients(&body, fc_off.saturating_add(16))?;
+        Ok(Self {
+            preamble,
+            reactions,
+            fraction_collectors,
+            coefficients,
+        })
+    }
+
     fn read_pre_v66<R: Read + Seek>(
         r: &mut BinaryReader<R>,
         preamble: ScanEventPreamble,
@@ -526,6 +548,42 @@ impl ScanEvent {
             coefficients,
         })
     }
+}
+
+// The acquisition window at `off` of a v66 body, if it is plausible: finite,
+// monotonic, and within physically realistic m/z bounds (instruments top out
+// well below 1e5 m/z). lo == hi is accepted because some SIM / tSIM scans use
+// a single-point window.
+fn plausible_window(body: &[u8], off: usize) -> Option<FractionCollector> {
+    if off.saturating_add(16) > body.len() {
+        return None;
+    }
+    let low_mz = crate::bytes::read_f64_le(body, off).ok()?;
+    let high_mz = crate::bytes::read_f64_le(body, off + 8).ok()?;
+    (low_mz.is_finite()
+        && high_mz.is_finite()
+        && low_mz >= 0.1
+        && low_mz <= high_mz
+        && high_mz <= 50_000.0)
+        .then_some(FractionCollector { low_mz, high_mz })
+}
+
+// The coefficient count at `np_off` of a v66 body and the coefficients after it.
+fn read_coefficients(body: &[u8], np_off: usize) -> Result<Vec<f64>> {
+    let mut coefficients = Vec::new();
+    if np_off.saturating_add(4) <= body.len() {
+        let nparam_raw = crate::bytes::read_u32_le(body, np_off)? as usize;
+        // Cap nparam at the number of f64s that actually fit in the remaining body.
+        // Without this cap, a garbage nparam (e.g. 0xFFFFFFFF from uninitialised
+        // bytes) causes billions of loop iterations just to evaluate the guard.
+        let max_nparam = (body.len().saturating_sub(np_off + 4)) / 8;
+        let nparam = nparam_raw.min(max_nparam);
+        for i in 0..nparam {
+            let off = np_off + 4 + i * 8;
+            coefficients.push(crate::bytes::read_f64_le(body, off)?);
+        }
+    }
+    Ok(coefficients)
 }
 
 impl Reaction {

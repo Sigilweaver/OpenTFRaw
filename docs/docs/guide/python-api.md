@@ -44,6 +44,7 @@ for scan in raw.iter_scans():             # equivalent to scan(n) for n in range
 raw.scan_table()                          # {key: [one value per scan]} for every scan() key but mz/intensity; no peak reads
 raw.scan_filter(3)                        # scan filter string, or None
 raw.profile(3)                            # (mz, intensity) from the raw profile signal
+raw.profile_chunks(3)                     # how that profile is stored: axis, chunks, per-chunk fudge, coefficients
 raw.centroid_labels(3)                    # mz/intensity/resolution/noise/baseline/signal_to_noise/descriptor
 ```
 
@@ -73,6 +74,23 @@ labels["mz"][lock]
 
 `resolution`, `noise`, `baseline` and `signal_to_noise` are `NaN` for scans
 without FT label data.
+
+`profile_chunks()` returns how the profile that `profile()` reads is
+stored, or `None` for a scan that stores none: `first_value`, `step` and
+`nbins` from the profile header; per chunk, `first_bin` and `n_points`
+(uint32) and `fudge` (float32); and the scan event's `coefficients`. Point
+`j` of chunk `i` sits at `first_value + (first_bin[i] + j) * step`, a
+frequency in kHz on the FT files tested, and `profile()` returns the
+chunks' points in that order. Each of its m/z values is that frequency
+converted with `coefficients`, plus the chunk's `fudge`: an m/z correction
+stored with each chunk, `NaN` where the packet layout stores none. See the
+format docs, sections 18 and 19.
+
+```python
+layout = raw.profile_chunks(3)
+mz, intensity = raw.profile(3)
+per_chunk = np.split(mz, np.cumsum(layout["n_points"])[:-1])  # one array per chunk
+```
 
 `scan()` reads its metadata from the same derivation the mzML writer uses,
 so its precursor, collision-energy and scan-mode values match what
