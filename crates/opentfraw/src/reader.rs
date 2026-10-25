@@ -1747,12 +1747,18 @@ impl RawFileReader {
         let params = self.scan_params(scan_number);
         let precursor = params.as_ref().and_then(|p| p.monoisotopic_mz());
         let energy = params.as_ref().and_then(|p| p.activation_energy());
+        // Only a found lock mass renders `lock`. The configured count and an
+        // inherited nonzero correction do not (see `scan_filter` module docs).
+        let lock_matched = params
+            .as_ref()
+            .is_some_and(crate::scan_filter::lock_mass_matched);
         Some(crate::scan_filter::build_filter_with_source_cid(
             event,
             entry,
             precursor,
             energy,
             self.source_cid_energy_ev(scan_number),
+            lock_matched,
         ))
     }
 
