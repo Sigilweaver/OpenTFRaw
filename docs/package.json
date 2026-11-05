@@ -3,44 +3,16 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "docusaurus": "docusaurus",
-    "start": "docusaurus start --port 25812",
-    "dev": "docusaurus start --port 25812",
-    "build": "docusaurus build && python3 scripts/docs_output.py build --write-index",
-    "build:cloudflare": "docusaurus build --out-dir build/opentfraw/docs && python3 scripts/docs_output.py build --write-index",
-    "clear": "docusaurus clear",
-    "serve": "docusaurus serve",
-    "typecheck": "tsc"
+    "docusaurus": "docs-kit",
+    "start": "docs-kit start --port 25812",
+    "dev": "docs-kit start --port 25812",
+    "build": "docs-kit build",
+    "build:cloudflare": "docs-kit build --out-dir build/opentfraw/docs",
+    "clear": "docs-kit clear",
+    "serve": "docs-kit serve",
+    "typecheck": "docs-kit typecheck"
   },
   "dependencies": {
-    "@docusaurus/core": "^3.9.2",
-    "@docusaurus/preset-classic": "^3.9.2",
-    "@docusaurus/theme-mermaid": "^3.9.2",
-    "@mdx-js/react": "^3.0.0",
-    "clsx": "^2.0.0",
-    "prism-react-renderer": "^2.3.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
-  },
-  "devDependencies": {
-    "@docusaurus/module-type-aliases": "^3.9.2",
-    "@docusaurus/tsconfig": "^3.9.2",
-    "@docusaurus/types": "^3.9.2",
-    "typescript": "~5.6.2"
-  },
-  "browserslist": {
-    "production": [
-      ">0.5%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 3 chrome version",
-      "last 3 firefox version",
-      "last 5 safari version"
-    ]
-  },
-  "engines": {
-    "node": ">=18.0"
+    "@sigilweaver/docs-kit": "github:Sigilweaver/docs-kit#06708bed683383e39805ba1f6c505ba9e1e08f15"
   }
 }

@@ -1,5 +1,9 @@
 {
-  "extends": "@docusaurus/tsconfig",
-  "compilerOptions": {},
-  "exclude": [".docusaurus", "build"]
+  "extends": "@sigilweaver/docs-kit/tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@site/*": ["./*"]
+    }
+  },
+  "exclude": [".docusaurus", "build", "node_modules"]
 }
