@@ -257,9 +257,7 @@ jobs:
     name: Shared docs validation
     permissions:
       contents: read
-    uses: Sigilweaver/ops/.github/workflows/docs.yml@757c6789b96e3ac05bbc7d1a092d01cbeb0cb9e2
-    with:
-      tooling-ref: 757c6789b96e3ac05bbc7d1a092d01cbeb0cb9e2
+    uses: Sigilweaver/docs-kit/.github/workflows/site.yml@06708bed683383e39805ba1f6c505ba9e1e08f15
   docs:
     name: Docs (Docusaurus)
     needs: docs-validation
