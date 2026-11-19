@@ -32,5 +32,5 @@ keywords:
   - Python
 identifiers:
   - type: doi
-    value: "10.5281/zenodo.20470601"
-    description: "Zenodo DOI"
+    value: "10.5281/zenodo.20470600"
+    description: "Zenodo concept DOI (resolves to the latest archived version)"
