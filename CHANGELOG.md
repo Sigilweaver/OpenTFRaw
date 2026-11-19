@@ -30,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   method files are found, and the minimum Q1 and Q3 limits are lowered to 10.0
   and 5.0 to admit small-molecule transitions.
 
+### Fixed
+
+- `CITATION.cff` identifies the Zenodo concept DOI (10.5281/zenodo.20470600),
+  which resolves to the latest archived version, instead of the DOI of the
+  1.1.0 version record.
+
 ## [3.1.0] - 2026-10-20
 
 ### Added
