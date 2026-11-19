@@ -90,3 +90,10 @@ jobs:
     permissions:
       contents: write
     uses: Sigilweaver/.github/.github/workflows/docs-live.yml@main
+
+  github-release:
+    name: Create the GitHub Release
+    needs: [cargo-publish, pypi-publish]
+    permissions:
+      contents: write
+    uses: Sigilweaver/.github/.github/workflows/github-release.yml@main
