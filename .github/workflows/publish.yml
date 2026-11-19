@@ -83,3 +83,10 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+
+  docs-live:
+    name: Move docs-live to the release
+    needs: [cargo-publish, pypi-publish]
+    permissions:
+      contents: write
+    uses: Sigilweaver/.github/.github/workflows/docs-live.yml@main
