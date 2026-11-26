@@ -53,8 +53,8 @@ returned `WriteSummary`.
 ## Strict checks
 
 The writer refuses a spectrum whose collision energy has no stated unit,
-whose precursor references a spectrum that is not in the output, or whose m/z
-values are not ascending. The error names the spectrum. The `allow` keyword
+whose precursor references a spectrum that is not in the output, whose m/z
+values are not ascending, or whose precursor has a charge but no m/z. The error names the spectrum. The `allow` keyword
 (Python) or `--allow <check>` flag (`to_mzml` example) writes the first two
 anyway, marks each with a warning userParam and reports how many were marked:
 
@@ -64,8 +64,8 @@ raw.to_mzml("run.mzML", allow=["unknown_collision_energy_unit"])
 
 The checks are `unknown_collision_energy_unit`, `dangling_precursor_ref` and
 `unknown_scan_mode` (OpenTFRaw always states a scan mode, so the last never
-fires). Unsorted m/z has no check; `skip_unreadable=True` leaves such a scan
-out and counts it. From Rust, build a `Leniency` and pass it to
+fires). Unsorted m/z and a charge without a precursor m/z have no check;
+`skip_unreadable=True` leaves such a scan out and counts it. From Rust, build a `Leniency` and pass it to
 `WriteOptions::with_leniency`.
 
 A scan with no peaks is written with no base peak and the warning

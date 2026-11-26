@@ -31,10 +31,11 @@ in OpenMassSpecCore; this page covers what callers of this crate edit.
   `collision_energy_is_nce` and add `collision_energy_unit`,
   `collision_energy_source` and `collision_energy_steps`.
 - `to_mzml` raises `OSError` for a scan whose collision energy has no stated
-  unit, whose m/z values are not ascending, or whose precursor names a scan
-  that is not in the output. Pass `allow=["unknown_collision_energy_unit"]`
-  (or `"dangling_precursor_ref"`) to write the first and last with a warning;
-  unsorted m/z has no `allow`. The README lists which files this affects.
+  unit, whose m/z values are not ascending, whose precursor has a charge but
+  no m/z, or whose precursor names a scan that is not in the output. Pass
+  `allow=["unknown_collision_energy_unit"]` (or `"dangling_precursor_ref"`) to
+  write the first and last with a warning; unsorted m/z and a charge without
+  a precursor m/z have no `allow`. The README lists which files this affects.
 - `to_mzml` emits a `UserWarning` for every warning code it wrote, including
   `opentfraw.empty_spectrum` for scans with no peaks.
 

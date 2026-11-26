@@ -54,7 +54,13 @@ Measured on the public test corpus (291 files from 56 PRIDE datasets).
 - **Unsorted m/z (TSQ Vantage).** In PXD020246, 1,911 of the 35,094 decoded
   scans list m/z values that are not ascending (the NaN and out-of-range
   values above). The mzML writer refuses such a scan and has no check to
-  relax; `skip_unreadable=True` leaves the scan out and counts it.
+  relax; `skip_unreadable=True` leaves the scan out and counts it (1,915 with
+  the 4 scans that do not decode).
+- **Charge without precursor m/z.** On 50 scans in 5 files whose scan events
+  are misread (PXD039587, PXD064117 FOXK2, three PXD070648 files) the trailer
+  holds a charge state and the misread scan event no precursor m/z. The mzML
+  writer refuses such a scan and has no check to relax;
+  `skip_unreadable=True` leaves the scan out and counts it.
 - **Scans with no peaks** (8,822 in 57 corpus files, mostly ion-trap MS2) are
   written with no base peak and the warning `opentfraw.empty_spectrum`.
 - **Scan filter `lock` token:** `scan_filter()` renders `lock` only on a

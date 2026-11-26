@@ -13,11 +13,12 @@
 //! number left out is printed.
 //! The writer rejects a spectrum whose collision energy has no stated unit
 //! (`unknown_collision_energy_unit`), a precursor that references a spectrum
-//! not in the output (`dangling_precursor_ref`) and one whose m/z values are
-//! not ascending (no check). Pass `--allow <check>` (repeatable) to write
-//! spectra of the first two kinds anyway; each is marked with a warning in the
-//! mzML and counted in the summary. `unknown_scan_mode` is also accepted; a
-//! RAW file always states a scan mode, so it never applies.
+//! not in the output (`dangling_precursor_ref`), one whose m/z values are not
+//! ascending and one with a charge but no precursor m/z (no check for either).
+//! Pass `--allow <check>` (repeatable) to write spectra of the first two kinds
+//! anyway; each is marked with a warning in the mzML and counted in the
+//! summary. `unknown_scan_mode` is also accepted; a RAW file always states a
+//! scan mode, so it never applies.
 
 use openmassspec_core::{
     write_indexed_mzml_with_options, write_mzml_with_options, Check, Leniency, RecordErrorPolicy,
