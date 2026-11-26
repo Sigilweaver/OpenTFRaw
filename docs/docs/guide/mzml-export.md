@@ -50,5 +50,39 @@ This emits a `UserWarning` with the count and returns it. From Rust, an
 and `RecordErrorPolicy::Skip` does the same and reports the count in the
 returned `WriteSummary`.
 
+## Strict checks
+
+The writer refuses a spectrum whose collision energy has no stated unit,
+whose precursor references a spectrum that is not in the output, or whose m/z
+values are not ascending. The error names the spectrum. The `allow` keyword
+(Python) or `--allow <check>` flag (`to_mzml` example) writes the first two
+anyway, marks each with a warning userParam and reports how many were marked:
+
+```python
+raw.to_mzml("run.mzML", allow=["unknown_collision_energy_unit"])
+```
+
+The checks are `unknown_collision_energy_unit`, `dangling_precursor_ref` and
+`unknown_scan_mode` (OpenTFRaw always states a scan mode, so the last never
+fires). Unsorted m/z has no check; `skip_unreadable=True` leaves such a scan
+out and counts it. From Rust, build a `Leniency` and pass it to
+`WriteOptions::with_leniency`.
+
+A scan with no peaks is written with no base peak and the warning
+`opentfraw.empty_spectrum`; the writer reports their number like any other
+warning. The scan window of a scan is the acquisition range of its filter
+string; the observed range is that of its peaks.
+
+Collision energy carries the unit the file states. A trailer label
+(`HCD Energy:` for normalized energy, `HCD Energy eV:` for electronvolts)
+states its own unit; the energy stored in the scan event has none, and takes
+the unit the embedded instrument method states (see the README, Known
+issues and gaps). A stepped energy writes every step. Each spectrum's
+`opentfraw.collision_energy_source` userParam says which of `trailer_nce`,
+`trailer_ev`, `scan_event` or `srm_transition` the value came from. The
+in-source CID energy is not a collision energy of the precursor: it stays in
+`opentfraw.source_cid_energy_ev` (electronvolts) with its provenance in
+`opentfraw.source_cid_energy_source`.
+
 OpenTFRaw's goal is direct, open access to the RAW binary and a
 faithful open-standard mzML rendering of it.

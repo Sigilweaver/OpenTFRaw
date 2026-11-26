@@ -32,7 +32,7 @@ Install the wheel from PyPI:
 pip install opentfraw
 ```
 
-Pre-built wheels target Python 3.8+ via the stable ABI (`abi3`).
+Pre-built wheels target Python 3.10+ via the stable ABI (`abi3`).
 
 From source (requires a Rust toolchain and `maturin`):
 

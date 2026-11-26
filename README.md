@@ -37,6 +37,26 @@ Measured on the public test corpus (291 files from 56 PRIDE datasets).
   EThcD are read only from format version 66 files (no older ETD file is in
   the corpus). Other methods (UVPD, ECD, PQD and so on) decode as unknown,
   and mzML then has no dissociation-method term.
+- **Collision energy unit.** A collision energy has a unit only when the
+  file states it. A trailer label states its own: `HCD Energy:` and
+  `HCD Energy V:` are normalized collision energy (NCE), `HCD Energy eV:` is
+  electronvolts, and an SRM transition's energy is electronvolts. The scan
+  event stores a bare number; its unit is the one the embedded method states
+  (`Normalized Coll. Energy: 35.0`, `Collision Energy (%) = 30` or
+  `EnergyType="normalized"`), and unknown when the method states none or
+  contradicts itself. In the corpus, 427 of 11.9 million scans have an energy
+  with no unit: PXD061791 (2 Orbitrap Ascend files) and one Fusion Lumos file
+  of PXD064117, all among the files whose scan events are misread (first
+  item). `to_mzml` stops at the first such scan with
+  `unknown_collision_energy_unit`. Pass `allow=["unknown_collision_energy_unit"]`
+  (Python) or `--allow unknown_collision_energy_unit` (`to_mzml` example) to
+  write them with a warning userParam and a count.
+- **Unsorted m/z (TSQ Vantage).** In PXD020246, 1,911 of the 35,094 decoded
+  scans list m/z values that are not ascending (the NaN and out-of-range
+  values above). The mzML writer refuses such a scan and has no check to
+  relax; `skip_unreadable=True` leaves the scan out and counts it.
+- **Scans with no peaks** (8,822 in 57 corpus files, mostly ion-trap MS2) are
+  written with no base peak and the warning `opentfraw.empty_spectrum`.
 - **Scan filter `lock` token:** `scan_filter()` renders `lock` only on a
   scan whose trailer reports at least one found lock mass. A scan that
   reports zero found but keeps the previous scan's nonzero correction
