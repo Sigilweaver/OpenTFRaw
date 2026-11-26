@@ -2017,16 +2017,21 @@ fn utf16le_text_blocks(buf: &[u8], min_chars: usize) -> Vec<String> {
     let mut blocks = Vec::new();
     for alignment in 0..2usize {
         let mut run: Vec<u16> = Vec::new();
-        let units = buf.get(alignment..).unwrap_or(&[]).chunks_exact(2);
-        for unit in units.map(|c| u16::from_le_bytes([c[0], c[1]])).chain([0]) {
+        let aligned = buf.get(alignment..).unwrap_or(&[]);
+        let units = aligned
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c));
+        // The trailing 0 ends the last run.
+        for unit in units.chain([0]) {
             if matches!(unit, 0x0009 | 0x000A | 0x000D | 0x0020..=0xFFFD) {
                 run.push(unit);
                 continue;
             }
             if run.len() >= min_chars {
-                if let Ok(text) = String::from_utf16(&run) {
-                    blocks.push(text);
-                }
+                // Unpaired surrogates in a text-looking run become U+FFFD.
+                blocks.push(String::from_utf16_lossy(&run));
             }
             run.clear();
         }

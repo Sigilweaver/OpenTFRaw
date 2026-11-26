@@ -31,3 +31,9 @@ path = "fuzz_targets/read_scan_peaks.rs"
 test = false
 doc = false
 bench = false
+
+# Pinned to a Core commit until openmassspec-core 4.0.0 is on crates.io; the
+# top-level [patch.crates-io] does not reach this standalone workspace.
+# Remove before merge.
+[patch.crates-io]
+openmassspec-core = { git = "https://github.com/Sigilweaver/OpenMassSpecCore", rev = "63b2a3010abea9d2bfd7a74c9e9a413b6a1ade39" }

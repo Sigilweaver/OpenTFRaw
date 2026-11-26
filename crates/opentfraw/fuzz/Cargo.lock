@@ -113,9 +113,8 @@ dependencies = [
 
 [[package]]
 name = "openmassspec-core"
-version = "3.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d11eb6376e628cb354ac492308d43de89994a4292bab74b8393bca5aa12fe463"
+version = "4.0.0"
+source = "git+https://github.com/Sigilweaver/OpenMassSpecCore?rev=63b2a3010abea9d2bfd7a74c9e9a413b6a1ade39#63b2a3010abea9d2bfd7a74c9e9a413b6a1ade39"
 dependencies = [
  "flate2",
  "serde",
@@ -124,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "opentfraw"
-version = "3.1.1"
+version = "4.0.0"
 dependencies = [
  "openmassspec-core",
  "roxmltree",
