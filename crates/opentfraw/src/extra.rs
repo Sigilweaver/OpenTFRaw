@@ -144,6 +144,13 @@ const EXTRA_FIELDS: &[(&str, Getter)] = &[
     ("opentfraw.hcd_energy", |s| {
         param(s, |p| p.hcd_energy().map(str::to_owned))
     }),
+    ("opentfraw.collision_energy_source", |s| {
+        s.meta
+            .precursor
+            .as_ref()
+            .and_then(|p| p.collision_energy_source)
+            .map(|source| source.as_str().to_owned())
+    }),
     ("opentfraw.possible_charge_states", |s| {
         s.params.as_ref().and_then(possible_charge_states)
     }),

@@ -19,7 +19,7 @@ use crate::error::{Error, Result};
 use crate::extra::{scan_extras, ExtraFields};
 use crate::scan_data::PeakCountCheck;
 use crate::scan_event::ScanEvent;
-use crate::types::{Activation, MsPower, Polarity};
+use crate::types::{Activation, CollisionEnergySource, CollisionEnergyUnit, MsPower, Polarity};
 use crate::RawFileReader;
 
 // -- Structured spectrum record (vendor-neutral, no mzML) --
@@ -28,9 +28,11 @@ use crate::RawFileReader;
 ///
 /// Built from the per-scan parameter table and/or the scan-event reaction
 /// list. `target_mz` is the isolation-window center; `selected_mz` is the
-/// monoisotopic-resolved precursor (when available). `collision_energy` is
-/// either an absolute eV value or, when `ce_is_nce == true`, a normalized
-/// collision energy. When a scan stores both, the NCE value is reported (see
+/// monoisotopic-resolved precursor (when available). `collision_energy` is in
+/// the unit `collision_energy_unit` names, read from the place
+/// `collision_energy_source` names. The unit is `None` when the file does not
+/// state it; it is never assumed. When a scan stores both a normalized and an
+/// eV value in its trailer, the NCE value is reported (see
 /// [`crate::ScanParams::activation_energy`]).
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
@@ -40,7 +42,19 @@ pub struct PrecursorInfo {
     pub isolation_width: Option<f64>,
     pub charge: Option<i32>,
     pub collision_energy: Option<f64>,
+    /// Every step of a stepped collision energy, in the unit of
+    /// `collision_energy_unit`; empty when the scan has one energy. For a
+    /// stepped scan `collision_energy` is the mean of the steps (the scan
+    /// event stores the same value in the public files, for example 30.0 for
+    /// steps 29.10, 30.00 and 30.90).
+    pub collision_energy_steps: Vec<f64>,
+    /// `true` when `collision_energy_unit` is [`CollisionEnergyUnit::Nce`].
+    /// `false` for eV and for an unknown unit.
     pub ce_is_nce: bool,
+    /// Unit of `collision_energy`; `None` when the file states none.
+    pub collision_energy_unit: Option<CollisionEnergyUnit>,
+    /// Where `collision_energy` was read from; `None` when there is no value.
+    pub collision_energy_source: Option<CollisionEnergySource>,
     pub master_scan_number: Option<u32>,
     pub activation: Option<Activation>,
     /// Analyzer used for the precursor scan; needed by mzML CV mapping to
@@ -126,9 +140,46 @@ pub struct ScanMetadata {
     pub base_peak_intensity: f64,
     pub low_mz: f64,
     pub high_mz: f64,
+    /// Instrument scan windows, `(lower, upper)` in m/z: the acquisition
+    /// range of a scan, or the product-ion windows of an SRM scan. Empty when
+    /// the file states none. Not the observed range of the peaks.
+    pub scan_windows: Vec<(f64, f64)>,
     pub ion_injection_time_ms: Option<f64>,
     pub faims_cv: Option<f64>,
     pub precursor: Option<PrecursorInfo>,
+}
+
+/// The instrument scan windows of a scan. A scan reports the acquisition range
+/// its scan index stores (the range its filter string shows), or the first
+/// range of its scan event when the index stores none; an SRM scan reports
+/// its product-ion windows, rounded to four decimals (the stored `f32` has about
+/// seven significant digits).
+fn scan_windows(
+    raw: &RawFileReader,
+    entry: &crate::scan_index::ScanIndexEntry,
+    event: Option<&ScanEvent>,
+    is_srm: bool,
+) -> Vec<(f64, f64)> {
+    let valid = |lo: f64, hi: f64| lo.is_finite() && hi.is_finite() && lo > 0.0 && hi >= lo;
+    if is_srm {
+        let round = |v: f32| (f64::from(v) * 10_000.0).round() / 10_000.0;
+        return raw
+            .srm_q3_windows
+            .get(&entry.scan_event)
+            .into_iter()
+            .flatten()
+            .map(|&(lo, hi)| (round(lo), round(hi)))
+            .filter(|&(lo, hi)| valid(lo, hi))
+            .collect();
+    }
+    if valid(entry.low_mz, entry.high_mz) && entry.high_mz > entry.low_mz {
+        return vec![(entry.low_mz, entry.high_mz)];
+    }
+    event
+        .and_then(|e| e.fraction_collectors.first())
+        .filter(|fc| valid(fc.low_mz, fc.high_mz) && fc.high_mz > fc.low_mz)
+        .map(|fc| vec![(fc.low_mz, fc.high_mz)])
+        .unwrap_or_default()
 }
 
 /// Extract the metadata of the scan at scan-index `idx` (zero-based offset
@@ -168,6 +219,7 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
     } else {
         event.and_then(|e| e.preamble.scan_mode())
     };
+    let scan_windows = scan_windows(raw, entry, event, is_srm);
     let filter = raw.scan_filter(scan_number);
     let is_ms1 = !is_srm && level == 1;
     let is_dia = event.is_some_and(|e| e.preamble.is_dia());
@@ -197,7 +249,10 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
                 isolation_width: srm_iso_width.or(Some(0.7)),
                 charge: None,
                 collision_energy: srm_ce,
+                collision_energy_steps: Vec::new(),
                 ce_is_nce: false,
+                collision_energy_unit: srm_ce.map(|_| CollisionEnergyUnit::Ev),
+                collision_energy_source: srm_ce.map(|_| CollisionEnergySource::SrmTransition),
                 master_scan_number: None,
                 activation,
                 analyzer: event.and_then(|e| e.preamble.analyzer()),
@@ -241,12 +296,40 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
             // with 1/z^2 of the scan's charge state (95.834 at z=2, 42.593
             // at z=3). Only a labelled scan parameter counts there.
             let is_etd = matches!(activation, Some(Activation::ETD | Activation::EThcD));
-            let ae = ae_from_params.or_else(|| {
-                reaction
-                    .filter(|_| !is_etd)
-                    .map(|r| r.energy)
-                    .filter(|&e| e > 0.0)
-            });
+            let from_reaction = reaction
+                .filter(|_| !is_etd)
+                .map(|r| r.energy)
+                .filter(|&e| e > 0.0);
+            // A trailer label states its unit. The scan event stores a bare
+            // number, so its unit is the run's, from the embedded method.
+            let steps = params.as_ref().and_then(|p| p.collision_energy_steps());
+            let (ae, ce_unit, ce_source) = if let Some((values, unit)) = &steps {
+                let mean = values.iter().sum::<f64>() / values.len() as f64;
+                let source = match unit {
+                    CollisionEnergyUnit::Nce => CollisionEnergySource::TrailerNce,
+                    CollisionEnergyUnit::Ev => CollisionEnergySource::TrailerEv,
+                };
+                (Some(mean), Some(*unit), Some(source))
+            } else {
+                match (ae_from_params, from_reaction) {
+                    (Some(e), _) if ae_is_nce => (
+                        Some(e),
+                        Some(CollisionEnergyUnit::Nce),
+                        Some(CollisionEnergySource::TrailerNce),
+                    ),
+                    (Some(e), _) => (
+                        Some(e),
+                        Some(CollisionEnergyUnit::Ev),
+                        Some(CollisionEnergySource::TrailerEv),
+                    ),
+                    (None, Some(e)) => (
+                        Some(e),
+                        raw.scan_event_energy_unit,
+                        Some(CollisionEnergySource::ScanEvent),
+                    ),
+                    (None, None) => (None, None, None),
+                }
+            };
             let master = params
                 .as_ref()
                 .and_then(|p| p.master_scan_number())
@@ -258,7 +341,10 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
                 isolation_width: iw,
                 charge: ch,
                 collision_energy: ae,
-                ce_is_nce: ae_is_nce,
+                collision_energy_steps: steps.map(|(values, _)| values).unwrap_or_default(),
+                ce_is_nce: ce_unit == Some(CollisionEnergyUnit::Nce),
+                collision_energy_unit: ce_unit,
+                collision_energy_source: ce_source,
                 master_scan_number: master,
                 activation,
                 analyzer: event.and_then(|e| e.preamble.analyzer()),
@@ -292,6 +378,7 @@ pub fn scan_metadata(raw: &RawFileReader, idx: u32) -> Option<ScanMetadata> {
         base_peak_intensity: entry.base_intensity,
         low_mz: entry.low_mz,
         high_mz: entry.high_mz,
+        scan_windows,
         ion_injection_time_ms,
         faims_cv,
         precursor,
@@ -367,14 +454,8 @@ fn extract_parts<R: Read + Seek>(
 ) -> Result<ScanParts> {
     let meta = scan_metadata(raw, idx).ok_or(Error::ScanIndexOutOfRange(idx))?;
     let event = raw.scan_events.get(idx as usize);
-    let (mz, intensity, effective_scan_mode, unconverted, peak_count) = resolve_scan_arrays(
-        raw,
-        source,
-        meta.scan_number,
-        include_profile,
-        event,
-        meta.scan_mode,
-    )?;
+    let (mz, intensity, effective_scan_mode, unconverted, peak_count) =
+        resolve_scan_arrays(raw, source, meta.scan_number, include_profile, event)?;
     Ok((
         meta,
         mz,
@@ -429,7 +510,8 @@ type ScanArrays = (
 /// When `include_profile=true` AND the scan packet contains profile data, the
 /// profile signal is decoded and returned as the primary arrays (with
 /// `effective_scan_mode = Some(ScanMode::Profile)`). Otherwise the centroid
-/// peak list is used.
+/// peak list is used and the mode is `Some(ScanMode::Centroid)`, whatever
+/// mode the scan event declares: the arrays are what the mode describes.
 ///
 /// The last element counts profile bins dropped because their m/z is `NaN`
 /// (unknown calibration layout, see `scan_data::freq_to_mz`).
@@ -441,7 +523,6 @@ fn resolve_scan_arrays<R: Read + Seek>(
     scan_number: u32,
     include_profile: bool,
     event: Option<&ScanEvent>,
-    nominal_scan_mode: Option<crate::ScanMode>,
 ) -> Result<ScanArrays> {
     if include_profile && !raw.flat_peaks {
         let packet = raw.read_scan(source, scan_number)?;
@@ -471,12 +552,18 @@ fn resolve_scan_arrays<R: Read + Seek>(
         }
         let mz: Vec<f64> = packet.peaks.iter().map(|p| p.mz).collect();
         let int: Vec<f32> = packet.peaks.iter().map(|p| p.abundance).collect();
-        return Ok((mz, int, nominal_scan_mode, 0, PeakCountCheck::Agreed));
+        return Ok((
+            mz,
+            int,
+            Some(crate::ScanMode::Centroid),
+            0,
+            PeakCountCheck::Agreed,
+        ));
     }
     let (peaks, peak_count) = raw.read_peaks_only_checked(source, scan_number)?;
     let mz: Vec<f64> = peaks.iter().map(|p| p.mz).collect();
     let int: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
-    Ok((mz, int, nominal_scan_mode, 0, peak_count))
+    Ok((mz, int, Some(crate::ScanMode::Centroid), 0, peak_count))
 }
 
 // -- Adapter / canonical writer wrappers --
@@ -665,11 +752,30 @@ fn convert_analyzer(a: Option<crate::Analyzer>) -> Option<msc::Analyzer> {
     })
 }
 
+/// `None` stays `None`: Core writes a collision energy with no unit only
+/// when the caller allows `Check::UnknownCollisionEnergyUnit`.
+fn convert_energy_unit(u: Option<CollisionEnergyUnit>) -> Option<msc::CollisionEnergyUnit> {
+    u.map(|u| match u {
+        CollisionEnergyUnit::Nce => msc::CollisionEnergyUnit::Nce,
+        CollisionEnergyUnit::Ev => msc::CollisionEnergyUnit::Ev,
+    })
+}
+
 /// `Unknown` codes map to `None`: the shared model has no "unknown" method,
 /// and the writer then emits no dissociation-method term.
-fn convert_activation(a: Option<Activation>) -> Option<msc::Activation> {
+///
+/// Code 4 on an FTMS analyzer is beam-type collision-induced dissociation,
+/// which the shared model calls `HCD` (it does not choose from the analyzer).
+/// Evidence: PXD002395 (LTQ Orbitrap Velos) stores code 4 on every FTMS MS2
+/// event and its method says `Activation Type: HCD`. The same code on an ion
+/// trap is resonant CID.
+fn convert_activation(
+    a: Option<Activation>,
+    analyzer: Option<crate::Analyzer>,
+) -> Option<msc::Activation> {
     a.and_then(|a| match a {
         Activation::HCD => Some(msc::Activation::HCD),
+        Activation::CID if analyzer == Some(crate::Analyzer::FTMS) => Some(msc::Activation::HCD),
         Activation::CID => Some(msc::Activation::CID),
         Activation::ETD => Some(msc::Activation::ETD),
         Activation::EThcD => Some(msc::Activation::EThcD),
@@ -688,18 +794,26 @@ fn to_msc_record(
 ) -> msc::SpectrumRecord {
     let (meta, mz, intensity, scan_mode, _, _) = parts;
     let precursor = meta.precursor.map(|p| {
-        msc::PrecursorInfo::default()
+        let unit = convert_energy_unit(p.collision_energy_unit);
+        let mut info = msc::PrecursorInfo::default()
             .with_target_mz(p.target_mz)
             .with_selected_mz(p.selected_mz)
             .with_isolation_width(p.isolation_width)
             .with_charge(p.charge)
-            .with_collision_energy(p.collision_energy)
-            .with_ce_is_nce(p.ce_is_nce)
             .with_precursor_native_id(p.master_scan_number.map(native_id_for))
-            .with_activation(convert_activation(p.activation))
-            .with_analyzer(convert_analyzer(p.analyzer))
+            .with_activation(convert_activation(p.activation, p.analyzer))
+            .with_analyzer(convert_analyzer(p.analyzer));
+        // A stepped energy carries every step; the single value is their mean.
+        if p.collision_energy_steps.is_empty() {
+            info = info.with_collision_energy(p.collision_energy, unit);
+        } else {
+            for step in &p.collision_energy_steps {
+                info = info.with_collision_energy(*step, unit);
+            }
+        }
+        info
     });
-    msc::SpectrumRecord::new(
+    let mut record = msc::SpectrumRecord::new(
         meta.index,
         meta.scan_number,
         native_id_for(meta.scan_number),
@@ -713,15 +827,26 @@ fn to_msc_record(
     .with_filter(meta.filter)
     .with_retention_time_sec(meta.retention_time_min * 60.0)
     .with_total_ion_current(meta.total_ion_current)
-    .with_base_peak_mz(meta.base_peak_mz)
-    .with_base_peak_intensity(meta.base_peak_intensity)
-    .with_low_mz(meta.low_mz)
-    .with_high_mz(meta.high_mz)
+    // The scan index stores 0 for the base peak of a scan with no peaks.
+    .with_base_peak_mz((!mz.is_empty()).then_some(meta.base_peak_mz))
+    .with_base_peak_intensity((!mz.is_empty()).then_some(meta.base_peak_intensity))
+    .with_low_mz(mz.first().copied())
+    .with_high_mz(mz.last().copied())
     .with_ion_injection_time_ms(meta.ion_injection_time_ms)
     .with_faims_cv(meta.faims_cv)
     .with_precursor(precursor)
     .with_peaks(mz, intensity)
-    .with_extra_map(extra)
+    .with_extra_map(extra);
+    for &(lower, upper) in &meta.scan_windows {
+        record = record.with_scan_window(lower, upper);
+    }
+    if record.mz.is_empty() {
+        record = record.with_warning(msc::Warning::other(
+            "opentfraw.empty_spectrum",
+            "the scan holds no peaks",
+        ));
+    }
+    record
 }
 
 // -- Chromatogram records (TIC / BPC / SRM) --
@@ -983,7 +1108,7 @@ fn run_analyzers(raw: &RawFileReader) -> Vec<msc::Analyzer> {
     out
 }
 
-impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
+impl<'a, R: Read + Seek + Send> msc::SpectrumSource for OpenTfRawSource<'a, R> {
     fn run_metadata(&self) -> msc::RunMetadata {
         let mut extra = ::std::collections::BTreeMap::new();
         extra.insert("opentfraw.raw_version".into(), self.raw.version.to_string());
@@ -1164,7 +1289,7 @@ pub fn write_mzml<R, W>(
     include_profile: bool,
 ) -> Result<msc::WriteSummary>
 where
-    R: Read + Seek,
+    R: Read + Seek + Send,
     W: Write,
 {
     let mut src = OpenTfRawSource::new(raw, source, raw_filename, include_profile);
@@ -1188,7 +1313,7 @@ pub fn write_indexed_mzml<R, W>(
     include_profile: bool,
 ) -> Result<msc::WriteSummary>
 where
-    R: Read + Seek,
+    R: Read + Seek + Send,
     W: Write,
 {
     let mut src = OpenTfRawSource::new(raw, source, raw_filename, include_profile);

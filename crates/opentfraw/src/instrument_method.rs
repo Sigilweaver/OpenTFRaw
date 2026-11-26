@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::compound_file::CompoundFile;
+use crate::types::CollisionEnergyUnit;
 
 pub(crate) type SourceCidSettings = BTreeMap<(u16, u16), f64>;
 
@@ -101,6 +102,34 @@ fn parse_settings(text: &str) -> Option<SourceCidSettings> {
         }
     }
     Some(out)
+}
+
+/// The unit of the collision energies that the scan events store, when the
+/// embedded method states one.
+///
+/// The scan event holds a bare number. Public files state the unit in the
+/// method, in three forms: `Normalized Coll. Energy: 35.0` (LTQ, Velos and
+/// Elite family), `Collision Energy (%) = 32` (Fusion family) and an
+/// `EnergyType="normalized"` attribute on the `Fragmentation_*` element
+/// (Q Exactive family). The result is [`CollisionEnergyUnit::Nce`] only when
+/// one of these is present and nothing else in the method states a unit:
+/// an `EnergyType` attribute with any other value, or a `Collision Energy
+/// (V)` column header, makes the method ambiguous, and no method text, or
+/// none of these statements, leaves the unit unknown.
+pub(crate) fn scan_event_energy_unit(text: &str) -> Option<CollisionEnergyUnit> {
+    const NORMALIZED: [&str; 2] = ["Normalized Coll. Energy", "Collision Energy (%)"];
+    const OTHER: [&str; 1] = ["Collision Energy (V)"];
+    const ENERGY_TYPE: &str = "EnergyType=\"";
+    let mut normalized = NORMALIZED.iter().any(|s| text.contains(s));
+    let mut other = OTHER.iter().any(|s| text.contains(s));
+    for part in text.split(ENERGY_TYPE).skip(1) {
+        if part.starts_with("normalized\"") {
+            normalized = true;
+        } else {
+            other = true;
+        }
+    }
+    (normalized && !other).then_some(CollisionEnergyUnit::Nce)
 }
 
 fn positive_id(value: &str) -> Option<u16> {
@@ -266,6 +295,30 @@ mod tests {
             "<!DOCTYPE x [<!ENTITY energy '20'>]><InstrumentSetupMethod/>".into(),
         ] {
             assert!(source_cid_settings(&text).is_empty(), "{text}");
+        }
+    }
+
+    #[test]
+    fn scan_event_energy_unit_needs_one_statement_and_no_conflict() {
+        for text in [
+            "Stepped collision energy not enabled\r\nNormalized Coll. Energy: 35.0\r\n",
+            "Is Stepped Collision Energy On = False\nCollision Energy (%) = 32\n",
+            r#"<Fragmentation_HCD FullInternalName="decimal?" EnergyType="normalized">27</Fragmentation_HCD>"#,
+        ] {
+            assert_eq!(
+                scan_event_energy_unit(text),
+                Some(CollisionEnergyUnit::Nce),
+                "{text}"
+            );
+        }
+        for text in [
+            "",
+            "Activation Type: HCD\nActivation Time: 0.100",
+            r#"<Fragmentation_HCD EnergyType="absolute">27</Fragmentation_HCD>"#,
+            r#"<A EnergyType="normalized">27</A><B EnergyType="absolute">30</B>"#,
+            "Normalized Coll. Energy: 35.0\nCollision Energy (V) | Start",
+        ] {
+            assert_eq!(scan_event_energy_unit(text), None, "{text}");
         }
     }
 

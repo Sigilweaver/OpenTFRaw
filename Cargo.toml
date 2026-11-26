@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/opentfraw", "crates/opentfraw-py"]
 
 [workspace.package]
-version = "3.1.1"
+version = "4.0.0"
 edition = "2021"
 rust-version = "1.88"
 authors = ["Nathan Riley <git@nathanriley.com>"]
@@ -16,9 +16,14 @@ categories = ["parser-implementations", "science"]
 
 [workspace.dependencies]
 opentfraw = { path = "crates/opentfraw" }
-openmassspec-core = "3.0.0"
-pyo3 = { version = "0.29", features = ["extension-module", "abi3-py38"] }
+openmassspec-core = "4.0.0"
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py310"] }
 numpy = "0.29"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+# Pinned to a Core commit until openmassspec-core 4.0.0 is on crates.io.
+# Remove before merge.
+[patch.crates-io]
+openmassspec-core = { git = "https://github.com/Sigilweaver/OpenMassSpecCore", rev = "63b2a3010abea9d2bfd7a74c9e9a413b6a1ade39" }
