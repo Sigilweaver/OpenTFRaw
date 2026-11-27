@@ -51,15 +51,29 @@ Measured on the public test corpus (291 files from 56 PRIDE datasets).
   triple-quadrupole scans.
 - **SRM data:** polarity is always reported as positive and isolation width
   as 0.7. A TSQ Vantage (format version 63) flat-peak record does not state
-  its peak count. The reader takes the count that agrees with the scan
-  index's total current, m/z range and ascending m/z, and marks such a scan
-  with `opentfraw.peak_count_recovered`: 1,969 of the 35,098 scans of
-  PXD020246. A scan for which no count, or more than one count, agrees (none
-  in PXD020246) is read with the default count and may contain NaN values or
-  peaks outside the scan's m/z range; a record that matches no layout raises
-  an error, and `to_mzml(..., skip_unreadable=True)` (Python) or the
-  `to_mzml` example's `--skip-unreadable` flag writes the other scans and
-  reports how many were left out.
+  its peak count, so the reader checks the default count (`data_size - 1`,
+  else `data_size - 2`) against the scan index: finite and ascending m/z, an
+  intensity sum equal to the total current, m/z inside the indexed range.
+  When the default count disagrees, every count from `data_size - 1` down to
+  `data_size - 12` is tried. If exactly one agrees the scan is
+  *recovered*: its peaks use that count and the spectrum carries
+  `opentfraw.peak_count_recovered` (1,969 of the 35,098 scans of PXD020246,
+  none of the other public files; 3.1.0 returned misaligned values for them).
+  If none agrees, or more than one does (a tie is never broken), the scan is
+  *unverified*: the default peaks are returned unchanged, may hold NaN or
+  descending m/z, and the spectrum carries `opentfraw.peak_count_unverified`
+  (none in the public corpus). A true count of zero is never tried, so a
+  scan with `data_size` of 2 or more and no peaks is unverified, not empty.
+  Recovered and unverified scans are counted wherever they are read:
+  `OpenTfRawSource::recovered_peak_count_scans()` and
+  `unverified_peak_count_scans()`, `RawFileReader::peak_counts_recovered()`
+  and `peak_counts_unverified()` (decodes since open), the `peak_count` field
+  of `extract_spectrum` / `iter_spectra` records, a `UserWarning` from Python
+  `peaks()`, `scan()` and `to_mzml`, and a warning from the `to_mzml`
+  example. A record that matches no layout raises an error, and
+  `to_mzml(..., skip_unreadable=True)` (Python) or the `to_mzml` example's
+  `--skip-unreadable` flag writes the other scans and reports how many were
+  left out.
 - **Profile spectra** with an unrecognised calibration layout have NaN m/z
   values; mzML reports the count in `opentfraw.unconverted_profile_bins`.
 - **m/z accuracy** follows the instrument's stored calibration. In FTMS
