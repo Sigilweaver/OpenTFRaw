@@ -51,11 +51,6 @@ Measured on the public test corpus (291 files from 56 PRIDE datasets).
   `unknown_collision_energy_unit`. Pass `allow=["unknown_collision_energy_unit"]`
   (Python) or `--allow unknown_collision_energy_unit` (`to_mzml` example) to
   write them with a warning userParam and a count.
-- **Unsorted m/z (TSQ Vantage).** In PXD020246, 1,911 of the 35,094 decoded
-  scans list m/z values that are not ascending (the NaN and out-of-range
-  values above). The mzML writer refuses such a scan and has no check to
-  relax; `skip_unreadable=True` leaves the scan out and counts it (1,915 with
-  the 4 scans that do not decode).
 - **Charge without precursor m/z.** On 50 scans in 5 files whose scan events
   are misread (PXD039587, PXD064117 FOXK2, three PXD070648 files) the trailer
   holds a charge state and the misread scan event no precursor m/z. mzML puts
@@ -85,20 +80,24 @@ Measured on the public test corpus (291 files from 56 PRIDE datasets).
   misaligned one). When the default count disagrees, every count from `data_size - 1` down to
   `data_size - 12` is tried. If exactly one agrees the scan is
   *recovered*: its peaks use that count and the spectrum carries
-  `opentfraw.peak_count_recovered` (1,969 of the 35,098 scans of PXD020246,
-  none of the other public files).
+  the warning `opentfraw.peak_count_recovered` (1,969 of the 35,098 scans of
+  PXD020246, none of the other public files, which `to_mzml` converts in
+  full).
   If none agrees, or more than one does (a tie is never broken), the scan is
   *unverified*: the default peaks are returned unchanged, may hold NaN or
-  descending m/z, and the spectrum carries `opentfraw.peak_count_unverified`
-  (none in the public corpus). A true count of zero is never tried, so a
-  scan with `data_size` of 2 or more and no peaks is unverified, not empty.
-  Recovered and unverified scans are counted wherever they are read:
-  `OpenTfRawSource::recovered_peak_count_scans()` and
-  `unverified_peak_count_scans()`, `RawFileReader::peak_counts_recovered()`
-  and `peak_counts_unverified()` (decodes since open), the `peak_count` field
-  of `extract_spectrum` / `iter_spectra` records, a `UserWarning` from Python
-  `peaks()`, `scan()` and `to_mzml`, and a warning from the `to_mzml`
-  example. A record that matches no layout raises an error, and
+  descending m/z, and the spectrum carries the warning
+  `opentfraw.peak_count_unverified` (none in the public corpus). The mzML
+  writer refuses an unverified scan whose m/z is not finite and ascending, and
+  has no check to relax; `skip_unreadable=True` leaves it out and counts it.
+  A true count of zero is never tried, so a scan with `data_size` of 2 or more
+  and no peaks is unverified, not empty.
+  Recovered and unverified scans are flagged wherever they are read:
+  `RawFileReader::peak_counts_recovered()` and `peak_counts_unverified()`
+  count the decodes since open, the `peak_count` field of `extract_spectrum` /
+  `iter_spectra` records says how each was settled, `iter_records()` and the
+  mzML writer carry the Core warnings (counted in the write summary), and
+  Python `peaks()`, `scan()` and `to_mzml` emit a `UserWarning`, as does the
+  `to_mzml` example. A record that matches no layout raises an error, and
   `to_mzml(..., skip_unreadable=True)` (Python) or the `to_mzml` example's
   `--skip-unreadable` flag writes the other scans and reports how many were
   left out.

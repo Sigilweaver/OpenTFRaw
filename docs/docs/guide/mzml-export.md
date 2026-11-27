@@ -73,7 +73,11 @@ A scan with no peaks is written with no base peak and the warning
 A scan whose trailer states a charge but whose precursor has no m/z carries the
 charge in the `opentfraw.precursor_charge` userParam and the warning
 `opentfraw.charge_without_selected_mz`; mzML has no place for a charge without
-a selected ion. The scan window of a scan is the acquisition range of its filter
+a selected ion. A TSQ Vantage scan whose peak count was recovered from the scan
+index carries the warning `opentfraw.peak_count_recovered` (PXD020246 converts
+by default, 1,969 of its 35,098 spectra marked); one with no agreeing count
+carries `opentfraw.peak_count_unverified` and the writer refuses it unless its
+m/z is finite and ascending. The scan window of a scan is the acquisition range of its filter
 string; the observed range is that of its peaks.
 
 Collision energy carries the unit the file states. A trailer label

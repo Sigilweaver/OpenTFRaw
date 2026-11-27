@@ -74,7 +74,7 @@ decoders described in [Scan data](./scan-data). Related read methods:
 | `read_scan_labels`  | `ScanDataPacket` | Centroids + FT labels, skipping the profile signal; `PacketHeader` format only     |
 | `read_scan_peaks`   | `Vec<Peak>`      | Centroided peaks, dispatching on `scan_format`; the recommended default           |
 | `read_peaks_only`   | `Vec<Peak>`      | Like `read_scan_peaks` but skips profile data on `PacketHeader` files for a 2-10x speedup |
-| `read_scan_flat`    | `Vec<Peak>`      | Low-level: TSQ/SRM (v63) flat-peak format. The peak count is settled against the scan index; a recovered or unverified scan is counted, not marked (see below) |
+| `read_scan_flat`    | `Vec<Peak>`      | Low-level: TSQ/SRM (v63) flat-peak format. The peak count is settled against the scan index; a recovered or unverified scan is counted, not flagged on the record (see below) |
 | `read_scan_flat_checked` | `(Vec<Peak>, PeakCountCheck)` | `read_scan_flat` plus how the count was settled: `Agreed`, `Recovered` or `Unverified` |
 | `read_peaks_only_checked` | `(Vec<Peak>, PeakCountCheck)` | `read_peaks_only` plus the same flag (always `Agreed` outside v63) |
 | `read_scan_srm_v66` | `Vec<Peak>`      | Low-level: TSQ Quantiva/Altis (v66) SRM format                                     |

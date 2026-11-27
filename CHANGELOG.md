@@ -40,6 +40,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   3.x wrote. Core 4 writes `CID` as MS:1000133 and no longer chooses from the
   analyzer. The mzML output is unchanged; `iter_records()` reports `"hcd"`
   where 3.x reported `"cid"`.
+- **Breaking (Rust):** the TSQ Vantage peak-count flags added in 3.1.1 use
+  Core's warnings. A recovered or unverified scan carries the warning
+  `opentfraw.peak_count_recovered` or `opentfraw.peak_count_unverified` (a
+  userParam named `openmassspec: warning <code>` in mzML, counted in the write
+  summary) instead of the spectrum `extra` key of that name.
+  `OpenTfRawSource::recovered_peak_count_scans()` and
+  `unverified_peak_count_scans()` are removed, and `RECOVERED_PEAK_COUNT_KEY` /
+  `UNVERIFIED_PEAK_COUNT_KEY` are now `RECOVERED_PEAK_COUNT_CODE` /
+  `UNVERIFIED_PEAK_COUNT_CODE`. With the recovery, PXD020246 converts by
+  default (35,098 spectra, 1,969 with the recovered warning); Core's writer
+  refuses only an unverified scan whose m/z is not finite and ascending.
 
 ### Fixed
 
