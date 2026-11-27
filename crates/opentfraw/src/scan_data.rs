@@ -540,7 +540,13 @@ const FLAT_TOTAL_CURRENT_TOLERANCE: f64 = 1e-6;
 /// `peaks` agree with the scan index: finite, ascending m/z, the m/z inside
 /// the indexed range (1 m/z of slack), and an intensity sum equal to the
 /// indexed total current.
+///
+/// An index with a non-finite total current or m/z bound cannot confirm
+/// anything, so nothing agrees with it.
 fn flat_peaks_agree_with_index(peaks: &[Peak], index: &FlatScanIndex) -> bool {
+    if !index.total_current.is_finite() || !index.low_mz.is_finite() || !index.high_mz.is_finite() {
+        return false;
+    }
     if peaks
         .iter()
         .any(|p| !p.mz.is_finite() || !p.abundance.is_finite())
@@ -561,13 +567,34 @@ fn flat_peaks_agree_with_index(peaks: &[Peak], index: &FlatScanIndex) -> bool {
     }
 }
 
-/// Peaks of a flat-peak scan and whether their count was recovered.
+/// How a flat-peak scan's peak count was settled.
+///
+/// A TSQ Vantage (v63) record does not state its peak count, so the reader
+/// takes the count that agrees with the scan index (intensity sum equal to
+/// the total current, m/z inside the indexed range, m/z ascending).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum PeakCountCheck {
+    /// The default count (`data_size - 1`, else `data_size - 2`) agrees with
+    /// the index, or the format states its peak count.
+    #[default]
+    Agreed,
+    /// The default count disagrees with the index and exactly one other
+    /// count (`data_size - 1` down to `data_size - 12`) agrees; its peaks are
+    /// returned. The values differ from what earlier versions returned.
+    Recovered,
+    /// The default count disagrees with the index and no other count, or
+    /// more than one, agrees (or the index itself is not finite). The default
+    /// peaks are returned unchanged and cannot be trusted: they may hold
+    /// non-finite or descending m/z.
+    Unverified,
+}
+
+/// Peaks of a flat-peak scan and how their count was settled.
 #[derive(Debug, Clone)]
 pub(crate) struct FlatPeaks {
     pub peaks: Vec<Peak>,
-    /// `true` when the default peak count disagreed with the scan index and a
-    /// different count was chosen because it alone agrees.
-    pub recovered: bool,
+    pub check: PeakCountCheck,
 }
 
 /// [`read_flat_peaks`], verified against the scan index.
@@ -576,10 +603,19 @@ pub(crate) struct FlatPeaks {
 /// `data_size - 2` is wrong for some TSQ Vantage scans: the peaks are then
 /// read misaligned (m/z of 0.0, then values such as -3.5e14). When the
 /// default result disagrees with `index` (see [`flat_peaks_agree_with_index`])
-/// every count from `data_size - 1` down to `data_size - 12` is tried, and the
-/// one count whose peaks agree is used and reported as `recovered`. When no
-/// count or more than one count agrees, the default result (or its error) is
-/// returned unchanged.
+/// every count from `data_size - 1` down to `data_size - 12` is tried.
+///
+/// - Exactly one count agrees: its peaks, [`PeakCountCheck::Recovered`].
+/// - None, or more than one, agrees: the default peaks (or the default
+///   error), [`PeakCountCheck::Unverified`]. A tie is never broken.
+/// - A candidate that cannot be read because of an error (not because its
+///   peaks would start before the data stream) returns that error.
+///
+/// A count of zero is never tried: the shortfall stays below `data_size`, so
+/// a scan whose true count is zero but whose `data_size` is 2 or more is
+/// `Unverified` unless the default read happens to agree. `data_size` 0 and 1
+/// give no peaks (the default result), which agree only with a total current
+/// of zero.
 pub(crate) fn read_flat_peaks_checked<R: Read + Seek>(
     source: &mut R,
     data_addr: u64,
@@ -592,7 +628,7 @@ pub(crate) fn read_flat_peaks_checked<R: Read + Seek>(
         if flat_peaks_agree_with_index(peaks, index) {
             return Ok(FlatPeaks {
                 peaks: default?,
-                recovered: false,
+                check: PeakCountCheck::Agreed,
             });
         }
     }
@@ -602,8 +638,9 @@ pub(crate) fn read_flat_peaks_checked<R: Read + Seek>(
             break;
         }
         let peak_count = (data_size - shortfall) as usize;
-        // A candidate that cannot be read is not a candidate.
-        if let Ok(Some(peaks)) = read_flat_peak_run(source, data_addr, cum_end, peak_count) {
+        // `None`: the candidate's peaks would start before the data stream,
+        // so it is not a candidate. Any error is the scan's error.
+        if let Some(peaks) = read_flat_peak_run(source, data_addr, cum_end, peak_count)? {
             if flat_peaks_agree_with_index(&peaks, index) {
                 agreeing.push(peaks);
             }
@@ -612,12 +649,12 @@ pub(crate) fn read_flat_peaks_checked<R: Read + Seek>(
     if agreeing.len() == 1 {
         return Ok(FlatPeaks {
             peaks: agreeing.remove(0),
-            recovered: true,
+            check: PeakCountCheck::Recovered,
         });
     }
     default.map(|peaks| FlatPeaks {
         peaks,
-        recovered: false,
+        check: PeakCountCheck::Unverified,
     })
 }
 
@@ -1160,7 +1197,7 @@ mod tests {
             &index_of(&peaks),
         )
         .unwrap();
-        assert!(!got.recovered);
+        assert_eq!(got.check, PeakCountCheck::Agreed);
         assert_eq!(got.peaks.len(), 3);
         assert_eq!(got.peaks[2].mz, 300.5);
     }
@@ -1179,7 +1216,7 @@ mod tests {
         ));
         let got =
             read_flat_peaks_checked(&mut Cursor::new(bytes), 0, end, data_size, &index).unwrap();
-        assert!(got.recovered);
+        assert_eq!(got.check, PeakCountCheck::Recovered);
         assert_eq!(
             got.peaks
                 .iter()
@@ -1211,13 +1248,13 @@ mod tests {
         assert_eq!(default.len(), 4);
         assert!(!flat_peaks_agree_with_index(&default, &index));
         let got = read_flat_peaks_checked(&mut Cursor::new(bytes), 0, end, 5, &index).unwrap();
-        assert!(got.recovered);
+        assert_eq!(got.check, PeakCountCheck::Recovered);
         assert_eq!(got.peaks.len(), 3);
         assert_eq!(got.peaks[0].mz, 100.5);
     }
 
     #[test]
-    fn flat_peaks_checked_returns_the_default_result_when_no_count_agrees() {
+    fn flat_peaks_checked_flags_the_default_result_when_no_count_agrees() {
         let peaks = [(100.5, 10.0), (200.5, 20.0), (300.5, 30.0)];
         let (bytes, end) = flat_record(64, &peaks);
         let mut index = index_of(&peaks);
@@ -1225,8 +1262,153 @@ mod tests {
         let data_size = peaks.len() as u32 + 1;
         let got =
             read_flat_peaks_checked(&mut Cursor::new(bytes), 0, end, data_size, &index).unwrap();
-        assert!(!got.recovered);
+        assert_eq!(got.check, PeakCountCheck::Unverified);
         assert_eq!(got.peaks.len(), 3);
+    }
+
+    #[test]
+    fn flat_peaks_checked_never_breaks_a_tie() {
+        // 45 bytes: a plausible junk pair (50.5, 5.0) and a flag byte, then
+        // 36 zero bytes. The index says total current 0 and range 0 to 0.
+        // The default count (5) includes the junk pair and disagrees; the
+        // counts 4, 3, 2 and 1 are all zeros and all agree.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&50.5f32.to_le_bytes());
+        bytes.extend_from_slice(&5.0f32.to_le_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(&[0u8; 36]);
+        let end = bytes.len() as u64;
+        let index = FlatScanIndex {
+            total_current: 0.0,
+            low_mz: 0.0,
+            high_mz: 0.0,
+        };
+        let got = read_flat_peaks_checked(&mut Cursor::new(bytes), 0, end, 6, &index).unwrap();
+        assert_eq!(got.check, PeakCountCheck::Unverified);
+        assert_eq!(got.peaks.len(), 5, "the default result, unchanged");
+        assert_eq!(got.peaks[0].mz, 50.5);
+    }
+
+    #[test]
+    fn flat_peaks_checked_confirms_nothing_against_a_non_finite_index() {
+        let peaks = [(100.5, 10.0), (200.5, 20.0), (300.5, 30.0)];
+        let data_size = peaks.len() as u32 + 1;
+        for (total_current, low_mz, high_mz) in [
+            (f64::NAN, 100.5, 300.5),
+            (f64::INFINITY, 100.5, 300.5),
+            (60.0, f64::NAN, 300.5),
+            (60.0, 100.5, f64::NAN),
+        ] {
+            let (bytes, end) = flat_record(64, &peaks);
+            let index = FlatScanIndex {
+                total_current,
+                low_mz,
+                high_mz,
+            };
+            let got = read_flat_peaks_checked(&mut Cursor::new(bytes), 0, end, data_size, &index)
+                .unwrap();
+            assert_eq!(got.check, PeakCountCheck::Unverified, "{index:?}");
+            assert_eq!(got.peaks.len(), 3);
+        }
+    }
+
+    #[test]
+    fn flat_peaks_checked_flags_peaks_against_a_total_current_of_zero() {
+        let peaks = [(100.5, 10.0), (200.5, 20.0)];
+        let (bytes, end) = flat_record(64, &peaks);
+        let mut index = index_of(&peaks);
+        index.total_current = 0.0;
+        let got = read_flat_peaks_checked(&mut Cursor::new(bytes), 0, end, 3, &index).unwrap();
+        assert_eq!(got.check, PeakCountCheck::Unverified);
+        assert_eq!(got.peaks.len(), 2);
+    }
+
+    #[test]
+    fn flat_peaks_checked_small_data_sizes() {
+        let zero = FlatScanIndex {
+            total_current: 0.0,
+            low_mz: 0.0,
+            high_mz: 0.0,
+        };
+        let some = FlatScanIndex {
+            total_current: 5.0,
+            ..zero
+        };
+        // data_size 0 and 1 hold no peaks: they agree only with a total
+        // current of zero.
+        for data_size in [0u32, 1] {
+            let got =
+                read_flat_peaks_checked(&mut Cursor::new(vec![0u8; 32]), 0, 32, data_size, &zero)
+                    .unwrap();
+            assert_eq!(got.check, PeakCountCheck::Agreed);
+            assert!(got.peaks.is_empty());
+            let got =
+                read_flat_peaks_checked(&mut Cursor::new(vec![0u8; 32]), 0, 32, data_size, &some)
+                    .unwrap();
+            assert_eq!(got.check, PeakCountCheck::Unverified);
+            assert!(got.peaks.is_empty());
+        }
+        // data_size 2: one peak, read by the default count.
+        let (bytes, end) = flat_record(8, &[(100.5, 5.0)]);
+        let one = FlatScanIndex {
+            total_current: 5.0,
+            low_mz: 100.5,
+            high_mz: 100.5,
+        };
+        let got = read_flat_peaks_checked(&mut Cursor::new(bytes), 0, end, 2, &one).unwrap();
+        assert_eq!(got.check, PeakCountCheck::Agreed);
+        assert_eq!(got.peaks.len(), 1);
+    }
+
+    #[test]
+    fn flat_peaks_checked_never_tries_a_count_of_zero() {
+        // A record of data_size 2 whose true count would be zero: the only
+        // candidate count is 1, which reads junk. The scan is an error, not
+        // an empty spectrum.
+        let bytes = vec![0x7Fu8; 9];
+        let index = FlatScanIndex {
+            total_current: 0.0,
+            low_mz: 0.0,
+            high_mz: 0.0,
+        };
+        let err = read_flat_peaks_checked(&mut Cursor::new(bytes), 0, 9, 2, &index).unwrap_err();
+        assert!(
+            matches!(err, Error::UnrecognizedScanRecord { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn flat_peaks_checked_returns_a_read_error_not_unverified() {
+        // The record claims to end at 100 but the source holds 40 bytes.
+        let index = FlatScanIndex {
+            total_current: 5.0,
+            low_mz: 0.0,
+            high_mz: 1000.0,
+        };
+        let err = read_flat_peaks_checked(&mut Cursor::new(vec![0u8; 40]), 0, 100, 5, &index)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::UnexpectedEof { .. } | Error::AllocationTooLarge { .. } | Error::Io(_)
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn flat_peaks_non_finite_peak_never_agrees() {
+        let nan = [Peak {
+            mz: f64::NAN,
+            abundance: 1.0,
+        }];
+        let index = FlatScanIndex {
+            total_current: 1.0,
+            low_mz: 0.0,
+            high_mz: 10.0,
+        };
+        assert!(!flat_peaks_agree_with_index(&nan, &index));
     }
 
     #[test]

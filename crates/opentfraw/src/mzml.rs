@@ -17,6 +17,7 @@ use std::io::{Read, Seek, Write};
 
 use crate::error::{Error, Result};
 use crate::extra::{scan_extras, ExtraFields};
+use crate::scan_data::PeakCountCheck;
 use crate::scan_event::ScanEvent;
 use crate::types::{Activation, MsPower, Polarity};
 use crate::RawFileReader;
@@ -81,6 +82,11 @@ pub struct SpectrumRecord {
     pub precursor: Option<PrecursorInfo>,
     pub mz: Vec<f64>,
     pub intensity: Vec<f32>,
+    /// How the peak count of a TSQ Vantage (v63) flat-peak scan was settled.
+    /// [`PeakCountCheck::Recovered`] values differ from earlier versions';
+    /// [`PeakCountCheck::Unverified`] peaks may hold non-finite or descending
+    /// m/z. [`PeakCountCheck::Agreed`] for every other scan.
+    pub peak_count: PeakCountCheck,
 }
 
 /// Per-scan metadata: every field of a [`SpectrumRecord`] except the peak
@@ -311,10 +317,9 @@ pub fn extract_spectrum<R: Read + Seek>(
     idx: u32,
     include_profile: bool,
 ) -> Result<SpectrumRecord> {
-    // `SpectrumRecord` has no field for the unconverted-bin count or the
-    // recovered-peak-count flag; the `openmassspec_core` adapter reports them
-    // in `extra`.
-    let (meta, mz, intensity, effective_scan_mode, _unconverted_mz_bins, _recovered) =
+    // `SpectrumRecord` has no field for the unconverted-bin count; the
+    // `openmassspec_core` adapter reports it in `extra`.
+    let (meta, mz, intensity, effective_scan_mode, _unconverted_mz_bins, peak_count) =
         extract_parts(raw, source, idx, include_profile)?;
     Ok(SpectrumRecord {
         index: meta.index,
@@ -337,20 +342,21 @@ pub fn extract_spectrum<R: Read + Seek>(
         precursor: meta.precursor,
         mz,
         intensity,
+        peak_count,
     })
 }
 
 /// A scan's metadata, its peak arrays, the scan mode those arrays are in,
 /// the number of profile bins dropped because their m/z could not be
-/// computed (unknown calibration layout), and whether a flat-peak scan's
-/// peak count was recovered from the scan index.
+/// computed (unknown calibration layout), and how a flat-peak scan's peak
+/// count was settled.
 type ScanParts = (
     ScanMetadata,
     Vec<f64>,
     Vec<f32>,
     Option<crate::ScanMode>,
     usize,
-    bool,
+    PeakCountCheck,
 );
 
 fn extract_parts<R: Read + Seek>(
@@ -361,7 +367,7 @@ fn extract_parts<R: Read + Seek>(
 ) -> Result<ScanParts> {
     let meta = scan_metadata(raw, idx).ok_or(Error::ScanIndexOutOfRange(idx))?;
     let event = raw.scan_events.get(idx as usize);
-    let (mz, intensity, effective_scan_mode, unconverted, recovered) = resolve_scan_arrays(
+    let (mz, intensity, effective_scan_mode, unconverted, peak_count) = resolve_scan_arrays(
         raw,
         source,
         meta.scan_number,
@@ -375,7 +381,7 @@ fn extract_parts<R: Read + Seek>(
         intensity,
         effective_scan_mode,
         unconverted,
-        recovered,
+        peak_count,
     ))
 }
 
@@ -409,8 +415,14 @@ fn ms_level(power: MsPower) -> u32 {
 }
 
 /// m/z, intensity, effective scan mode, unconverted profile-bin count, and
-/// whether the peak count was recovered (flat-peak scans).
-type ScanArrays = (Vec<f64>, Vec<f32>, Option<crate::ScanMode>, usize, bool);
+/// how the peak count was settled (flat-peak scans).
+type ScanArrays = (
+    Vec<f64>,
+    Vec<f32>,
+    Option<crate::ScanMode>,
+    usize,
+    PeakCountCheck,
+);
 
 /// Resolve the m/z and intensity arrays for a single scan.
 ///
@@ -449,20 +461,22 @@ fn resolve_scan_arrays<R: Read + Seek>(
                 .filter(|(m, _)| *m > 0.0)
                 .map(|(_, i)| *i as f32)
                 .collect();
-            return Ok((mz, int, Some(crate::ScanMode::Profile), unconverted, false));
+            return Ok((
+                mz,
+                int,
+                Some(crate::ScanMode::Profile),
+                unconverted,
+                PeakCountCheck::Agreed,
+            ));
         }
         let mz: Vec<f64> = packet.peaks.iter().map(|p| p.mz).collect();
         let int: Vec<f32> = packet.peaks.iter().map(|p| p.abundance).collect();
-        return Ok((mz, int, nominal_scan_mode, 0, false));
+        return Ok((mz, int, nominal_scan_mode, 0, PeakCountCheck::Agreed));
     }
-    let (peaks, recovered) = if raw.scan_format == crate::scan_format::ScanDataFormat::FlatV63 {
-        raw.read_scan_flat_checked(source, scan_number)?
-    } else {
-        (raw.read_peaks_only(source, scan_number)?, false)
-    };
+    let (peaks, peak_count) = raw.read_peaks_only_checked(source, scan_number)?;
     let mz: Vec<f64> = peaks.iter().map(|p| p.mz).collect();
     let int: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
-    Ok((mz, int, nominal_scan_mode, 0, recovered))
+    Ok((mz, int, nominal_scan_mode, 0, peak_count))
 }
 
 // -- Adapter / canonical writer wrappers --
@@ -482,9 +496,15 @@ const SOFTWARE_NAME: &str = "opentfraw";
 const UNCONVERTED_PROFILE_BINS_KEY: &str = "opentfraw.unconverted_profile_bins";
 /// Spectrum `extra` key set to `true` on a flat-peak (TSQ Vantage) scan whose
 /// peak count was recovered from the scan index: the default count disagreed
-/// with the index's total current or m/z range, and one other count agreed.
-/// Written regardless of [`ExtraFields`], since it marks a changed decode.
+/// with the index's total current or m/z range, and one other count agreed
+/// ([`PeakCountCheck::Recovered`]). Written regardless of [`ExtraFields`],
+/// since it marks a changed decode.
 pub const RECOVERED_PEAK_COUNT_KEY: &str = "opentfraw.peak_count_recovered";
+/// Spectrum `extra` key set to `true` on a flat-peak (TSQ Vantage) scan whose
+/// default peak count disagrees with the scan index and for which no single
+/// other count agrees ([`PeakCountCheck::Unverified`]): the peaks are the
+/// default read and may be misaligned. Written regardless of [`ExtraFields`].
+pub const UNVERIFIED_PEAK_COUNT_KEY: &str = "opentfraw.peak_count_unverified";
 // Written to mzML `<software version=...>` so converted files record the
 // opentfraw release that produced them.
 const SOFTWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -869,6 +889,7 @@ pub struct OpenTfRawSource<'a, R: Read + Seek> {
     extra_fields: ExtraFields,
     acquisition_paths: bool,
     recovered_peak_counts: std::sync::atomic::AtomicUsize,
+    unverified_peak_counts: std::sync::atomic::AtomicUsize,
 }
 
 impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
@@ -886,6 +907,7 @@ impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
             extra_fields: ExtraFields::All,
             acquisition_paths: false,
             recovered_peak_counts: std::sync::atomic::AtomicUsize::new(0),
+            unverified_peak_counts: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -895,6 +917,15 @@ impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
     /// the `opentfraw.peak_count_recovered` extra field (a userParam in mzML).
     pub fn recovered_peak_count_scans(&self) -> usize {
         self.recovered_peak_counts
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Number of scans yielded so far whose peak count is unverified: the
+    /// default count disagrees with the scan index and no single other count
+    /// agrees ([`PeakCountCheck::Unverified`]). Each such spectrum also has
+    /// the `opentfraw.peak_count_unverified` extra field.
+    pub fn unverified_peak_count_scans(&self) -> usize {
+        self.unverified_peak_counts
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
@@ -1062,16 +1093,19 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
         let include_profile = self.include_profile;
         let extra_fields = &self.extra_fields;
         let recovered_peak_counts = &self.recovered_peak_counts;
+        let unverified_peak_counts = &self.unverified_peak_counts;
         Box::new((0..raw.num_scans).map(move |idx| {
             let parts = extract_parts(raw, source, idx, include_profile)?;
             let mut extra = scan_extras(raw, &parts.0, extra_fields);
             if parts.4 > 0 {
                 extra.insert(UNCONVERTED_PROFILE_BINS_KEY.into(), parts.4.to_string());
             }
-            if parts.5 {
-                extra.insert(RECOVERED_PEAK_COUNT_KEY.into(), "true".to_string());
-                recovered_peak_counts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
+            note_peak_count(
+                parts.5,
+                &mut extra,
+                recovered_peak_counts,
+                unverified_peak_counts,
+            );
             Ok(to_msc_record(parts, extra))
         }))
     }
@@ -1082,6 +1116,28 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
 
     fn iter_chromatograms<'s>(&'s mut self) -> msc::ChromatogramIter<'s> {
         Box::new(build_chromatograms(self.raw).into_iter().map(Ok))
+    }
+}
+
+/// Mark a scan whose peak count was not `Agreed`: the `opentfraw.peak_count_*`
+/// extra field, and the source's running count.
+fn note_peak_count(
+    check: PeakCountCheck,
+    extra: &mut ::std::collections::BTreeMap<String, String>,
+    recovered: &std::sync::atomic::AtomicUsize,
+    unverified: &std::sync::atomic::AtomicUsize,
+) {
+    use std::sync::atomic::Ordering::Relaxed;
+    match check {
+        PeakCountCheck::Recovered => {
+            extra.insert(RECOVERED_PEAK_COUNT_KEY.into(), "true".to_string());
+            recovered.fetch_add(1, Relaxed);
+        }
+        PeakCountCheck::Unverified => {
+            extra.insert(UNVERIFIED_PEAK_COUNT_KEY.into(), "true".to_string());
+            unverified.fetch_add(1, Relaxed);
+        }
+        PeakCountCheck::Agreed => {}
     }
 }
 
@@ -1143,6 +1199,33 @@ where
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn note_peak_count_sets_the_extra_key_and_counts_each_kind() {
+        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+        let (recovered, unverified) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let mut agreed = ::std::collections::BTreeMap::new();
+        note_peak_count(PeakCountCheck::Agreed, &mut agreed, &recovered, &unverified);
+        assert!(agreed.is_empty());
+        assert_eq!((recovered.load(Relaxed), unverified.load(Relaxed)), (0, 0));
+
+        let mut rec = ::std::collections::BTreeMap::new();
+        note_peak_count(PeakCountCheck::Recovered, &mut rec, &recovered, &unverified);
+        note_peak_count(PeakCountCheck::Recovered, &mut rec, &recovered, &unverified);
+        assert_eq!(rec[RECOVERED_PEAK_COUNT_KEY], "true");
+        assert!(!rec.contains_key(UNVERIFIED_PEAK_COUNT_KEY));
+
+        let mut unv = ::std::collections::BTreeMap::new();
+        note_peak_count(
+            PeakCountCheck::Unverified,
+            &mut unv,
+            &recovered,
+            &unverified,
+        );
+        assert_eq!(unv[UNVERIFIED_PEAK_COUNT_KEY], "true");
+        assert!(!unv.contains_key(RECOVERED_PEAK_COUNT_KEY));
+        assert_eq!((recovered.load(Relaxed), unverified.load(Relaxed)), (2, 1));
+    }
 
     #[test]
     fn tic_record_maps_pairs_and_converts_minutes_to_seconds() {
