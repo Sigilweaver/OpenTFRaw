@@ -114,7 +114,8 @@ dependencies = [
 [[package]]
 name = "openmassspec-core"
 version = "4.0.0"
-source = "git+https://github.com/Sigilweaver/OpenMassSpecCore?rev=ab7b7f7851cc26e518688d04a144c7fc0c42afd5#ab7b7f7851cc26e518688d04a144c7fc0c42afd5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d7ef176e333695889260a1e0ebb1d42a53c064aa92dffd59cbacba28a551af"
 dependencies = [
  "flate2",
  "serde",
