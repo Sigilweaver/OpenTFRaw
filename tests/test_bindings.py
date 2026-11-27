@@ -76,7 +76,7 @@ def test_record_scan_window_observed_range_and_empty_spectrum(raw_file):
     for r in empty:
         assert r["base_peak_mz"] is None
         assert r["base_peak_intensity"] is None
-        assert [w["kind"] for w in r["warnings"]] == ["opentfraw.empty_spectrum"]
+        assert [w["kind"] for w in r["warnings"]] == ["empty_spectrum"]
 
 
 def test_default_export_of_profile_scans_is_centroid(raw_file):
@@ -634,5 +634,5 @@ def test_to_mzml_skip_unreadable_on_readable_file(raw_file, tmp_path):
         assert raw_file.to_mzml(str(skip_out), skip_unreadable=True) == 0
     messages = [str(w.message) for w in caught]
     assert len(messages) == 2
-    assert all("warning opentfraw.empty_spectrum" in m for m in messages)
+    assert all("warning empty_spectrum" in m for m in messages)
     assert default_out.read_bytes() == skip_out.read_bytes()

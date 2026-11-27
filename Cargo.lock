@@ -150,7 +150,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "openmassspec-core"
 version = "4.0.0"
-source = "git+https://github.com/Sigilweaver/OpenMassSpecCore?rev=63b2a3010abea9d2bfd7a74c9e9a413b6a1ade39#63b2a3010abea9d2bfd7a74c9e9a413b6a1ade39"
+source = "git+https://github.com/Sigilweaver/OpenMassSpecCore?rev=ab7b7f7851cc26e518688d04a144c7fc0c42afd5#ab7b7f7851cc26e518688d04a144c7fc0c42afd5"
 dependencies = [
  "flate2",
  "serde",

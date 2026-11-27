@@ -1047,16 +1047,17 @@ impl RawFile {
     /// ``"dangling_precursor_ref"``, ``"unknown_scan_mode"``,
     /// ``"spectrum_count_shortfall"``): such a scan is written with a
     /// warning userParam. A ``UserWarning`` states how many scans carry each
-    /// warning, including ``opentfraw.empty_spectrum`` for a scan with no
+    /// warning, including ``empty_spectrum`` for a scan with no
     /// peaks. Unsorted m/z has no check to relax. An unknown name raises
     /// ``ValueError``.
     ///
     /// A TSQ Vantage scan whose default peak count disagrees with the scan
     /// index is read with the one count the index confirms; each such record
-    /// has the userParam ``opentfraw.peak_count_recovered``. When no single
-    /// count agrees, the default peaks are written with the userParam
-    /// ``opentfraw.peak_count_unverified``. A ``UserWarning`` states how many
-    /// records of each kind were written.
+    /// has the warning ``opentfraw.peak_count_recovered``. When no single
+    /// count agrees, the default peaks carry the warning
+    /// ``opentfraw.peak_count_unverified`` and the writer refuses them unless
+    /// their m/z is finite and ascending. Both are counted in the
+    /// ``UserWarning`` above.
     ///
     /// Returns the number of records left out (always 0 unless
     /// ``skip_unreadable=True``).
@@ -1108,19 +1109,13 @@ impl RawFile {
             .ok_or_else(|| PyValueError::new_err("non-UTF8 file name"))?;
         let out_file = File::create(out_path).map_err(|e| PyIOError::new_err(e.to_string()))?;
         let mut out = std::io::BufWriter::new(out_file);
-        let (summary, recovered, unverified) = {
+        let summary = {
             // Release the source lock before any warning runs Python code.
             let mut src = self.locked_source()?;
             let mut source = OpenTfRawSource::new(&self.reader, &mut *src, raw_filename, false)
                 .with_extra_fields(selection);
-            let summary =
-                openmassspec_core::write_mzml_with_options(&mut source, &mut out, &options)
-                    .map_err(|e| PyIOError::new_err(e.to_string()))?;
-            (
-                summary,
-                source.recovered_peak_count_scans(),
-                source.unverified_peak_count_scans(),
-            )
+            openmassspec_core::write_mzml_with_options(&mut source, &mut out, &options)
+                .map_err(|e| PyIOError::new_err(e.to_string()))?
         };
         out.flush().map_err(|e| PyIOError::new_err(e.to_string()))?;
         let skipped = summary.skipped();

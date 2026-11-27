@@ -581,17 +581,18 @@ const SOFTWARE_NAME: &str = "opentfraw";
 /// the scan's calibration layout is unknown and their m/z is `NaN`. Written
 /// regardless of [`ExtraFields`], since it reports lost data.
 const UNCONVERTED_PROFILE_BINS_KEY: &str = "opentfraw.unconverted_profile_bins";
-/// Spectrum `extra` key set to `true` on a flat-peak (TSQ Vantage) scan whose
-/// peak count was recovered from the scan index: the default count disagreed
-/// with the index's total current or m/z range, and one other count agreed
-/// ([`PeakCountCheck::Recovered`]). Written regardless of [`ExtraFields`],
-/// since it marks a changed decode.
-pub const RECOVERED_PEAK_COUNT_KEY: &str = "opentfraw.peak_count_recovered";
-/// Spectrum `extra` key set to `true` on a flat-peak (TSQ Vantage) scan whose
-/// default peak count disagrees with the scan index and for which no single
-/// other count agrees ([`PeakCountCheck::Unverified`]): the peaks are the
-/// default read and may be misaligned. Written regardless of [`ExtraFields`].
-pub const UNVERIFIED_PEAK_COUNT_KEY: &str = "opentfraw.peak_count_unverified";
+/// Warning code on a flat-peak (TSQ Vantage) scan whose peak count was
+/// recovered from the scan index: the default count disagreed with the
+/// index's total current or m/z range, and one other count agreed
+/// ([`PeakCountCheck::Recovered`]). The peaks are the recovered read. A
+/// userParam in mzML, counted in the write summary.
+pub const RECOVERED_PEAK_COUNT_CODE: &str = "opentfraw.peak_count_recovered";
+/// Warning code on a flat-peak (TSQ Vantage) scan whose default peak count
+/// disagrees with the scan index and for which no single other count agrees
+/// ([`PeakCountCheck::Unverified`]): the peaks are the default read and may be
+/// misaligned. Core's writer refuses such a scan if its m/z is not finite and
+/// ascending.
+pub const UNVERIFIED_PEAK_COUNT_CODE: &str = "opentfraw.peak_count_unverified";
 // Written to mzML `<software version=...>` so converted files record the
 // opentfraw release that produced them.
 const SOFTWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -788,18 +789,36 @@ fn native_id_for(scan_number: u32) -> String {
     format!("controllerType=0 controllerNumber=1 scan={scan_number}")
 }
 
+/// Spectrum `extra` key holding a precursor charge the file states for a scan
+/// whose precursor has no selected-ion m/z. mzML puts a charge state inside
+/// the selected ion, so with no selected m/z it has nowhere to go; the value
+/// is kept here, with the warning [`CHARGE_WITHOUT_SELECTED_MZ_CODE`].
+pub const UNPLACED_CHARGE_KEY: &str = "opentfraw.precursor_charge";
+
+/// Warning code on a scan whose charge state is in [`UNPLACED_CHARGE_KEY`]
+/// instead of the precursor's `charge`.
+pub const CHARGE_WITHOUT_SELECTED_MZ_CODE: &str = "opentfraw.charge_without_selected_mz";
+
 fn to_msc_record(
     parts: ScanParts,
     extra: ::std::collections::BTreeMap<String, String>,
 ) -> msc::SpectrumRecord {
-    let (meta, mz, intensity, scan_mode, _, _) = parts;
+    let (meta, mz, intensity, scan_mode, _, peak_count) = parts;
+    let mut unplaced_charge = None;
     let precursor = meta.precursor.map(|p| {
+        // Core refuses a charge on a precursor with no selected-ion m/z.
+        let charge = if p.selected_mz.is_some() {
+            p.charge
+        } else {
+            unplaced_charge = p.charge;
+            None
+        };
         let unit = convert_energy_unit(p.collision_energy_unit);
         let mut info = msc::PrecursorInfo::default()
             .with_target_mz(p.target_mz)
             .with_selected_mz(p.selected_mz)
             .with_isolation_width(p.isolation_width)
-            .with_charge(p.charge)
+            .with_charge(charge)
             .with_precursor_native_id(p.master_scan_number.map(native_id_for))
             .with_activation(convert_activation(p.activation, p.analyzer))
             .with_analyzer(convert_analyzer(p.analyzer));
@@ -840,9 +859,34 @@ fn to_msc_record(
     for &(lower, upper) in &meta.scan_windows {
         record = record.with_scan_window(lower, upper);
     }
+    if let Some(z) = unplaced_charge {
+        record = record
+            .with_extra(UNPLACED_CHARGE_KEY, z.to_string())
+            .with_warning(msc::Warning::other(
+                CHARGE_WITHOUT_SELECTED_MZ_CODE,
+                format!(
+                    "the scan states charge {z} but no selected-ion m/z; the charge is in extra[\"{UNPLACED_CHARGE_KEY}\"]"
+                ),
+            ));
+    }
+    match peak_count {
+        PeakCountCheck::Agreed => {}
+        PeakCountCheck::Recovered => {
+            record = record.with_warning(msc::Warning::other(
+                RECOVERED_PEAK_COUNT_CODE,
+                "the default peak count disagreed with the scan index; the one count that agrees was used",
+            ));
+        }
+        PeakCountCheck::Unverified => {
+            record = record.with_warning(msc::Warning::other(
+                UNVERIFIED_PEAK_COUNT_CODE,
+                "the default peak count disagrees with the scan index and no single other count agrees; the peaks may be misaligned",
+            ));
+        }
+    }
     if record.mz.is_empty() {
-        record = record.with_warning(msc::Warning::other(
-            "opentfraw.empty_spectrum",
+        record = record.with_warning(msc::Warning::new(
+            msc::WarningKind::EmptySpectrum,
             "the scan holds no peaks",
         ));
     }
@@ -1013,8 +1057,6 @@ pub struct OpenTfRawSource<'a, R: Read + Seek> {
     include_profile: bool,
     extra_fields: ExtraFields,
     acquisition_paths: bool,
-    recovered_peak_counts: std::sync::atomic::AtomicUsize,
-    unverified_peak_counts: std::sync::atomic::AtomicUsize,
 }
 
 impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
@@ -1031,27 +1073,7 @@ impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
             include_profile,
             extra_fields: ExtraFields::All,
             acquisition_paths: false,
-            recovered_peak_counts: std::sync::atomic::AtomicUsize::new(0),
-            unverified_peak_counts: std::sync::atomic::AtomicUsize::new(0),
         }
-    }
-
-    /// Number of scans yielded so far whose peak count was recovered from the
-    /// scan index (TSQ Vantage files, see
-    /// [`RawFileReader::read_scan_flat_checked`]). Each such spectrum also has
-    /// the `opentfraw.peak_count_recovered` extra field (a userParam in mzML).
-    pub fn recovered_peak_count_scans(&self) -> usize {
-        self.recovered_peak_counts
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// Number of scans yielded so far whose peak count is unverified: the
-    /// default count disagrees with the scan index and no single other count
-    /// agrees ([`PeakCountCheck::Unverified`]). Each such spectrum also has
-    /// the `opentfraw.peak_count_unverified` extra field.
-    pub fn unverified_peak_count_scans(&self) -> usize {
-        self.unverified_peak_counts
-            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Include acquisition-workstation details in the run metadata: the
@@ -1217,20 +1239,12 @@ impl<'a, R: Read + Seek + Send> msc::SpectrumSource for OpenTfRawSource<'a, R> {
         let source = &mut *self.source;
         let include_profile = self.include_profile;
         let extra_fields = &self.extra_fields;
-        let recovered_peak_counts = &self.recovered_peak_counts;
-        let unverified_peak_counts = &self.unverified_peak_counts;
         Box::new((0..raw.num_scans).map(move |idx| {
             let parts = extract_parts(raw, source, idx, include_profile)?;
             let mut extra = scan_extras(raw, &parts.0, extra_fields);
             if parts.4 > 0 {
                 extra.insert(UNCONVERTED_PROFILE_BINS_KEY.into(), parts.4.to_string());
             }
-            note_peak_count(
-                parts.5,
-                &mut extra,
-                recovered_peak_counts,
-                unverified_peak_counts,
-            );
             Ok(to_msc_record(parts, extra))
         }))
     }
@@ -1241,28 +1255,6 @@ impl<'a, R: Read + Seek + Send> msc::SpectrumSource for OpenTfRawSource<'a, R> {
 
     fn iter_chromatograms<'s>(&'s mut self) -> msc::ChromatogramIter<'s> {
         Box::new(build_chromatograms(self.raw).into_iter().map(Ok))
-    }
-}
-
-/// Mark a scan whose peak count was not `Agreed`: the `opentfraw.peak_count_*`
-/// extra field, and the source's running count.
-fn note_peak_count(
-    check: PeakCountCheck,
-    extra: &mut ::std::collections::BTreeMap<String, String>,
-    recovered: &std::sync::atomic::AtomicUsize,
-    unverified: &std::sync::atomic::AtomicUsize,
-) {
-    use std::sync::atomic::Ordering::Relaxed;
-    match check {
-        PeakCountCheck::Recovered => {
-            extra.insert(RECOVERED_PEAK_COUNT_KEY.into(), "true".to_string());
-            recovered.fetch_add(1, Relaxed);
-        }
-        PeakCountCheck::Unverified => {
-            extra.insert(UNVERIFIED_PEAK_COUNT_KEY.into(), "true".to_string());
-            unverified.fetch_add(1, Relaxed);
-        }
-        PeakCountCheck::Agreed => {}
     }
 }
 
@@ -1325,31 +1317,106 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    fn parts_with_precursor(
+        precursor: PrecursorInfo,
+        mz: Vec<f64>,
+        intensity: Vec<f32>,
+    ) -> ScanParts {
+        let meta = ScanMetadata {
+            index: 0,
+            scan_number: 1,
+            scan_event: 0,
+            scan_segment: 0,
+            data_size: 0,
+            ms_level: 2,
+            is_ms1: false,
+            is_dia: false,
+            is_wideband: false,
+            polarity: None,
+            scan_mode: None,
+            analyzer: None,
+            filter: None,
+            retention_time_min: 1.0,
+            total_ion_current: 0.0,
+            base_peak_mz: 0.0,
+            base_peak_intensity: 0.0,
+            low_mz: 0.0,
+            high_mz: 0.0,
+            scan_windows: Vec::new(),
+            ion_injection_time_ms: None,
+            faims_cv: None,
+            precursor: Some(precursor),
+        };
+        (
+            meta,
+            mz,
+            intensity,
+            Some(crate::ScanMode::Centroid),
+            0,
+            PeakCountCheck::Agreed,
+        )
+    }
+
     #[test]
-    fn note_peak_count_sets_the_extra_key_and_counts_each_kind() {
-        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-        let (recovered, unverified) = (AtomicUsize::new(0), AtomicUsize::new(0));
-        let mut agreed = ::std::collections::BTreeMap::new();
-        note_peak_count(PeakCountCheck::Agreed, &mut agreed, &recovered, &unverified);
-        assert!(agreed.is_empty());
-        assert_eq!((recovered.load(Relaxed), unverified.load(Relaxed)), (0, 0));
+    fn charge_without_selected_mz_moves_to_extra_with_a_warning() {
+        let info = PrecursorInfo {
+            charge: Some(3),
+            ..Default::default()
+        };
+        let parts = parts_with_precursor(info, vec![100.0], vec![1.0]);
+        let rec = to_msc_record(parts, Default::default());
+        assert_eq!(rec.precursor.as_ref().unwrap().charge, None);
+        assert_eq!(rec.extra[UNPLACED_CHARGE_KEY], "3");
+        let codes: Vec<&str> = rec.warnings.iter().map(|w| w.kind.code()).collect();
+        assert_eq!(codes, [CHARGE_WITHOUT_SELECTED_MZ_CODE]);
+    }
 
-        let mut rec = ::std::collections::BTreeMap::new();
-        note_peak_count(PeakCountCheck::Recovered, &mut rec, &recovered, &unverified);
-        note_peak_count(PeakCountCheck::Recovered, &mut rec, &recovered, &unverified);
-        assert_eq!(rec[RECOVERED_PEAK_COUNT_KEY], "true");
-        assert!(!rec.contains_key(UNVERIFIED_PEAK_COUNT_KEY));
+    #[test]
+    fn charge_with_selected_mz_stays_on_the_precursor() {
+        let info = PrecursorInfo {
+            charge: Some(2),
+            selected_mz: Some(500.0),
+            ..Default::default()
+        };
+        let parts = parts_with_precursor(info, vec![100.0], vec![1.0]);
+        let rec = to_msc_record(parts, Default::default());
+        assert_eq!(rec.precursor.as_ref().unwrap().charge, Some(2));
+        assert!(!rec.extra.contains_key(UNPLACED_CHARGE_KEY));
+        assert!(rec.warnings.is_empty());
+    }
 
-        let mut unv = ::std::collections::BTreeMap::new();
-        note_peak_count(
-            PeakCountCheck::Unverified,
-            &mut unv,
-            &recovered,
-            &unverified,
+    #[test]
+    fn an_empty_scan_carries_core_empty_spectrum_and_no_declared_range() {
+        let parts = parts_with_precursor(PrecursorInfo::default(), vec![], vec![]);
+        let rec = to_msc_record(parts, Default::default());
+        let kinds: Vec<_> = rec.warnings.iter().map(|w| w.kind.clone()).collect();
+        assert_eq!(kinds, [msc::WarningKind::EmptySpectrum]);
+        assert_eq!(rec.base_peak_mz, None);
+        assert_eq!(rec.base_peak_intensity, None);
+        assert_eq!(rec.low_mz, None);
+        assert_eq!(rec.high_mz, None);
+    }
+
+    #[test]
+    fn a_recovered_or_unverified_peak_count_carries_a_warning() {
+        let codes = |check| {
+            let mut parts = parts_with_precursor(PrecursorInfo::default(), vec![100.0], vec![1.0]);
+            parts.5 = check;
+            let rec = to_msc_record(parts, Default::default());
+            rec.warnings
+                .iter()
+                .map(|w| w.kind.code().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert!(codes(PeakCountCheck::Agreed).is_empty());
+        assert_eq!(
+            codes(PeakCountCheck::Recovered),
+            [RECOVERED_PEAK_COUNT_CODE]
         );
-        assert_eq!(unv[UNVERIFIED_PEAK_COUNT_KEY], "true");
-        assert!(!unv.contains_key(RECOVERED_PEAK_COUNT_KEY));
-        assert_eq!((recovered.load(Relaxed), unverified.load(Relaxed)), (2, 1));
+        assert_eq!(
+            codes(PeakCountCheck::Unverified),
+            [UNVERIFIED_PEAK_COUNT_CODE]
+        );
     }
 
     #[test]

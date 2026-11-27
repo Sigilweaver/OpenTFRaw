@@ -67,8 +67,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A scan with no peaks (8,822 of 11.9 million scans in the 291-file corpus,
   mostly ion-trap MS2) was written with base peak m/z and intensity 0, the
   scan index's values for it. It now has no base peak, and carries the Core
-  warning `opentfraw.empty_spectrum` (a userParam in mzML, counted in the
-  write summary).
+  warning `empty_spectrum` (Core's `WarningKind::EmptySpectrum`; a userParam
+  in mzML, counted in the write summary).
+- A scan whose trailer states a charge but whose precursor has no m/z (50
+  scans in 5 corpus files, all with misread scan events) made Core's writer
+  refuse the file. The precursor now has no `charge`; the charge is kept in
+  the spectrum's `extra` as `opentfraw.precursor_charge`, with the warning
+  `opentfraw.charge_without_selected_mz`, so the file converts and no decoded
+  value is lost.
 
 ## [3.1.1] - 2026-11-27
 
@@ -136,9 +142,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `read_scan_flat`, `read_scan_peaks` and `read_peaks_only` return the
   recovered peaks and only count. The 33,129 scans of PXD020246 that agree with
   the index decode identically; no scan of it is unverified.
-- `CITATION.cff` identifies the Zenodo concept DOI (10.5281/zenodo.20470600),
-  which resolves to the latest archived version, instead of the DOI of the
-  1.1.0 version record.
 
 ## [3.1.0] - 2026-10-20
 

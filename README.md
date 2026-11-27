@@ -58,11 +58,12 @@ Measured on the public test corpus (291 files from 56 PRIDE datasets).
   the 4 scans that do not decode).
 - **Charge without precursor m/z.** On 50 scans in 5 files whose scan events
   are misread (PXD039587, PXD064117 FOXK2, three PXD070648 files) the trailer
-  holds a charge state and the misread scan event no precursor m/z. The mzML
-  writer refuses such a scan and has no check to relax;
-  `skip_unreadable=True` leaves the scan out and counts it.
+  holds a charge state and the misread scan event no precursor m/z. mzML puts
+  a charge inside the selected ion, so the record has no precursor `charge`;
+  the charge is in `extra["opentfraw.precursor_charge"]` and the record carries
+  the warning `opentfraw.charge_without_selected_mz`.
 - **Scans with no peaks** (8,822 in 57 corpus files, mostly ion-trap MS2) are
-  written with no base peak and the warning `opentfraw.empty_spectrum`.
+  written with no base peak and the Core warning `empty_spectrum`.
 - **Scan filter `lock` token:** `scan_filter()` renders `lock` only on a
   scan whose trailer reports at least one found lock mass. A scan that
   reports zero found but keeps the previous scan's nonzero correction

@@ -26,18 +26,31 @@ in OpenMassSpecCore; this page covers what callers of this crate edit.
   A stepped energy lists every step. `unit` is `"nce"`, `"ev"` or `None` when
   the file does not state it. `analyzer` is `"tof"` where it was `"tofms"`.
   A scan with no peaks has `base_peak_mz` and `base_peak_intensity` of `None`
-  (it had 0.0) and a `warnings` entry of kind `opentfraw.empty_spectrum`.
+  (it had 0.0) and a `warnings` entry of kind `empty_spectrum` (Core's code;
+  the reader-specific `opentfraw.empty_spectrum` is gone).
+- The default mzML export of a profile-mode scan is labelled centroid
+  (MS:1000127). 3.1.0 labelled it profile (MS:1000128) from the scan event's
+  mode, but the exported peak list is the centroid list stored in the scan
+  packet (identical peak counts, m/z and intensities in 3.1.0 and 4.0.0). So
+  mzML and `scan_mode` of records written by 3.x with the profile label for a
+  default export were mislabelled, and a tool that reads the label (a
+  centroiding step, for example) will treat those old files differently from
+  new ones. Pass `include_profile` to export the profile data, labelled
+  profile. 3.76 million scans of the 291-file corpus change label.
+- A scan whose trailer states a charge but whose precursor has no m/z is
+  written, not refused: the precursor has no `charge`, the charge is in the
+  spectrum's `extra["opentfraw.precursor_charge"]`, and the record carries the
+  warning `opentfraw.charge_without_selected_mz`.
 - `RawFile.scan()` and `iter_scans()` keep `collision_energy` and
   `collision_energy_is_nce` and add `collision_energy_unit`,
   `collision_energy_source` and `collision_energy_steps`.
 - `to_mzml` raises `OSError` for a scan whose collision energy has no stated
-  unit, whose m/z values are not ascending, whose precursor has a charge but
-  no m/z, or whose precursor names a scan that is not in the output. Pass
-  `allow=["unknown_collision_energy_unit"]` (or `"dangling_precursor_ref"`) to
-  write the first and last with a warning; unsorted m/z and a charge without
-  a precursor m/z have no `allow`. The README lists which files this affects.
+  unit, whose m/z values are not ascending, or whose precursor names a scan
+  that is not in the output. Pass `allow=["unknown_collision_energy_unit"]`
+  (or `"dangling_precursor_ref"`) to write the first and last with a warning;
+  unsorted m/z has no `allow`. The README lists which files this affects.
 - `to_mzml` emits a `UserWarning` for every warning code it wrote, including
-  `opentfraw.empty_spectrum` for scans with no peaks.
+  `empty_spectrum` for scans with no peaks.
 
 ## Rust
 

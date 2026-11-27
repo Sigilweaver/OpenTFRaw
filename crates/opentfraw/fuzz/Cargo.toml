@@ -36,4 +36,4 @@ bench = false
 # top-level [patch.crates-io] does not reach this standalone workspace.
 # Remove before merge.
 [patch.crates-io]
-openmassspec-core = { git = "https://github.com/Sigilweaver/OpenMassSpecCore", rev = "63b2a3010abea9d2bfd7a74c9e9a413b6a1ade39" }
+openmassspec-core = { git = "https://github.com/Sigilweaver/OpenMassSpecCore", rev = "ab7b7f7851cc26e518688d04a144c7fc0c42afd5" }
