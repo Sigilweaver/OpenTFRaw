@@ -47,8 +47,12 @@ env:
   # tests/conftest.py.
   PRIDE_RAW_URL: >-
     https://ftp.pride.ebi.ac.uk/pride/data/archive/2025/05/PXD054004/20171113_Map_NS1_1to139_4deg_50uM_001.raw
+  PRIDE_RAW_FALLBACK_URL: >-
+    https://ftp.ebi.ac.uk/pride/data/archive/2025/05/PXD054004/20171113_Map_NS1_1to139_4deg_50uM_001.raw
   PRIDE_RAW_NAME: PXD054004_LTQ_FT_20171113_Map_NS1_1to139_4deg_50uM_001.raw
+  PRIDE_RAW_SHA256: 8db76170fc699ba447f1ea82e384ddde6ee99e923ebdd12d7553ef1a007a1dce
   FLATV66_RAW_URL: https://ftp.pride.ebi.ac.uk/pride/data/archive/2025/05/PXD041995/milla010603.raw
+  FLATV66_RAW_FALLBACK_URL: https://ftp.ebi.ac.uk/pride/data/archive/2025/05/PXD041995/milla010603.raw
   FLATV66_RAW_NAME: PXD041995_TSQ_Altis_milla010603.raw
   FLATV66_RAW_SHA256: 547ef679e21d727e967ac13be54594de136bfbc0d6634eae468ebb05fe1a3aa0
 
@@ -80,30 +84,13 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Download corpus fixture for conformance tests
-        shell: bash
-        run: |
-          mkdir -p corpus
-          dest="corpus/$PRIDE_RAW_NAME"
-          curl -sSL --user-agent "OpenTFRaw-CI/1.0" -o "$dest" "$PRIDE_RAW_URL"
-          echo "Downloaded $(du -sh "$dest" | cut -f1) corpus fixture"
-
-      - name: Download and verify FlatV66 shared-product fixture
-        shell: bash
-        run: |
-          curl --fail --location --retry 3 --user-agent "OpenTFRaw-CI/1.0" \
-            --output "corpus/$FLATV66_RAW_NAME" "$FLATV66_RAW_URL"
-          python - <<'PY'
-          import hashlib
-          import os
-          from pathlib import Path
-          fixture = Path("corpus") / os.environ["FLATV66_RAW_NAME"]
-          actual = hashlib.sha256(fixture.read_bytes()).hexdigest()
-          expected = os.environ["FLATV66_RAW_SHA256"]
-          if actual != expected:
-              raise SystemExit(f"FlatV66 fixture SHA-256 mismatch: {actual}")
-          print(f"Verified {fixture}: {actual}")
-          PY
+      - name: Fetch corpus fixtures
+        uses: Sigilweaver/ops/.github/actions/fetch-fixture@995e1df030a4409c635e868a60d8fe30d173ff22
+        with:
+          user-agent: OpenTFRaw-CI/1.0
+          fixtures: |
+            ${{ env.PRIDE_RAW_NAME }} ${{ env.PRIDE_RAW_SHA256 }} ${{ env.PRIDE_RAW_URL }} ${{ env.PRIDE_RAW_FALLBACK_URL }}
+            ${{ env.FLATV66_RAW_NAME }} ${{ env.FLATV66_RAW_SHA256 }} ${{ env.FLATV66_RAW_URL }} ${{ env.FLATV66_RAW_FALLBACK_URL }}
 
       - name: cargo test
         env:
@@ -130,25 +117,26 @@ jobs:
       - name: Ensure xmllint is available
         run: command -v xmllint || (sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-utils)
 
-      - name: Download test RAW file
-        run: |
-          wget -q --user-agent="OpenTFRaw-CI/1.0" \
-               -O "$PRIDE_RAW_NAME" "$PRIDE_RAW_URL"
-          echo "Downloaded $(du -sh $PRIDE_RAW_NAME | cut -f1) RAW file"
+      - name: Fetch test RAW file
+        uses: Sigilweaver/ops/.github/actions/fetch-fixture@995e1df030a4409c635e868a60d8fe30d173ff22
+        with:
+          user-agent: OpenTFRaw-CI/1.0
+          fixtures: |
+            ${{ env.PRIDE_RAW_NAME }} ${{ env.PRIDE_RAW_SHA256 }} ${{ env.PRIDE_RAW_URL }} ${{ env.PRIDE_RAW_FALLBACK_URL }}
 
       - name: Convert RAW to mzML (centroid)
         run: |
-          ./target/release/examples/to_mzml "$PRIDE_RAW_NAME" test_centroid.mzML
+          ./target/release/examples/to_mzml "corpus/$PRIDE_RAW_NAME" test_centroid.mzML
           echo "Centroid mzML: $(wc -l < test_centroid.mzML) lines"
 
       - name: Convert RAW to indexed mzML (centroid)
         run: |
-          ./target/release/examples/to_mzml --indexed "$PRIDE_RAW_NAME" test_indexed.mzML
+          ./target/release/examples/to_mzml --indexed "corpus/$PRIDE_RAW_NAME" test_indexed.mzML
           echo "Indexed mzML: $(wc -l < test_indexed.mzML) lines"
 
       - name: Convert RAW to mzML (profile)
         run: |
-          ./target/release/examples/to_mzml --include-profile "$PRIDE_RAW_NAME" test_profile.mzML
+          ./target/release/examples/to_mzml --include-profile "corpus/$PRIDE_RAW_NAME" test_profile.mzML
           echo "Profile mzML: $(wc -l < test_profile.mzML) lines"
 
       - name: Validate mzML structural conformance
@@ -202,13 +190,18 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
+      - name: Fetch the RAW fixture for fuzz seeding
+        uses: Sigilweaver/ops/.github/actions/fetch-fixture@995e1df030a4409c635e868a60d8fe30d173ff22
+        with:
+          user-agent: OpenTFRaw-CI/1.0
+          fixtures: |
+            ${{ env.PRIDE_RAW_NAME }} ${{ env.PRIDE_RAW_SHA256 }} ${{ env.PRIDE_RAW_URL }} ${{ env.PRIDE_RAW_FALLBACK_URL }}
+
       - name: Seed the fuzz corpus with a small real RAW fixture
         run: |
-          wget -q --user-agent="OpenTFRaw-CI/1.0" \
-               -O "$PRIDE_RAW_NAME" "$PRIDE_RAW_URL"
           mkdir -p crates/opentfraw/fuzz/corpus/open crates/opentfraw/fuzz/corpus/read_scan_peaks
-          cp "$PRIDE_RAW_NAME" crates/opentfraw/fuzz/corpus/open/
-          cp "$PRIDE_RAW_NAME" crates/opentfraw/fuzz/corpus/read_scan_peaks/
+          cp "corpus/$PRIDE_RAW_NAME" crates/opentfraw/fuzz/corpus/open/
+          cp "corpus/$PRIDE_RAW_NAME" crates/opentfraw/fuzz/corpus/read_scan_peaks/
 
       - name: Fuzz RawFileReader::open (60s)
         working-directory: crates/opentfraw/fuzz
@@ -247,6 +240,13 @@ jobs:
 
       - name: maturin develop
         run: uv run maturin develop --release
+
+      - name: Fetch the pytest RAW fixture
+        uses: Sigilweaver/ops/.github/actions/fetch-fixture@995e1df030a4409c635e868a60d8fe30d173ff22
+        with:
+          user-agent: OpenTFRaw-CI/1.0
+          fixtures: |
+            ${{ env.PRIDE_RAW_NAME }} ${{ env.PRIDE_RAW_SHA256 }} ${{ env.PRIDE_RAW_URL }} ${{ env.PRIDE_RAW_FALLBACK_URL }}
 
       - name: pytest
         env:
