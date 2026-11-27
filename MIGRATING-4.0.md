@@ -26,8 +26,7 @@ in OpenMassSpecCore; this page covers what callers of this crate edit.
   A stepped energy lists every step. `unit` is `"nce"`, `"ev"` or `None` when
   the file does not state it. `analyzer` is `"tof"` where it was `"tofms"`.
   A scan with no peaks has `base_peak_mz` and `base_peak_intensity` of `None`
-  (it had 0.0) and a `warnings` entry of kind `empty_spectrum` (Core's code;
-  the reader-specific `opentfraw.empty_spectrum` is gone).
+  (it had 0.0) and a `warnings` entry of kind `empty_spectrum` (Core's code).
 - The default mzML export of a profile-mode scan is labelled centroid
   (MS:1000127). 3.1.0 labelled it profile (MS:1000128) from the scan event's
   mode, but the exported peak list is the centroid list stored in the scan

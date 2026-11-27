@@ -25,8 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to write; see the README, Known issues and gaps, and `MIGRATING-4.0.md`.
 - `to_mzml` (Python `allow=[...]`, example `--allow <check>`) relaxes the
   writer's strict checks `unknown_collision_energy_unit`,
-  `dangling_precursor_ref` and `unknown_scan_mode` (which never applies: every
-  exported scan has a scan mode). A relaxed record is written with a warning
+  `dangling_precursor_ref`, `spectrum_count_shortfall` and `unknown_scan_mode`
+  (which never applies: every exported scan has a scan mode). A relaxed record is written with a warning
   userParam, and a `UserWarning` (Python) or a message (example) counts each
   warning code the write produced.
 - `PrecursorInfo` gains `collision_energy_unit`, `collision_energy_source` and
@@ -66,7 +66,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unit, the energy has none (see Known issues and gaps).
 - A stepped collision energy (a trailer label such as `"29.10,30.00,30.90"`)
   gave one value from the scan event, in eV. It now carries every step with
-  the label's unit, and the single `collision_energy` is their mean.
+  the label's unit, and the single `collision_energy` is their mean. On
+  PXD064117 this also gives 1,343 EThcD scans a supplemental collision energy
+  they did not have in 3.1.0.
 - mzML written without `include_profile` labelled the centroid peak list of a
   profile-mode scan as a profile spectrum (MS:1000128). It is now centroid.
   This also gives such scans a scan mode where the scan event's mode is
@@ -86,8 +88,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scans in 5 corpus files, all with misread scan events) made Core's writer
   refuse the file. The precursor now has no `charge`; the charge is kept in
   the spectrum's `extra` as `opentfraw.precursor_charge`, with the warning
-  `opentfraw.charge_without_selected_mz`, so the file converts and no decoded
-  value is lost.
+  `opentfraw.charge_without_selected_mz` (public constants
+  `mzml::UNPLACED_CHARGE_KEY` and `mzml::CHARGE_WITHOUT_SELECTED_MZ_CODE`), so
+  the file converts and no decoded value is lost.
 
 ## [3.1.1] - 2026-11-27
 
@@ -155,6 +158,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `read_scan_flat`, `read_scan_peaks` and `read_peaks_only` return the
   recovered peaks and only count. The 33,129 scans of PXD020246 that agree with
   the index decode identically; no scan of it is unverified.
+- `CITATION.cff` identifies the Zenodo concept DOI (10.5281/zenodo.20470600),
+  which resolves to the latest archived version, instead of the DOI of the
+  1.1.0 version record.
 
 ## [3.1.0] - 2026-10-20
 
