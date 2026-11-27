@@ -50,13 +50,16 @@ Measured on the public test corpus (291 files from 56 PRIDE datasets).
 - **Analyzer is not reported** for Orbitrap Astral MS2 scans and for TSQ
   triple-quadrupole scans.
 - **SRM data:** polarity is always reported as positive and isolation width
-  as 0.7. Decoding of TSQ Vantage (format version 63) SRM files is
-  unreliable: in PXD020246, some scans contain NaN values or peaks outside
-  the scan's m/z range. 4 of its 35,098 scans have a flat-peak record that
-  matches no known layout; they raise an error, and
-  `to_mzml(..., skip_unreadable=True)` (Python) or the `to_mzml` example's
-  `--skip-unreadable` flag writes the other scans and reports how many
-  were left out.
+  as 0.7. A TSQ Vantage (format version 63) flat-peak record does not state
+  its peak count. The reader takes the count that agrees with the scan
+  index's total current, m/z range and ascending m/z, and marks such a scan
+  with `opentfraw.peak_count_recovered`: 1,969 of the 35,098 scans of
+  PXD020246. A scan for which no count, or more than one count, agrees (none
+  in PXD020246) is read with the default count and may contain NaN values or
+  peaks outside the scan's m/z range; a record that matches no layout raises
+  an error, and `to_mzml(..., skip_unreadable=True)` (Python) or the
+  `to_mzml` example's `--skip-unreadable` flag writes the other scans and
+  reports how many were left out.
 - **Profile spectra** with an unrecognised calibration layout have NaN m/z
   values; mzML reports the count in `opentfraw.unconverted_profile_bins`.
 - **m/z accuracy** follows the instrument's stored calibration. In FTMS

@@ -32,6 +32,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- TSQ Vantage (format version 63) scans with a peak count the default guess
+  missed were decoded misaligned. A flat-peak record does not state its peak
+  count; the reader assumed `data_size - 1` and tried `data_size - 2` only when
+  the first m/z looked implausible, so a scan with fewer peaks gave m/z values
+  such as 0.0, then -3.5e14 and 1e-31. In PXD020246, 1,969 of 35,098 scans were
+  affected (1,911 with unsorted m/z, 4 that failed to decode, 54 with ascending
+  but wrong values). When the default read disagrees with the scan index
+  (non-finite or descending m/z, intensity sum different from the indexed
+  total current, m/z outside the indexed range), the reader now tries every
+  count from `data_size - 1` to `data_size - 12` and uses the one count that
+  agrees with the index; if none or more than one agrees, the default read is
+  returned as before. A scan decoded this way carries the `extra` field
+  `opentfraw.peak_count_recovered` (a userParam in mzML, written whatever
+  `ExtraFields` selects), `OpenTfRawSource::recovered_peak_count_scans()`
+  counts them, and `to_mzml` (Python `UserWarning`, example stderr) reports the
+  count. `RawFileReader::read_scan_flat_checked` returns the flag.
+  The 33,129 scans that agreed with the index decode identically.
 - `CITATION.cff` identifies the Zenodo concept DOI (10.5281/zenodo.20470600),
   which resolves to the latest archived version, instead of the DOI of the
   1.1.0 version record.

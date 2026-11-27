@@ -311,9 +311,10 @@ pub fn extract_spectrum<R: Read + Seek>(
     idx: u32,
     include_profile: bool,
 ) -> Result<SpectrumRecord> {
-    // `SpectrumRecord` has no field for the unconverted-bin count; the
-    // `openmassspec_core` adapter reports it in `extra`.
-    let (meta, mz, intensity, effective_scan_mode, _unconverted_mz_bins) =
+    // `SpectrumRecord` has no field for the unconverted-bin count or the
+    // recovered-peak-count flag; the `openmassspec_core` adapter reports them
+    // in `extra`.
+    let (meta, mz, intensity, effective_scan_mode, _unconverted_mz_bins, _recovered) =
         extract_parts(raw, source, idx, include_profile)?;
     Ok(SpectrumRecord {
         index: meta.index,
@@ -340,14 +341,16 @@ pub fn extract_spectrum<R: Read + Seek>(
 }
 
 /// A scan's metadata, its peak arrays, the scan mode those arrays are in,
-/// and the number of profile bins dropped because their m/z could not be
-/// computed (unknown calibration layout).
+/// the number of profile bins dropped because their m/z could not be
+/// computed (unknown calibration layout), and whether a flat-peak scan's
+/// peak count was recovered from the scan index.
 type ScanParts = (
     ScanMetadata,
     Vec<f64>,
     Vec<f32>,
     Option<crate::ScanMode>,
     usize,
+    bool,
 );
 
 fn extract_parts<R: Read + Seek>(
@@ -358,7 +361,7 @@ fn extract_parts<R: Read + Seek>(
 ) -> Result<ScanParts> {
     let meta = scan_metadata(raw, idx).ok_or(Error::ScanIndexOutOfRange(idx))?;
     let event = raw.scan_events.get(idx as usize);
-    let (mz, intensity, effective_scan_mode, unconverted) = resolve_scan_arrays(
+    let (mz, intensity, effective_scan_mode, unconverted, recovered) = resolve_scan_arrays(
         raw,
         source,
         meta.scan_number,
@@ -366,7 +369,14 @@ fn extract_parts<R: Read + Seek>(
         event,
         meta.scan_mode,
     )?;
-    Ok((meta, mz, intensity, effective_scan_mode, unconverted))
+    Ok((
+        meta,
+        mz,
+        intensity,
+        effective_scan_mode,
+        unconverted,
+        recovered,
+    ))
 }
 
 /// Iterate every scan in `raw` as a [`SpectrumRecord`], in scan order.
@@ -398,8 +408,9 @@ fn ms_level(power: MsPower) -> u32 {
     }
 }
 
-/// m/z, intensity, effective scan mode, and unconverted profile-bin count.
-type ScanArrays = (Vec<f64>, Vec<f32>, Option<crate::ScanMode>, usize);
+/// m/z, intensity, effective scan mode, unconverted profile-bin count, and
+/// whether the peak count was recovered (flat-peak scans).
+type ScanArrays = (Vec<f64>, Vec<f32>, Option<crate::ScanMode>, usize, bool);
 
 /// Resolve the m/z and intensity arrays for a single scan.
 ///
@@ -438,16 +449,20 @@ fn resolve_scan_arrays<R: Read + Seek>(
                 .filter(|(m, _)| *m > 0.0)
                 .map(|(_, i)| *i as f32)
                 .collect();
-            return Ok((mz, int, Some(crate::ScanMode::Profile), unconverted));
+            return Ok((mz, int, Some(crate::ScanMode::Profile), unconverted, false));
         }
         let mz: Vec<f64> = packet.peaks.iter().map(|p| p.mz).collect();
         let int: Vec<f32> = packet.peaks.iter().map(|p| p.abundance).collect();
-        return Ok((mz, int, nominal_scan_mode, 0));
+        return Ok((mz, int, nominal_scan_mode, 0, false));
     }
-    let peaks = raw.read_peaks_only(source, scan_number)?;
+    let (peaks, recovered) = if raw.scan_format == crate::scan_format::ScanDataFormat::FlatV63 {
+        raw.read_scan_flat_checked(source, scan_number)?
+    } else {
+        (raw.read_peaks_only(source, scan_number)?, false)
+    };
     let mz: Vec<f64> = peaks.iter().map(|p| p.mz).collect();
     let int: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
-    Ok((mz, int, nominal_scan_mode, 0))
+    Ok((mz, int, nominal_scan_mode, 0, recovered))
 }
 
 // -- Adapter / canonical writer wrappers --
@@ -465,6 +480,11 @@ const SOFTWARE_NAME: &str = "opentfraw";
 /// the scan's calibration layout is unknown and their m/z is `NaN`. Written
 /// regardless of [`ExtraFields`], since it reports lost data.
 const UNCONVERTED_PROFILE_BINS_KEY: &str = "opentfraw.unconverted_profile_bins";
+/// Spectrum `extra` key set to `true` on a flat-peak (TSQ Vantage) scan whose
+/// peak count was recovered from the scan index: the default count disagreed
+/// with the index's total current or m/z range, and one other count agreed.
+/// Written regardless of [`ExtraFields`], since it marks a changed decode.
+pub const RECOVERED_PEAK_COUNT_KEY: &str = "opentfraw.peak_count_recovered";
 // Written to mzML `<software version=...>` so converted files record the
 // opentfraw release that produced them.
 const SOFTWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -646,7 +666,7 @@ fn to_msc_record(
     parts: ScanParts,
     extra: ::std::collections::BTreeMap<String, String>,
 ) -> msc::SpectrumRecord {
-    let (meta, mz, intensity, scan_mode, _) = parts;
+    let (meta, mz, intensity, scan_mode, _, _) = parts;
     let precursor = meta.precursor.map(|p| {
         msc::PrecursorInfo::default()
             .with_target_mz(p.target_mz)
@@ -848,6 +868,7 @@ pub struct OpenTfRawSource<'a, R: Read + Seek> {
     include_profile: bool,
     extra_fields: ExtraFields,
     acquisition_paths: bool,
+    recovered_peak_counts: std::sync::atomic::AtomicUsize,
 }
 
 impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
@@ -864,7 +885,17 @@ impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
             include_profile,
             extra_fields: ExtraFields::All,
             acquisition_paths: false,
+            recovered_peak_counts: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// Number of scans yielded so far whose peak count was recovered from the
+    /// scan index (TSQ Vantage files, see
+    /// [`RawFileReader::read_scan_flat_checked`]). Each such spectrum also has
+    /// the `opentfraw.peak_count_recovered` extra field (a userParam in mzML).
+    pub fn recovered_peak_count_scans(&self) -> usize {
+        self.recovered_peak_counts
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Include acquisition-workstation details in the run metadata: the
@@ -1030,11 +1061,16 @@ impl<'a, R: Read + Seek> msc::SpectrumSource for OpenTfRawSource<'a, R> {
         let source = &mut *self.source;
         let include_profile = self.include_profile;
         let extra_fields = &self.extra_fields;
+        let recovered_peak_counts = &self.recovered_peak_counts;
         Box::new((0..raw.num_scans).map(move |idx| {
             let parts = extract_parts(raw, source, idx, include_profile)?;
             let mut extra = scan_extras(raw, &parts.0, extra_fields);
             if parts.4 > 0 {
                 extra.insert(UNCONVERTED_PROFILE_BINS_KEY.into(), parts.4.to_string());
+            }
+            if parts.5 {
+                extra.insert(RECOVERED_PEAK_COUNT_KEY.into(), "true".to_string());
+                recovered_peak_counts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             Ok(to_msc_record(parts, extra))
         }))

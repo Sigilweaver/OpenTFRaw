@@ -994,6 +994,11 @@ impl RawFile {
     /// written, and a ``UserWarning`` states how many were left out. The
     /// ``<spectrumList count>`` attribute still counts the skipped scans.
     ///
+    /// A TSQ Vantage scan whose peak count is not the default one is read
+    /// with the count its scan-index entry confirms; each such record has the
+    /// userParam ``opentfraw.peak_count_recovered`` and a ``UserWarning``
+    /// states how many were written.
+    ///
     /// Returns the number of records left out (always 0 unless
     /// ``skip_unreadable=True``).
     #[pyo3(signature = (out_path, extra_fields=None, exclude_extra_fields=None, skip_unreadable=false))]
@@ -1034,19 +1039,29 @@ impl RawFile {
             .ok_or_else(|| PyValueError::new_err("non-UTF8 file name"))?;
         let out_file = File::create(out_path).map_err(|e| PyIOError::new_err(e.to_string()))?;
         let mut out = std::io::BufWriter::new(out_file);
-        let summary = {
+        let (summary, recovered) = {
             // Release the source lock before any warning runs Python code.
             let mut src = self.locked_source()?;
             let mut source = OpenTfRawSource::new(&self.reader, &mut *src, raw_filename, false)
                 .with_extra_fields(selection);
-            openmassspec_core::write_mzml_with_options(&mut source, &mut out, &options)
-                .map_err(|e| PyIOError::new_err(e.to_string()))?
+            let summary =
+                openmassspec_core::write_mzml_with_options(&mut source, &mut out, &options)
+                    .map_err(|e| PyIOError::new_err(e.to_string()))?;
+            (summary, source.recovered_peak_count_scans())
         };
         out.flush().map_err(|e| PyIOError::new_err(e.to_string()))?;
         let skipped = summary.skipped();
         if skipped > 0 {
             let message = CString::new(format!(
                 "to_mzml left out {skipped} unreadable record(s) from {raw_filename}"
+            ))
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            PyErr::warn(py, &py.get_type::<PyUserWarning>(), &message, 1)?;
+        }
+        if recovered > 0 {
+            let message = CString::new(format!(
+                "to_mzml wrote {recovered} record(s) from {raw_filename} whose peak count was \
+                 recovered from the scan index (userParam opentfraw.peak_count_recovered)"
             ))
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
             PyErr::warn(py, &py.get_type::<PyUserWarning>(), &message, 1)?;

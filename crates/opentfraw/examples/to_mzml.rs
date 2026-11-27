@@ -124,6 +124,12 @@ fn main() {
                     summary.spectra_skipped, summary.chromatograms_skipped
                 );
             }
+            let recovered = src.recovered_peak_count_scans();
+            if recovered > 0 {
+                eprintln!(
+                    "warning: {recovered} spectra had their peak count recovered from the scan index (opentfraw.peak_count_recovered)"
+                );
+            }
         }
         Err(e) => {
             eprintln!("Error writing mzML: {e}");

@@ -8,7 +8,8 @@ use crate::header::FileHeader;
 use crate::raw_file_info::RawFileInfo;
 use crate::run_header::RunHeader;
 use crate::scan_data::{
-    read_flat_peaks, read_scan_srm_v66, search_v63_transition, Peak, ScanDataPacket,
+    read_flat_peaks_checked, read_scan_srm_v66, search_v63_transition, FlatScanIndex, Peak,
+    ScanDataPacket,
 };
 use crate::scan_event::{ScanEvent, ScanEventPreamble};
 use crate::scan_index::ScanIndexEntry;
@@ -1365,13 +1366,14 @@ impl RawFileReader {
                             continue;
                         }
                         seen.insert(ev, true);
-                        let peaks = match read_flat_peaks(
+                        let peaks = match read_flat_peaks_checked(
                             &mut source,
                             data_addr,
                             entry.offset,
                             entry.data_size,
+                            &FlatScanIndex::of(entry),
                         ) {
-                            Ok(p) if !p.is_empty() => p,
+                            Ok(p) if !p.peaks.is_empty() => p.peaks,
                             _ => continue,
                         };
                         // Use the first peak's mz as Q3_center anchor.
@@ -1561,13 +1563,38 @@ impl RawFileReader {
     ///
     /// In this format, `entry.offset` is the cumulative end byte offset within
     /// the data stream. Peaks are (f32, f32) pairs at the end of each record.
+    ///
+    /// The record does not state its peak count. When the default count
+    /// disagrees with the scan index (intensity sum, m/z range, ascending
+    /// m/z), the one count that agrees is used; see
+    /// [`Self::read_scan_flat_checked`] to learn whether that happened.
     pub fn read_scan_flat<R: Read + Seek>(
         &self,
         source: &mut R,
         scan_number: u32,
     ) -> Result<Vec<Peak>> {
+        Ok(self.read_scan_flat_checked(source, scan_number)?.0)
+    }
+
+    /// [`Self::read_scan_flat`], also reporting whether the peak count was
+    /// recovered: `true` when the default count (`data_size - 1` or
+    /// `data_size - 2`) disagreed with the scan index and a different count
+    /// was chosen because it alone agrees. TSQ Vantage files (format version
+    /// 63) have such scans (1,969 of 35,098 in PXD020246).
+    pub fn read_scan_flat_checked<R: Read + Seek>(
+        &self,
+        source: &mut R,
+        scan_number: u32,
+    ) -> Result<(Vec<Peak>, bool)> {
         let entry = self.scan_index_entry(scan_number)?;
-        read_flat_peaks(source, self.data_addr, entry.offset, entry.data_size)
+        let flat = read_flat_peaks_checked(
+            source,
+            self.data_addr,
+            entry.offset,
+            entry.data_size,
+            &FlatScanIndex::of(entry),
+        )?;
+        Ok((flat.peaks, flat.recovered))
     }
 
     /// Read a single scan in v66 SRM format (TSQ Quantiva / TSQ Altis).
