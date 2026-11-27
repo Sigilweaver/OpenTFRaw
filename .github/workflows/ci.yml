@@ -85,7 +85,7 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Fetch corpus fixtures
-        uses: Sigilweaver/ops/.github/actions/fetch-fixture@995e1df030a4409c635e868a60d8fe30d173ff22
+        uses: Sigilweaver/ops/.github/actions/fetch-fixture@cf88ab9d4e06ce360ee0659bde8d10081ea4de17
         with:
           user-agent: OpenTFRaw-CI/1.0
           fixtures: |
@@ -118,7 +118,7 @@ jobs:
         run: command -v xmllint || (sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-utils)
 
       - name: Fetch test RAW file
-        uses: Sigilweaver/ops/.github/actions/fetch-fixture@995e1df030a4409c635e868a60d8fe30d173ff22
+        uses: Sigilweaver/ops/.github/actions/fetch-fixture@cf88ab9d4e06ce360ee0659bde8d10081ea4de17
         with:
           user-agent: OpenTFRaw-CI/1.0
           fixtures: |
@@ -191,7 +191,7 @@ jobs:
         run: cargo install cargo-fuzz --locked
 
       - name: Fetch the RAW fixture for fuzz seeding
-        uses: Sigilweaver/ops/.github/actions/fetch-fixture@995e1df030a4409c635e868a60d8fe30d173ff22
+        uses: Sigilweaver/ops/.github/actions/fetch-fixture@cf88ab9d4e06ce360ee0659bde8d10081ea4de17
         with:
           user-agent: OpenTFRaw-CI/1.0
           fixtures: |
@@ -242,7 +242,7 @@ jobs:
         run: uv run maturin develop --release
 
       - name: Fetch the pytest RAW fixture
-        uses: Sigilweaver/ops/.github/actions/fetch-fixture@995e1df030a4409c635e868a60d8fe30d173ff22
+        uses: Sigilweaver/ops/.github/actions/fetch-fixture@cf88ab9d4e06ce360ee0659bde8d10081ea4de17
         with:
           user-agent: OpenTFRaw-CI/1.0
           fixtures: |
