@@ -58,6 +58,9 @@ fn pxd020246_recovers_1969_scans_and_leaves_none_unverified() {
     }
     assert_eq!(n, 35_098);
     assert_eq!(flagged, 1_969);
+    // The source's own counters, as in 3.1.1.
+    assert_eq!(source.recovered_peak_count_scans(), 1_969);
+    assert_eq!(source.unverified_peak_count_scans(), 0);
 
     // Through the free function: the flag is on the record.
     let mut file = BufReader::new(File::open(&path).expect("reopen raw"));

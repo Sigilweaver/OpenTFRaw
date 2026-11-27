@@ -593,6 +593,16 @@ pub const RECOVERED_PEAK_COUNT_CODE: &str = "opentfraw.peak_count_recovered";
 /// misaligned. Core's writer refuses such a scan if its m/z is not finite and
 /// ascending.
 pub const UNVERIFIED_PEAK_COUNT_CODE: &str = "opentfraw.peak_count_unverified";
+/// The 3.1.1 name of [`RECOVERED_PEAK_COUNT_CODE`]. The string is the same,
+/// but it is now a warning code on the record, no longer a spectrum `extra`
+/// key.
+#[deprecated(since = "4.0.0", note = "renamed to `RECOVERED_PEAK_COUNT_CODE`")]
+pub const RECOVERED_PEAK_COUNT_KEY: &str = RECOVERED_PEAK_COUNT_CODE;
+/// The 3.1.1 name of [`UNVERIFIED_PEAK_COUNT_CODE`]. The string is the same,
+/// but it is now a warning code on the record, no longer a spectrum `extra`
+/// key.
+#[deprecated(since = "4.0.0", note = "renamed to `UNVERIFIED_PEAK_COUNT_CODE`")]
+pub const UNVERIFIED_PEAK_COUNT_KEY: &str = UNVERIFIED_PEAK_COUNT_CODE;
 // Written to mzML `<software version=...>` so converted files record the
 // opentfraw release that produced them.
 const SOFTWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -1057,6 +1067,8 @@ pub struct OpenTfRawSource<'a, R: Read + Seek> {
     include_profile: bool,
     extra_fields: ExtraFields,
     acquisition_paths: bool,
+    recovered_peak_counts: std::sync::atomic::AtomicUsize,
+    unverified_peak_counts: std::sync::atomic::AtomicUsize,
 }
 
 impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
@@ -1073,7 +1085,27 @@ impl<'a, R: Read + Seek> OpenTfRawSource<'a, R> {
             include_profile,
             extra_fields: ExtraFields::All,
             acquisition_paths: false,
+            recovered_peak_counts: std::sync::atomic::AtomicUsize::new(0),
+            unverified_peak_counts: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// Number of scans yielded so far whose peak count was recovered from the
+    /// scan index (TSQ Vantage files, see
+    /// [`RawFileReader::read_scan_flat_checked`]). Each such spectrum also has
+    /// the warning [`RECOVERED_PEAK_COUNT_CODE`].
+    pub fn recovered_peak_count_scans(&self) -> usize {
+        self.recovered_peak_counts
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Number of scans yielded so far whose peak count is unverified: the
+    /// default count disagrees with the scan index and no single other count
+    /// agrees ([`PeakCountCheck::Unverified`]). Each such spectrum also has
+    /// the warning [`UNVERIFIED_PEAK_COUNT_CODE`].
+    pub fn unverified_peak_count_scans(&self) -> usize {
+        self.unverified_peak_counts
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Include acquisition-workstation details in the run metadata: the
@@ -1239,13 +1271,17 @@ impl<'a, R: Read + Seek + Send> msc::SpectrumSource for OpenTfRawSource<'a, R> {
         let source = &mut *self.source;
         let include_profile = self.include_profile;
         let extra_fields = &self.extra_fields;
+        let recovered_peak_counts = &self.recovered_peak_counts;
+        let unverified_peak_counts = &self.unverified_peak_counts;
         Box::new((0..raw.num_scans).map(move |idx| {
             let parts = extract_parts(raw, source, idx, include_profile)?;
             let mut extra = scan_extras(raw, &parts.0, extra_fields);
             if parts.4 > 0 {
                 extra.insert(UNCONVERTED_PROFILE_BINS_KEY.into(), parts.4.to_string());
             }
-            Ok(to_msc_record(parts, extra))
+            let record = to_msc_record(parts, extra);
+            count_peak_count_warnings(&record, recovered_peak_counts, unverified_peak_counts);
+            Ok(record)
         }))
     }
 
@@ -1255,6 +1291,27 @@ impl<'a, R: Read + Seek + Send> msc::SpectrumSource for OpenTfRawSource<'a, R> {
 
     fn iter_chromatograms<'s>(&'s mut self) -> msc::ChromatogramIter<'s> {
         Box::new(build_chromatograms(self.raw).into_iter().map(Ok))
+    }
+}
+
+/// Add one to the source's running count for each peak-count warning on
+/// `record`.
+fn count_peak_count_warnings(
+    record: &msc::SpectrumRecord,
+    recovered: &std::sync::atomic::AtomicUsize,
+    unverified: &std::sync::atomic::AtomicUsize,
+) {
+    use std::sync::atomic::Ordering::Relaxed;
+    for warning in &record.warnings {
+        match warning.kind.code() {
+            RECOVERED_PEAK_COUNT_CODE => {
+                recovered.fetch_add(1, Relaxed);
+            }
+            UNVERIFIED_PEAK_COUNT_CODE => {
+                unverified.fetch_add(1, Relaxed);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -1417,6 +1474,35 @@ mod tests {
             codes(PeakCountCheck::Unverified),
             [UNVERIFIED_PEAK_COUNT_CODE]
         );
+    }
+
+    #[test]
+    fn the_source_counts_scans_by_their_peak_count_warnings() {
+        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+        let (recovered, unverified) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        for check in [
+            PeakCountCheck::Agreed,
+            PeakCountCheck::Recovered,
+            PeakCountCheck::Recovered,
+            PeakCountCheck::Unverified,
+            PeakCountCheck::Agreed,
+        ] {
+            let mut parts = parts_with_precursor(PrecursorInfo::default(), vec![100.0], vec![1.0]);
+            parts.5 = check;
+            let record = to_msc_record(parts, Default::default());
+            count_peak_count_warnings(&record, &recovered, &unverified);
+        }
+        assert_eq!(recovered.load(Relaxed), 2);
+        assert_eq!(unverified.load(Relaxed), 1);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn the_3_1_1_constant_names_still_resolve() {
+        assert_eq!(RECOVERED_PEAK_COUNT_KEY, RECOVERED_PEAK_COUNT_CODE);
+        assert_eq!(UNVERIFIED_PEAK_COUNT_KEY, UNVERIFIED_PEAK_COUNT_CODE);
+        assert_eq!(RECOVERED_PEAK_COUNT_KEY, "opentfraw.peak_count_recovered");
+        assert_eq!(UNVERIFIED_PEAK_COUNT_KEY, "opentfraw.peak_count_unverified");
     }
 
     #[test]

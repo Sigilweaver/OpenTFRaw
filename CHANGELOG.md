@@ -46,9 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   userParam named `openmassspec: warning <code>` in mzML, counted in the write
   summary) instead of the spectrum `extra` key of that name.
   `OpenTfRawSource::recovered_peak_count_scans()` and
-  `unverified_peak_count_scans()` are removed, and `RECOVERED_PEAK_COUNT_KEY` /
-  `UNVERIFIED_PEAK_COUNT_KEY` are now `RECOVERED_PEAK_COUNT_CODE` /
-  `UNVERIFIED_PEAK_COUNT_CODE`. With the recovery, PXD020246 converts by
+  `unverified_peak_count_scans()` keep their meaning and are counted from those
+  warnings. `RECOVERED_PEAK_COUNT_KEY` / `UNVERIFIED_PEAK_COUNT_KEY` are
+  deprecated aliases of `RECOVERED_PEAK_COUNT_CODE` /
+  `UNVERIFIED_PEAK_COUNT_CODE` (the same strings, now warning codes, not `extra`
+  keys). With the recovery, PXD020246 converts by
   default (35,098 spectra, 1,969 with the recovered warning); Core's writer
   refuses only an unverified scan whose m/z is not finite and ascending.
 

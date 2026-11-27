@@ -52,10 +52,11 @@ in OpenMassSpecCore; this page covers what callers of this crate edit.
 - The TSQ Vantage peak-count flags of 3.1.1 are Core warnings: a recovered scan
   has the warning `opentfraw.peak_count_recovered` and an unverified one
   `opentfraw.peak_count_unverified` (in `iter_records()` `warnings`, and
-  counted by `to_mzml`). The spectrum `extra` keys of the same names and
+  counted by `to_mzml`). The spectrum `extra` keys of the same names are gone.
   `OpenTfRawSource::recovered_peak_count_scans()` /
-  `unverified_peak_count_scans()` are gone; the constants are
-  `mzml::RECOVERED_PEAK_COUNT_CODE` and `UNVERIFIED_PEAK_COUNT_CODE`. The mzML
+  `unverified_peak_count_scans()` still work. The constants are
+  `mzml::RECOVERED_PEAK_COUNT_CODE` and `UNVERIFIED_PEAK_COUNT_CODE`; the
+  3.1.1 `..._KEY` names are deprecated aliases. The mzML
   userParam is named `openmassspec: warning opentfraw.peak_count_recovered`.
 - `to_mzml` emits a `UserWarning` for every warning code it wrote, including
   `empty_spectrum` for scans with no peaks.

@@ -92,6 +92,8 @@ Measured on the public test corpus (291 files from 56 PRIDE datasets).
   A true count of zero is never tried, so a scan with `data_size` of 2 or more
   and no peaks is unverified, not empty.
   Recovered and unverified scans are flagged wherever they are read:
+  `OpenTfRawSource::recovered_peak_count_scans()` and
+  `unverified_peak_count_scans()` count the scans the source has yielded,
   `RawFileReader::peak_counts_recovered()` and `peak_counts_unverified()`
   count the decodes since open, the `peak_count` field of `extract_spectrum` /
   `iter_spectra` records says how each was settled, `iter_records()` and the
