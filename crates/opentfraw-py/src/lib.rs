@@ -28,7 +28,7 @@ use ::opentfraw::generic_data::GenericValue;
 use ::opentfraw::mzml::OpenTfRawSource;
 use ::opentfraw::scan_filter::activation_str;
 use ::opentfraw::ExtraFields;
-use ::opentfraw::{scan_metadata, Polarity, RawFileReader, ScanMetadata};
+use ::opentfraw::{scan_metadata, PeakCountCheck, Polarity, RawFileReader, ScanMetadata};
 use numpy::{PyArray1, ToPyArray};
 use openmassspec_core::{RecordErrorPolicy, SpectrumRecord, SpectrumSource, WriteOptions};
 use pyo3::exceptions::{PyIOError, PyIndexError, PyRuntimeError, PyUserWarning, PyValueError};
@@ -316,6 +316,10 @@ impl RawFile {
     }
 
     /// Stream full canonical spectrum records with a two-record buffer.
+    ///
+    /// A TSQ Vantage scan whose peak count was recovered from the scan index
+    /// or is unverified has ``opentfraw.peak_count_recovered`` or
+    /// ``opentfraw.peak_count_unverified`` (``"true"``) in its ``extra``.
     ///
     /// Raises ``OSError`` at the first scan that cannot be decoded; the
     /// stream ends there.
@@ -610,16 +614,43 @@ impl RawFile {
     /// Works on every file type (Orbitrap/ion-trap and TSQ/SRM). Profile
     /// data is skipped for speed; use :meth:`profile` for the raw profile
     /// signal and :meth:`centroid_labels` for per-peak label data.
+    ///
+    /// A TSQ Vantage (format version 63) record does not state its peak
+    /// count. When the default count disagrees with the scan index, the one
+    /// count that agrees is used and a ``UserWarning`` says so; when no
+    /// single count agrees the default peaks are returned, which may hold
+    /// non-finite or descending m/z, and a ``UserWarning`` says they are
+    /// unverified.
     fn peaks<'py>(
         &self,
         py: Python<'py>,
         scan_number: u32,
     ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f32>>)> {
-        let mut src = self.locked_source()?;
-        let peaks = self
-            .reader
-            .read_peaks_only(&mut *src, scan_number)
-            .map_err(to_py_err)?;
+        let (peaks, check) = {
+            let mut src = self.locked_source()?;
+            self.reader
+                .read_peaks_only_checked(&mut *src, scan_number)
+                .map_err(to_py_err)?
+        };
+        let file_name = self.path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        match check {
+            PeakCountCheck::Recovered => warn_user(
+                py,
+                &format!(
+                    "scan {scan_number} of {file_name}: the peak count was recovered from the \
+                     scan index (the default count disagreed with it)"
+                ),
+            )?,
+            PeakCountCheck::Unverified => warn_user(
+                py,
+                &format!(
+                    "scan {scan_number} of {file_name}: the peak count is unverified (the \
+                     default count disagrees with the scan index and no single other count \
+                     agrees); m/z may be non-finite or descending"
+                ),
+            )?,
+            _ => {}
+        }
         let mz: Vec<f64> = peaks.iter().map(|p| p.mz as f64).collect();
         let intensity: Vec<f32> = peaks.iter().map(|p| p.abundance).collect();
         Ok((mz.to_pyarray(py), intensity.to_pyarray(py)))
@@ -874,6 +905,9 @@ impl RawFile {
     ///
     /// The precursor keys are None (and collision_energy_is_nce False) for
     /// MS1 scans.
+    ///
+    /// Emits a ``UserWarning`` for a TSQ Vantage scan whose peak count was
+    /// recovered from the scan index or is unverified (see :meth:`peaks`).
     fn scan<'py>(&self, py: Python<'py>, scan_number: u32) -> PyResult<Bound<'py, PyDict>> {
         let first = self.first_scan();
         let idx = scan_number.checked_sub(first).ok_or_else(|| {
@@ -917,6 +951,8 @@ impl RawFile {
     /// Equivalent to ``[raw.scan(n) for n in range(raw.first_scan, raw.last_scan+1)]``
     /// but avoids Python-level arithmetic in the hot loop. All scans are
     /// decoded eagerly into memory; this is a list, not a lazy iterator.
+    /// Like :meth:`scan`, it emits a ``UserWarning`` for a TSQ Vantage scan
+    /// whose peak count was recovered or is unverified.
     fn iter_scans<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let first = self.first_scan();
         let n = self.num_scans();
@@ -994,6 +1030,13 @@ impl RawFile {
     /// written, and a ``UserWarning`` states how many were left out. The
     /// ``<spectrumList count>`` attribute still counts the skipped scans.
     ///
+    /// A TSQ Vantage scan whose default peak count disagrees with the scan
+    /// index is read with the one count the index confirms; each such record
+    /// has the userParam ``opentfraw.peak_count_recovered``. When no single
+    /// count agrees, the default peaks are written with the userParam
+    /// ``opentfraw.peak_count_unverified``. A ``UserWarning`` states how many
+    /// records of each kind were written.
+    ///
     /// Returns the number of records left out (always 0 unless
     /// ``skip_unreadable=True``).
     #[pyo3(signature = (out_path, extra_fields=None, exclude_extra_fields=None, skip_unreadable=false))]
@@ -1034,13 +1077,19 @@ impl RawFile {
             .ok_or_else(|| PyValueError::new_err("non-UTF8 file name"))?;
         let out_file = File::create(out_path).map_err(|e| PyIOError::new_err(e.to_string()))?;
         let mut out = std::io::BufWriter::new(out_file);
-        let summary = {
+        let (summary, recovered, unverified) = {
             // Release the source lock before any warning runs Python code.
             let mut src = self.locked_source()?;
             let mut source = OpenTfRawSource::new(&self.reader, &mut *src, raw_filename, false)
                 .with_extra_fields(selection);
-            openmassspec_core::write_mzml_with_options(&mut source, &mut out, &options)
-                .map_err(|e| PyIOError::new_err(e.to_string()))?
+            let summary =
+                openmassspec_core::write_mzml_with_options(&mut source, &mut out, &options)
+                    .map_err(|e| PyIOError::new_err(e.to_string()))?;
+            (
+                summary,
+                source.recovered_peak_count_scans(),
+                source.unverified_peak_count_scans(),
+            )
         };
         out.flush().map_err(|e| PyIOError::new_err(e.to_string()))?;
         let skipped = summary.skipped();
@@ -1051,8 +1100,34 @@ impl RawFile {
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
             PyErr::warn(py, &py.get_type::<PyUserWarning>(), &message, 1)?;
         }
+        if recovered > 0 {
+            warn_user(
+                py,
+                &format!(
+                    "to_mzml wrote {recovered} record(s) from {raw_filename} whose peak count \
+                     was recovered from the scan index (userParam opentfraw.peak_count_recovered)"
+                ),
+            )?;
+        }
+        if unverified > 0 {
+            warn_user(
+                py,
+                &format!(
+                    "to_mzml wrote {unverified} record(s) from {raw_filename} whose peak count \
+                     is unverified: the default count disagrees with the scan index and no \
+                     single other count agrees, so m/z may be non-finite or descending \
+                     (userParam opentfraw.peak_count_unverified)"
+                ),
+            )?;
+        }
         Ok(skipped)
     }
+}
+
+/// Emit a Python `UserWarning` attributed to the caller.
+fn warn_user(py: Python<'_>, message: &str) -> PyResult<()> {
+    let message = CString::new(message).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    PyErr::warn(py, &py.get_type::<PyUserWarning>(), &message, 1)
 }
 
 /// The metadata keys of :meth:`RawFile.scan` for one scan (everything but

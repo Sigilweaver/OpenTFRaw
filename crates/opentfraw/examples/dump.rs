@@ -335,6 +335,17 @@ fn main() {
                     }
                 } // end else (PacketHeader)
             }
+            if raw.flat_peaks {
+                println!(
+                    "  Peak counts recovered from the scan index: {}, unverified: {}",
+                    raw.peak_counts_recovered(),
+                    raw.peak_counts_unverified()
+                );
+                println!(
+                    "  v63 transition events skipped at open: {}",
+                    raw.v63_transition_events_skipped
+                );
+            }
         }
         Err(e) => {
             eprintln!("Error: {}", e);

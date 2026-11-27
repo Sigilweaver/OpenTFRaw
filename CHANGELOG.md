@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- API for TSQ Vantage peak counts: `PeakCountCheck` (`Agreed`, `Recovered`,
+  `Unverified`), `SpectrumRecord.peak_count`,
+  `RawFileReader::read_scan_flat_checked`, `read_peaks_only_checked`,
+  `peak_counts_recovered()`, `peak_counts_unverified()`,
+  `OpenTfRawSource::recovered_peak_count_scans()` and
+  `unverified_peak_count_scans()`, and the constants
+  `mzml::RECOVERED_PEAK_COUNT_KEY` and `mzml::UNVERIFIED_PEAK_COUNT_KEY`. See
+  Fixed.
+- `RawFileReader::v63_transition_events_skipped`: the number of scan events of
+  a TSQ Vantage file for which open found no transition (the event's first
+  scan had no readable peaks, or matched no transition record). Their
+  precursor m/z, product windows and collision energy are absent.
 - `scan_filter()` renders `lock` between the scan type and `ms<n>` on a scan
   whose trailer reports a found lock mass (`Number of LM Found:` above zero),
   for example `FTMS + p NSI Full lock ms [350.0000-1500.0000]`. (#58)
@@ -32,6 +44,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- TSQ Vantage (format version 63) scans with a peak count the default guess
+  missed were decoded misaligned. A flat-peak record does not state its peak
+  count; the reader assumed `data_size - 1` and tried `data_size - 2` only when
+  the first m/z looked implausible, so a scan with fewer peaks gave m/z values
+  such as 0.0, then -3.5e14 and 1e-31. In PXD020246, 1,969 of 35,098 scans were
+  affected (1,911 with unsorted or non-finite m/z, 4 that failed to decode, 54
+  with ascending but wrong values). The reader now checks the default read
+  against the scan index (finite, ascending m/z; intensity sum equal to the
+  total current within 1e-6; m/z inside the indexed range). When it disagrees,
+  every count from `data_size - 1` to `data_size - 12` is tried:
+  - exactly one agrees: that count is used and the scan is *recovered*;
+  - none or more than one agrees (a tie is never broken, and a count of zero
+    is never tried): the default read is returned unchanged and the scan is
+    *unverified*.
+  Both are flagged on every read path. `PeakCountCheck` (`Agreed`, `Recovered`,
+  `Unverified`) is returned by `RawFileReader::read_scan_flat_checked` and
+  `read_peaks_only_checked` and is the new `peak_count` field of
+  `SpectrumRecord` (`extract_spectrum`, `iter_spectra`). The spectrum `extra`
+  fields `opentfraw.peak_count_recovered` and `opentfraw.peak_count_unverified`
+  (userParams in mzML, written whatever `ExtraFields` selects) mark them.
+  `OpenTfRawSource::recovered_peak_count_scans()` and
+  `unverified_peak_count_scans()`, `RawFileReader::peak_counts_recovered()` and
+  `peak_counts_unverified()` count them; Python `peaks()`, `scan()` and
+  `to_mzml` emit a `UserWarning`, and the `to_mzml` example prints a warning.
+  `read_scan_flat`, `read_scan_peaks` and `read_peaks_only` return the
+  recovered peaks and only count. The 33,129 scans of PXD020246 that agree with
+  the index decode identically; no scan of it is unverified.
 - `CITATION.cff` identifies the Zenodo concept DOI (10.5281/zenodo.20470600),
   which resolves to the latest archived version, instead of the DOI of the
   1.1.0 version record.

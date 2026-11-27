@@ -8,7 +8,8 @@ use crate::header::FileHeader;
 use crate::raw_file_info::RawFileInfo;
 use crate::run_header::RunHeader;
 use crate::scan_data::{
-    read_flat_peaks, read_scan_srm_v66, search_v63_transition, Peak, ScanDataPacket,
+    read_flat_peaks_checked, read_scan_srm_v66, search_v63_transition, FlatScanIndex, Peak,
+    PeakCountCheck, ScanDataPacket,
 };
 use crate::scan_event::{ScanEvent, ScanEventPreamble};
 use crate::scan_index::ScanIndexEntry;
@@ -545,6 +546,17 @@ pub struct RawFileReader {
     pub flat_peaks: bool,
     /// Detected scan-data encoding (the format used by [`Self::read_scan_peaks`]).
     pub scan_format: crate::scan_format::ScanDataFormat,
+    /// Scan events of a v63 flat-peak file for which open found no Q1/Q3
+    /// transition: the event's first scan had no readable peaks, or its first
+    /// m/z matched no transition record. Such an event has no precursor m/z,
+    /// product windows or collision energy. 0 for every other format.
+    pub v63_transition_events_skipped: usize,
+    /// Number of flat-peak decodes since open whose peak count was
+    /// recovered; see [`Self::peak_counts_recovered`].
+    peak_counts_recovered: std::sync::atomic::AtomicUsize,
+    /// Number of flat-peak decodes since open whose peak count is
+    /// unverified; see [`Self::peak_counts_unverified`].
+    peak_counts_unverified: std::sync::atomic::AtomicUsize,
     /// Detected device family (informational).
     pub device_family: crate::device::DeviceFamily,
     /// Canonical instrument model name if one was detected in the file's
@@ -1201,6 +1213,7 @@ impl RawFileReader {
         //   scan range (not per-transition values), so the high_mz anchor does not apply.
         //   Q3 centers come from the first scan's peak list; Q3 windows are computed as
         //   Q3_center ± Q3_width/2.
+        let mut v63_transition_events_skipped = 0usize;
         let (
             srm_q1_by_event,
             srm_q3_windows,
@@ -1365,14 +1378,20 @@ impl RawFileReader {
                             continue;
                         }
                         seen.insert(ev, true);
-                        let peaks = match read_flat_peaks(
+                        let peaks = match read_flat_peaks_checked(
                             &mut source,
                             data_addr,
                             entry.offset,
                             entry.data_size,
+                            &FlatScanIndex::of(entry),
                         ) {
-                            Ok(p) if !p.is_empty() => p,
-                            _ => continue,
+                            Ok(p) if !p.peaks.is_empty() => p.peaks,
+                            _ => {
+                                // The event's first scan has no readable peaks
+                                // to anchor a transition on.
+                                v63_transition_events_skipped += 1;
+                                continue;
+                            }
                         };
                         // Use the first peak's mz as Q3_center anchor.
                         if let Some((q1, q3w, ce)) = search_v63_transition(data, peaks[0].mz) {
@@ -1384,6 +1403,8 @@ impl RawFileReader {
                                 .map(|p| (p.mz as f32 - half, p.mz as f32 + half))
                                 .collect();
                             q3_map.insert(ev, windows);
+                        } else {
+                            v63_transition_events_skipped += 1;
                         }
                     }
                     (
@@ -1427,6 +1448,9 @@ impl RawFileReader {
             data_addr,
             flat_peaks,
             scan_format,
+            v63_transition_events_skipped,
+            peak_counts_recovered: std::sync::atomic::AtomicUsize::new(0),
+            peak_counts_unverified: std::sync::atomic::AtomicUsize::new(0),
             device_family,
             instrument_model,
             srm_q1_by_event,
@@ -1561,13 +1585,73 @@ impl RawFileReader {
     ///
     /// In this format, `entry.offset` is the cumulative end byte offset within
     /// the data stream. Peaks are (f32, f32) pairs at the end of each record.
+    ///
+    /// The record does not state its peak count. When the default count
+    /// disagrees with the scan index (intensity sum, m/z range, ascending
+    /// m/z), the one count that agrees is used (a recovered scan), and when
+    /// no single count agrees the default peaks are returned unverified. This method drops
+    /// that information: call [`Self::read_scan_flat_checked`] to see it, or
+    /// read [`Self::peak_counts_recovered`] and
+    /// [`Self::peak_counts_unverified`] afterwards. Every call through here
+    /// is counted.
     pub fn read_scan_flat<R: Read + Seek>(
         &self,
         source: &mut R,
         scan_number: u32,
     ) -> Result<Vec<Peak>> {
+        Ok(self.read_scan_flat_checked(source, scan_number)?.0)
+    }
+
+    /// [`Self::read_scan_flat`], also reporting how the peak count was
+    /// settled, see [`PeakCountCheck`]. TSQ Vantage files (format version 63)
+    /// have scans that are not `Agreed` (1,969 of 35,098 in PXD020246, all
+    /// `Recovered`).
+    ///
+    /// Each call that returns `Recovered` or `Unverified` adds one to
+    /// [`Self::peak_counts_recovered`] or [`Self::peak_counts_unverified`].
+    pub fn read_scan_flat_checked<R: Read + Seek>(
+        &self,
+        source: &mut R,
+        scan_number: u32,
+    ) -> Result<(Vec<Peak>, PeakCountCheck)> {
         let entry = self.scan_index_entry(scan_number)?;
-        read_flat_peaks(source, self.data_addr, entry.offset, entry.data_size)
+        let flat = read_flat_peaks_checked(
+            source,
+            self.data_addr,
+            entry.offset,
+            entry.data_size,
+            &FlatScanIndex::of(entry),
+        )?;
+        match flat.check {
+            PeakCountCheck::Recovered => {
+                self.peak_counts_recovered
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            PeakCountCheck::Unverified => {
+                self.peak_counts_unverified
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            PeakCountCheck::Agreed => {}
+        }
+        Ok((flat.peaks, flat.check))
+    }
+
+    /// Flat-peak decodes since this reader was opened whose peak count was
+    /// recovered from the scan index (see [`PeakCountCheck::Recovered`]).
+    /// Counts decodes, not distinct scans: reading a scan twice counts it
+    /// twice. The decodes at open time (the SRM transition search) are not
+    /// counted.
+    pub fn peak_counts_recovered(&self) -> usize {
+        self.peak_counts_recovered
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Flat-peak decodes since this reader was opened whose peak count is
+    /// unverified (see [`PeakCountCheck::Unverified`]); counted like
+    /// [`Self::peak_counts_recovered`].
+    pub fn peak_counts_unverified(&self) -> usize {
+        self.peak_counts_unverified
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Read a single scan in v66 SRM format (TSQ Quantiva / TSQ Altis).
@@ -1595,6 +1679,9 @@ impl RawFileReader {
     /// The returned `Vec<Peak>` contains centroided peaks regardless of the
     /// underlying format. For PacketHeader files that also contain a profile
     /// signal, use [`Self::read_scan`] to access both.
+    ///
+    /// For TSQ Vantage (v63) files this is [`Self::read_scan_flat`]: a scan
+    /// whose peak count was recovered or is unverified is counted, not marked.
     pub fn read_scan_peaks<R: Read + Seek>(
         &self,
         source: &mut R,
@@ -1618,7 +1705,9 @@ impl RawFileReader {
     /// [`Self::read_scan_peaks`] when only centroided m/z and intensity values
     /// are needed (e.g. mzML export, peak area queries).
     ///
-    /// For TSQ/SRM files this is identical to [`Self::read_scan_peaks`].
+    /// For TSQ/SRM files this is identical to [`Self::read_scan_peaks`]; use
+    /// [`Self::read_peaks_only_checked`] to learn whether a v63 scan's peak
+    /// count was recovered or is unverified.
     pub fn read_peaks_only<R: Read + Seek>(
         &self,
         source: &mut R,
@@ -1638,6 +1727,24 @@ impl RawFileReader {
             }
             ScanDataFormat::FlatV63 => self.read_scan_flat(source, scan_number),
             ScanDataFormat::FlatV66 => self.read_scan_srm_v66(source, scan_number),
+        }
+    }
+
+    /// [`Self::read_peaks_only`], also reporting how a flat-peak (v63) scan's
+    /// peak count was settled. Every other format states its peak count and
+    /// returns [`PeakCountCheck::Agreed`].
+    pub fn read_peaks_only_checked<R: Read + Seek>(
+        &self,
+        source: &mut R,
+        scan_number: u32,
+    ) -> Result<(Vec<Peak>, PeakCountCheck)> {
+        use crate::scan_format::ScanDataFormat;
+        match self.scan_format {
+            ScanDataFormat::FlatV63 => self.read_scan_flat_checked(source, scan_number),
+            _ => Ok((
+                self.read_peaks_only(source, scan_number)?,
+                PeakCountCheck::Agreed,
+            )),
         }
     }
 

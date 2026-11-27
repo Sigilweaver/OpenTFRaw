@@ -74,8 +74,23 @@ decoders described in [Scan data](./scan-data). Related read methods:
 | `read_scan_labels`  | `ScanDataPacket` | Centroids + FT labels, skipping the profile signal; `PacketHeader` format only     |
 | `read_scan_peaks`   | `Vec<Peak>`      | Centroided peaks, dispatching on `scan_format`; the recommended default           |
 | `read_peaks_only`   | `Vec<Peak>`      | Like `read_scan_peaks` but skips profile data on `PacketHeader` files for a 2-10x speedup |
-| `read_scan_flat`    | `Vec<Peak>`      | Low-level: TSQ/SRM (v63) flat-peak format                                          |
+| `read_scan_flat`    | `Vec<Peak>`      | Low-level: TSQ/SRM (v63) flat-peak format. The peak count is settled against the scan index; a recovered or unverified scan is counted, not marked (see below) |
+| `read_scan_flat_checked` | `(Vec<Peak>, PeakCountCheck)` | `read_scan_flat` plus how the count was settled: `Agreed`, `Recovered` or `Unverified` |
+| `read_peaks_only_checked` | `(Vec<Peak>, PeakCountCheck)` | `read_peaks_only` plus the same flag (always `Agreed` outside v63) |
 | `read_scan_srm_v66` | `Vec<Peak>`      | Low-level: TSQ Quantiva/Altis (v66) SRM format                                     |
+
+### TSQ Vantage peak counts
+
+A v63 flat-peak record does not state its peak count. The reader checks the
+default count against the scan index and, when it disagrees, takes the one
+other count (down to `data_size - 12`) that agrees: the scan is `Recovered`.
+When no single count agrees the default peaks are returned as they are and the
+scan is `Unverified`; they may hold NaN or descending m/z. A true count of zero
+is never tried. `read_scan_flat`, `read_scan_peaks` and `read_peaks_only`
+return the peaks without the flag; `peak_counts_recovered()` and
+`peak_counts_unverified()` on the reader count the decodes that were not
+`Agreed` since it was opened. `extract_spectrum` and `iter_spectra` set the
+`peak_count` field of each record.
 
 ## Error handling
 

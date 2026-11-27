@@ -36,5 +36,6 @@ pub use mzml::{
 pub use reader::{
     ControllerInfo, ControllerType, RawFileReader, ScanParams, StatusLogEntry, StatusLogRecord,
 };
+pub use scan_data::PeakCountCheck;
 pub use scan_format::ScanDataFormat;
 pub use types::*;
