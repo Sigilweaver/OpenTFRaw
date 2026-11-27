@@ -546,6 +546,11 @@ pub struct RawFileReader {
     pub flat_peaks: bool,
     /// Detected scan-data encoding (the format used by [`Self::read_scan_peaks`]).
     pub scan_format: crate::scan_format::ScanDataFormat,
+    /// Scan events of a v63 flat-peak file for which open found no Q1/Q3
+    /// transition: the event's first scan had no readable peaks, or its first
+    /// m/z matched no transition record. Such an event has no precursor m/z,
+    /// product windows or collision energy. 0 for every other format.
+    pub v63_transition_events_skipped: usize,
     /// Number of flat-peak decodes since open whose peak count was
     /// recovered; see [`Self::peak_counts_recovered`].
     peak_counts_recovered: std::sync::atomic::AtomicUsize,
@@ -1208,6 +1213,7 @@ impl RawFileReader {
         //   scan range (not per-transition values), so the high_mz anchor does not apply.
         //   Q3 centers come from the first scan's peak list; Q3 windows are computed as
         //   Q3_center ± Q3_width/2.
+        let mut v63_transition_events_skipped = 0usize;
         let (
             srm_q1_by_event,
             srm_q3_windows,
@@ -1380,7 +1386,12 @@ impl RawFileReader {
                             &FlatScanIndex::of(entry),
                         ) {
                             Ok(p) if !p.peaks.is_empty() => p.peaks,
-                            _ => continue,
+                            _ => {
+                                // The event's first scan has no readable peaks
+                                // to anchor a transition on.
+                                v63_transition_events_skipped += 1;
+                                continue;
+                            }
                         };
                         // Use the first peak's mz as Q3_center anchor.
                         if let Some((q1, q3w, ce)) = search_v63_transition(data, peaks[0].mz) {
@@ -1392,6 +1403,8 @@ impl RawFileReader {
                                 .map(|p| (p.mz as f32 - half, p.mz as f32 + half))
                                 .collect();
                             q3_map.insert(ev, windows);
+                        } else {
+                            v63_transition_events_skipped += 1;
                         }
                     }
                     (
@@ -1435,6 +1448,7 @@ impl RawFileReader {
             data_addr,
             flat_peaks,
             scan_format,
+            v63_transition_events_skipped,
             peak_counts_recovered: std::sync::atomic::AtomicUsize::new(0),
             peak_counts_unverified: std::sync::atomic::AtomicUsize::new(0),
             device_family,
@@ -1574,9 +1588,8 @@ impl RawFileReader {
     ///
     /// The record does not state its peak count. When the default count
     /// disagrees with the scan index (intensity sum, m/z range, ascending
-    /// m/z), the one count that agrees is used (a recovered scan, whose
-    /// values differ from earlier versions'), and when no single count
-    /// agrees the default peaks are returned unverified. This method drops
+    /// m/z), the one count that agrees is used (a recovered scan), and when
+    /// no single count agrees the default peaks are returned unverified. This method drops
     /// that information: call [`Self::read_scan_flat_checked`] to see it, or
     /// read [`Self::peak_counts_recovered`] and
     /// [`Self::peak_counts_unverified`] afterwards. Every call through here

@@ -317,6 +317,10 @@ impl RawFile {
 
     /// Stream full canonical spectrum records with a two-record buffer.
     ///
+    /// A TSQ Vantage scan whose peak count was recovered from the scan index
+    /// or is unverified has ``opentfraw.peak_count_recovered`` or
+    /// ``opentfraw.peak_count_unverified`` (``"true"``) in its ``extra``.
+    ///
     /// Raises ``OSError`` at the first scan that cannot be decoded; the
     /// stream ends there.
     fn iter_records(&self) -> PyResult<RecordIter> {
@@ -613,10 +617,10 @@ impl RawFile {
     ///
     /// A TSQ Vantage (format version 63) record does not state its peak
     /// count. When the default count disagrees with the scan index, the one
-    /// count that agrees is used and a ``UserWarning`` says so (the values
-    /// then differ from opentfraw 3.1.0's); when no single count agrees the
-    /// default peaks are returned, which may hold non-finite or descending
-    /// m/z, and a ``UserWarning`` says they are unverified.
+    /// count that agrees is used and a ``UserWarning`` says so; when no
+    /// single count agrees the default peaks are returned, which may hold
+    /// non-finite or descending m/z, and a ``UserWarning`` says they are
+    /// unverified.
     fn peaks<'py>(
         &self,
         py: Python<'py>,
@@ -901,6 +905,9 @@ impl RawFile {
     ///
     /// The precursor keys are None (and collision_energy_is_nce False) for
     /// MS1 scans.
+    ///
+    /// Emits a ``UserWarning`` for a TSQ Vantage scan whose peak count was
+    /// recovered from the scan index or is unverified (see :meth:`peaks`).
     fn scan<'py>(&self, py: Python<'py>, scan_number: u32) -> PyResult<Bound<'py, PyDict>> {
         let first = self.first_scan();
         let idx = scan_number.checked_sub(first).ok_or_else(|| {
@@ -944,6 +951,8 @@ impl RawFile {
     /// Equivalent to ``[raw.scan(n) for n in range(raw.first_scan, raw.last_scan+1)]``
     /// but avoids Python-level arithmetic in the hot loop. All scans are
     /// decoded eagerly into memory; this is a list, not a lazy iterator.
+    /// Like :meth:`scan`, it emits a ``UserWarning`` for a TSQ Vantage scan
+    /// whose peak count was recovered or is unverified.
     fn iter_scans<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let first = self.first_scan();
         let n = self.num_scans();

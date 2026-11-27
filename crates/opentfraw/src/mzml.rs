@@ -83,9 +83,9 @@ pub struct SpectrumRecord {
     pub mz: Vec<f64>,
     pub intensity: Vec<f32>,
     /// How the peak count of a TSQ Vantage (v63) flat-peak scan was settled.
-    /// [`PeakCountCheck::Recovered`] values differ from earlier versions';
     /// [`PeakCountCheck::Unverified`] peaks may hold non-finite or descending
-    /// m/z. [`PeakCountCheck::Agreed`] for every other scan.
+    /// m/z. [`PeakCountCheck::Agreed`] for every other scan (with a total
+    /// current of 0 it cannot tell an all-zero read from a misaligned one).
     pub peak_count: PeakCountCheck,
 }
 

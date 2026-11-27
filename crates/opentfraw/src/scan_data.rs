@@ -576,12 +576,14 @@ fn flat_peaks_agree_with_index(peaks: &[Peak], index: &FlatScanIndex) -> bool {
 #[non_exhaustive]
 pub enum PeakCountCheck {
     /// The default count (`data_size - 1`, else `data_size - 2`) agrees with
-    /// the index, or the format states its peak count.
+    /// the index, or the format states its peak count. When the index's total
+    /// current is 0, agreement cannot tell an all-zero read from a misaligned
+    /// one.
     #[default]
     Agreed,
     /// The default count disagrees with the index and exactly one other
     /// count (`data_size - 1` down to `data_size - 12`) agrees; its peaks are
-    /// returned. The values differ from what earlier versions returned.
+    /// returned.
     Recovered,
     /// The default count disagrees with the index and no other count, or
     /// more than one, agrees (or the index itself is not finite). The default

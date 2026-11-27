@@ -53,12 +53,13 @@ Measured on the public test corpus (291 files from 56 PRIDE datasets).
   as 0.7. A TSQ Vantage (format version 63) flat-peak record does not state
   its peak count, so the reader checks the default count (`data_size - 1`,
   else `data_size - 2`) against the scan index: finite and ascending m/z, an
-  intensity sum equal to the total current, m/z inside the indexed range.
-  When the default count disagrees, every count from `data_size - 1` down to
+  intensity sum equal to the total current, m/z inside the indexed range
+  (with a total current of 0 an agreeing read cannot be told from an all-zero
+  misaligned one). When the default count disagrees, every count from `data_size - 1` down to
   `data_size - 12` is tried. If exactly one agrees the scan is
   *recovered*: its peaks use that count and the spectrum carries
   `opentfraw.peak_count_recovered` (1,969 of the 35,098 scans of PXD020246,
-  none of the other public files; 3.1.0 returned misaligned values for them).
+  none of the other public files).
   If none agrees, or more than one does (a tie is never broken), the scan is
   *unverified*: the default peaks are returned unchanged, may hold NaN or
   descending m/z, and the spectrum carries `opentfraw.peak_count_unverified`

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- API for TSQ Vantage peak counts: `PeakCountCheck` (`Agreed`, `Recovered`,
+  `Unverified`), `SpectrumRecord.peak_count`,
+  `RawFileReader::read_scan_flat_checked`, `read_peaks_only_checked`,
+  `peak_counts_recovered()`, `peak_counts_unverified()`,
+  `OpenTfRawSource::recovered_peak_count_scans()` and
+  `unverified_peak_count_scans()`, and the constants
+  `mzml::RECOVERED_PEAK_COUNT_KEY` and `mzml::UNVERIFIED_PEAK_COUNT_KEY`. See
+  Fixed.
+- `RawFileReader::v63_transition_events_skipped`: the number of scan events of
+  a TSQ Vantage file for which open found no transition (the event's first
+  scan had no readable peaks, or matched no transition record). Their
+  precursor m/z, product windows and collision energy are absent.
 - `scan_filter()` renders `lock` between the scan type and `ms<n>` on a scan
   whose trailer reports a found lock mass (`Number of LM Found:` above zero),
   for example `FTMS + p NSI Full lock ms [350.0000-1500.0000]`. (#58)

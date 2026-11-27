@@ -39,6 +39,7 @@ fn pxd020246_recovers_1969_scans_and_leaves_none_unverified() {
     let Some(path) = fixture() else { return };
     let raw = RawFileReader::open_path(&path).expect("open raw");
     assert_eq!(raw.num_scans, 35_098);
+    assert_eq!(raw.v63_transition_events_skipped, 0);
 
     // Through the source: the extra keys and the counters.
     let mut file = BufReader::new(File::open(&path).expect("reopen raw"));
