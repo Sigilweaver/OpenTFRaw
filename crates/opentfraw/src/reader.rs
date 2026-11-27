@@ -588,6 +588,12 @@ pub struct RawFileReader {
     /// Declared source CID energy (eV), keyed by the method XML's one-based
     /// (segment, event) IDs. Applied only with explicit matching trailer IDs.
     pub source_cid_by_method_event: std::collections::BTreeMap<(u16, u16), f64>,
+    /// Unit of the collision energies stored in the scan events, when the
+    /// embedded instrument method states one for the whole run. The scan
+    /// event stores a bare number, so this is the only source of its unit;
+    /// `None` when there is no method text, it states no unit, or it states
+    /// conflicting units. See [`crate::CollisionEnergySource::ScanEvent`].
+    pub scan_event_energy_unit: Option<crate::CollisionEnergyUnit>,
 }
 
 // -- Multi-controller metadata --
@@ -1461,13 +1467,25 @@ impl RawFileReader {
             srm_rf_lens_by_event,
             srm_iso_width_by_event,
             source_cid_by_method_event: Default::default(),
+            scan_event_energy_unit: None,
         };
-        if let Some(text) = reader
-            .method_window(&mut source)?
-            .and_then(|window| method_settings_text(&window))
-        {
+        let window = reader.method_window(&mut source)?;
+        if let Some(text) = window.as_deref().and_then(method_settings_text) {
             reader.source_cid_by_method_event =
                 crate::instrument_method::source_cid_settings(&text);
+            reader.scan_event_energy_unit = crate::instrument_method::scan_event_energy_unit(&text);
+        }
+        // The text that states the collision-energy unit is not always the
+        // one `method_settings_text` picks (on Fusion Lumos and LTQ Orbitrap
+        // files the longest text block is a device description). Every text
+        // block of the region is searched instead; a conflicting statement
+        // anywhere still leaves the unit unknown.
+        if reader.scan_event_energy_unit.is_none() {
+            if let Some(window) = window.as_deref() {
+                let text = utf16le_text_blocks(window, 64).join("\n");
+                reader.scan_event_energy_unit =
+                    crate::instrument_method::scan_event_energy_unit(&text);
+            }
         }
         Ok(reader)
     }
@@ -1993,6 +2011,34 @@ fn method_settings_text(window: &[u8]) -> Option<String> {
     crate::instrument_method::method_xml(window).or_else(|| extract_utf16le_text(window, 256))
 }
 
+/// Every contiguous UTF-16LE text block of at least `min_chars` characters in
+/// `buf`, at either byte alignment, in file order.
+fn utf16le_text_blocks(buf: &[u8], min_chars: usize) -> Vec<String> {
+    let mut blocks = Vec::new();
+    for alignment in 0..2usize {
+        let mut run: Vec<u16> = Vec::new();
+        let aligned = buf.get(alignment..).unwrap_or(&[]);
+        let units = aligned
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c));
+        // The trailing 0 ends the last run.
+        for unit in units.chain([0]) {
+            if matches!(unit, 0x0009 | 0x000A | 0x000D | 0x0020..=0xFFFD) {
+                run.push(unit);
+                continue;
+            }
+            if run.len() >= min_chars {
+                // Unpaired surrogates in a text-looking run become U+FFFD.
+                blocks.push(String::from_utf16_lossy(&run));
+            }
+            run.clear();
+        }
+    }
+    blocks
+}
+
 /// Scan `buf` for the longest contiguous UTF-16LE text block of at least
 /// `min_chars` characters and return it as a String. Returns `None` if no
 /// such block exists.
@@ -2208,6 +2254,28 @@ impl<'a> ScanParams<'a> {
         self.nce().is_some()
     }
 
+    /// The collision energies of a stepped scan, with their unit.
+    ///
+    /// Public files store a stepped energy as one string listing every step,
+    /// separated by commas or spaces: `"29.10,30.00,30.90"` in the NCE label
+    /// (PXD027544) or `"25.0,28.0,32.0"` (PXD035500). The NCE labels
+    /// (`HCD Energy:`, `HCD Energy V:`) take priority; a string-typed
+    /// `HCD Energy eV:` is read only when no NCE label lists steps. Returns
+    /// `None` unless the label lists at least two steps and every step is a
+    /// finite positive number. A label with one value is read by
+    /// [`Self::activation_energy`].
+    pub fn collision_energy_steps(&self) -> Option<(Vec<f64>, crate::CollisionEnergyUnit)> {
+        let labels = [
+            ("HCD Energy:", crate::CollisionEnergyUnit::Nce),
+            ("HCD Energy V:", crate::CollisionEnergyUnit::Nce),
+            ("HCD Energy eV:", crate::CollisionEnergyUnit::Ev),
+        ];
+        labels.iter().find_map(|(label, unit)| {
+            let steps = parse_energy_steps(self.0.get_string(label)?)?;
+            Some((steps, *unit))
+        })
+    }
+
     /// First positive NCE value from the string-typed NCE labels.
     fn nce(&self) -> Option<f64> {
         ["HCD Energy:", "HCD Energy V:"].iter().find_map(|label| {
@@ -2385,6 +2453,22 @@ impl<'a> ScanParams<'a> {
     }
 }
 
+/// The steps listed in a stepped-energy label value, or `None` when it lists
+/// fewer than two or any step is not a finite positive number.
+fn parse_energy_steps(text: &str) -> Option<Vec<f64>> {
+    let steps: Vec<f64> = text
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .map(|part| part.trim().trim_end_matches('%'))
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            part.parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite() && *v > 0.0)
+        })
+        .collect::<Option<_>>()?;
+    (steps.len() >= 2).then_some(steps)
+}
+
 // -- Status log (instrument log) typed accessor --
 
 /// One instrument status-log record.
@@ -2441,6 +2525,41 @@ impl<'a> StatusLogEntry<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn text_blocks_are_every_utf16le_run_of_enough_characters() {
+        let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(u16::to_le_bytes).collect() };
+        let mut buf = vec![0x01, 0x00];
+        buf.extend(utf16("Collision Energy (%) = 30"));
+        buf.extend([0x00, 0x00]);
+        buf.extend(utf16("short"));
+        buf.extend([0x00, 0x00]);
+        buf.extend(utf16("Normalized Coll. Energy: 35.0"));
+        // The odd byte alignment reads the same bytes as other characters.
+        let blocks = utf16le_text_blocks(&buf, 20);
+        assert!(blocks.contains(&"Collision Energy (%) = 30".to_owned()));
+        assert!(blocks.contains(&"Normalized Coll. Energy: 35.0".to_owned()));
+        assert!(!blocks.iter().any(|b| b == "short"));
+    }
+
+    #[test]
+    fn energy_steps_need_two_finite_positive_values() {
+        use super::parse_energy_steps;
+        assert_eq!(
+            parse_energy_steps("29.10,30.00,30.90"),
+            Some(vec![29.10, 30.00, 30.90])
+        );
+        assert_eq!(
+            parse_energy_steps("27 30 33  "),
+            Some(vec![27.0, 30.0, 33.0])
+        );
+        assert_eq!(parse_energy_steps("25.0, 28.0%"), Some(vec![25.0, 28.0]));
+        for text in [
+            "", "32.00   ", "N/A", "27,N/A", "27,0", "27,-3", "27,NaN", "27,inf",
+        ] {
+            assert_eq!(parse_energy_steps(text), None, "{text:?}");
+        }
+    }
+
     use super::*;
     use std::io::Cursor;
 

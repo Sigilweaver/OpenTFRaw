@@ -39,6 +39,61 @@ def test_canonical_records(raw_file):
         assert len(chrom["time_sec"]) == len(chrom["intensity"])
 
 
+def test_canonical_record_keys_of_core_4(raw_file):
+    """A real MS2 record: the collision energy is a list with a unit,
+    retention time is seconds, and the labels are Core's ``as_str`` names."""
+    records = raw_file.iter_records()
+    ms1 = next(records)
+    ms2 = next(r for r in records if r["ms_level"] == 2)
+    assert isinstance(ms1["retention_time_sec"], float)
+    assert ms1["precursor"] is None
+    assert ms1["analyzer"] == "ftms"
+    assert ms1["polarity"] == "positive"
+    assert ms1["scan_mode"] == "centroid"
+    assert ms2["analyzer"] == "itms"
+    precursor = ms2["precursor"]
+    assert precursor["collision_energies"] == [{"value": 35.0, "unit": "nce"}]
+    assert precursor["activation"] == "cid"
+    assert "collision_energy" not in precursor
+    assert "ce_is_nce" not in precursor
+    assert ms2["extra"]["opentfraw.collision_energy_source"] == "scan_event"
+    scan = raw_file.scan(ms2["scan_number"])
+    assert scan["collision_energy"] == 35.0
+    assert scan["collision_energy_unit"] == "nce"
+    assert scan["collision_energy_source"] == "scan_event"
+    assert scan["collision_energy_is_nce"] is True
+    assert scan["collision_energy_steps"] is None
+
+
+def test_record_scan_window_observed_range_and_empty_spectrum(raw_file):
+    records = list(raw_file.iter_records())
+    ms1 = records[0]
+    assert ms1["scan_windows"] == [{"lower": 300.0, "upper": 2000.0}]
+    assert ms1["low_mz"] == ms1["mz"][0] > 300.0
+    assert ms1["high_mz"] == ms1["mz"][-1] < 2000.0
+    empty = [r for r in records if len(r["mz"]) == 0]
+    assert empty, "fixture has scans with no peaks"
+    for r in empty:
+        assert r["base_peak_mz"] is None
+        assert r["base_peak_intensity"] is None
+        assert [w["kind"] for w in r["warnings"]] == ["empty_spectrum"]
+
+
+def test_default_export_of_profile_scans_is_centroid(raw_file):
+    modes = {r["scan_mode"] for r in raw_file.iter_records()}
+    assert modes == {"centroid"}
+    assert "profile" in {s["scan_mode"] for s in raw_file.iter_scans()}
+
+
+def test_to_mzml_allow_rejects_unknown_check(raw_file, tmp_path):
+    with pytest.raises(ValueError, match="unknown check"):
+        raw_file.to_mzml(str(tmp_path / "out.mzML"), allow=["no_such_check"])
+    raw_file.to_mzml(
+        str(tmp_path / "out.mzML"),
+        allow=["unknown_scan_mode", "unknown_collision_energy_unit"],
+    )
+
+
 def test_open_and_repr(raw_file):
     assert isinstance(raw_file, opentfraw.RawFile)
     r = repr(raw_file)
@@ -315,6 +370,9 @@ def test_scan(raw_file):
         "isolation_target_mz",
         "isolation_width",
         "collision_energy",
+        "collision_energy_steps",
+        "collision_energy_unit",
+        "collision_energy_source",
         "collision_energy_is_nce",
         "activation",
         "master_scan_number",
@@ -387,6 +445,9 @@ def test_ms1_scans_have_no_precursor(raw_file):
         "isolation_target_mz",
         "isolation_width",
         "collision_energy",
+        "collision_energy_steps",
+        "collision_energy_unit",
+        "collision_energy_source",
         "activation",
         "master_scan_number",
     )
@@ -411,8 +472,12 @@ def test_scan_precursor_matches_mzml(raw_file, tmp_path):
         for param in spectrum.iterfind("./m:precursorList//m:cvParam", ns):
             if param.get("accession") == "MS:1000744":
                 values["precursor_mz"] = float(param.get("value"))
-            elif param.get("accession") == "MS:1000045":
+            elif param.get("accession") in ("MS:1000045", "MS:1000138"):
                 values["collision_energy"] = float(param.get("value"))
+                values["collision_energy_unit"] = {
+                    "MS:1000045": "ev",
+                    "MS:1000138": "nce",
+                }[param.get("accession")]
         from_mzml[scan_number] = values
     # mzML writes m/z with 6 decimals and energies with 2.
     tolerance = {"precursor_mz": 1e-6, "collision_energy": 1e-2}
@@ -428,6 +493,8 @@ def test_scan_precursor_matches_mzml(raw_file, tmp_path):
                     key,
                 )
                 checked += 1
+        if "collision_energy_unit" in expected:
+            assert scan["collision_energy_unit"] == expected["collision_energy_unit"]
     if checked == 0:
         pytest.skip("fixture file has no MS2 precursors")
 
@@ -555,13 +622,17 @@ def test_to_mzml(raw_file, tmp_path):
 
 def test_to_mzml_skip_unreadable_on_readable_file(raw_file, tmp_path):
     """Every scan of the fixture decodes, so both policies write the same
-    document, report 0 left out, and warn about nothing."""
+    document and report 0 left out. The only warning is the count of scans
+    that hold no peaks."""
     import warnings
 
     default_out = tmp_path / "default.mzML"
     skip_out = tmp_path / "skip.mzML"
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
         assert raw_file.to_mzml(str(default_out)) == 0
         assert raw_file.to_mzml(str(skip_out), skip_unreadable=True) == 0
+    messages = [str(w.message) for w in caught]
+    assert len(messages) == 2
+    assert all("warning empty_spectrum" in m for m in messages)
     assert default_out.read_bytes() == skip_out.read_bytes()

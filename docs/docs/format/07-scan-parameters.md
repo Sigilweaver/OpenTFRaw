@@ -85,13 +85,24 @@ Activation energy is read from these scan-parameter labels:
 | `"HCD Energy V:"` | NCE | String, optional trailing `%` |
 | `"HCD Energy eV:"` | eV | Numeric |
 
-Both kinds come from labels stored in the file. When a scan carries both an
-NCE label and an eV label, OpenTFRaw reports the NCE value; this priority is a
-project choice. The eV label is used only when no NCE label is present. The
-reader's `activation_energy_is_nce` (Python: `collision_energy_is_nce`) says
-which kind was reported. A value of zero is treated as not set. A stepped
-NCE string such as `"27 30 33"` does not parse as a single number, so it
-yields no NCE value and the eV label is used if present.
+Each label states its unit. A stepped scan stores every step in one string,
+separated by commas or spaces (`"29.10,30.00,30.90"`, `"27 30 33"`); the
+reader then reports every step with the label's unit, and the mean of the
+steps as the single value. A label that lists one value is read as that
+value. When a scan carries both an NCE label and an eV label, OpenTFRaw
+reports the NCE value; this priority is a project choice. The eV label is
+used only when no NCE label is present. The reader's
+`activation_energy_is_nce` (Python: `collision_energy_is_nce`) says which kind
+was reported. A value of zero is treated as not set. A label that holds text
+(`"N/A"`, empty) yields no value.
+
+When no label gives a value, the reader takes the energy of the scan event's
+first reaction. The scan event stores a bare number. Its unit is the one the
+embedded instrument method states: `Normalized Coll. Energy: 35.0` (LTQ,
+Velos, Elite and FT families), `Collision Energy (%) = 32` (Fusion family) or
+`EnergyType="normalized"` on the `Fragmentation_*` element (Q Exactive
+family). With no such statement, or a conflicting one, the unit is unknown.
+SRM collision energies come from the transition table and are electronvolts.
 
 ---
 

@@ -115,6 +115,37 @@ pub enum Activation {
     Unknown(u8),
 }
 
+/// Unit of a collision energy.
+///
+/// The unit is never assumed: it comes from the trailer label that carried
+/// the value or from the embedded method (see [`CollisionEnergySource`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CollisionEnergyUnit {
+    /// Normalized collision energy, percent.
+    Nce,
+    /// Absolute collision energy in electronvolts.
+    Ev,
+}
+
+/// Where a scan's collision energy value was read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CollisionEnergySource {
+    /// The trailer's `HCD Energy:` or `HCD Energy V:` label, which holds a
+    /// normalized collision energy.
+    TrailerNce,
+    /// The trailer's `HCD Energy eV:` label, which holds electronvolts.
+    TrailerEv,
+    /// The first reaction of the scan event. The file stores no unit with
+    /// it; [`CollisionEnergyUnit`] comes from the embedded instrument method
+    /// when that states one (see [`crate::RawFileReader::scan_event_energy_unit`]).
+    ScanEvent,
+    /// The collision energy of the SRM transition table (TSQ files), in
+    /// electronvolts.
+    SrmTransition,
+}
+
 /// Generic data field type codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
@@ -265,6 +296,29 @@ impl Ionization {
             Self::FDI => "FDI",
             Self::MALDI => "MALDI",
             Self::GDI => "GDI",
+        }
+    }
+}
+
+impl CollisionEnergyUnit {
+    /// Stable label: `"nce"` or `"ev"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Nce => "nce",
+            Self::Ev => "ev",
+        }
+    }
+}
+
+impl CollisionEnergySource {
+    /// Stable label: `"trailer_nce"`, `"trailer_ev"`, `"scan_event"` or
+    /// `"srm_transition"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::TrailerNce => "trailer_nce",
+            Self::TrailerEv => "trailer_ev",
+            Self::ScanEvent => "scan_event",
+            Self::SrmTransition => "srm_transition",
         }
     }
 }

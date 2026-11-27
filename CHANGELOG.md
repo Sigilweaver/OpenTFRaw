@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-11-27
+
+### Changed
+
+- **Breaking (Python):** the minimum Python version is 3.10 (was 3.8), and
+  wheels are built for `abi3-py310`. This follows the project's supported
+  Python versions.
+- **Breaking (Rust):** adopts `openmassspec-core` 4.0.0. `OpenTfRawSource`
+  implements `SpectrumSource` only for `R: Read + Seek + Send`, and so do
+  `mzml::write_mzml` and `mzml::write_indexed_mzml`, because Core's spectrum
+  iterator is `Send`.
+- **Breaking (Python):** `iter_records()` and `run_info()` return Core 4
+  records. The precursor's `collision_energy` and `ce_is_nce` are replaced by
+  `collision_energies`, a list of `{"value", "unit"}` (`"nce"` or `"ev"`;
+  `unit` is `None` when the file does not say). `analyzer` labels are Core's:
+  `"tof"` where 3.x gave `"tofms"`. The unit of a collision energy is no
+  longer assumed to be eV: see Fixed. Core 4's writer refuses records it used
+  to write; see the README, Known issues and gaps, and `MIGRATING-4.0.md`.
+- `to_mzml` (Python `allow=[...]`, example `--allow <check>`) relaxes the
+  writer's strict checks `unknown_collision_energy_unit`,
+  `dangling_precursor_ref`, `spectrum_count_shortfall` and `unknown_scan_mode`
+  (which never applies: every exported scan has a scan mode). A relaxed record is written with a warning
+  userParam, and a `UserWarning` (Python) or a message (example) counts each
+  warning code the write produced.
+- `PrecursorInfo` gains `collision_energy_unit`, `collision_energy_source` and
+  `collision_energy_steps`; `ce_is_nce` stays and is true only when the unit
+  is NCE. Python `scan()` gains `collision_energy_unit`,
+  `collision_energy_source` and `collision_energy_steps`. Each spectrum gains
+  the `opentfraw.collision_energy_source` extra field. `RawFileReader` gains
+  `scan_event_energy_unit`.
+- Activation code 4 on an FTMS analyzer is passed to Core as `HCD`, which is
+  written as beam-type collision-induced dissociation (MS:1000422), the term
+  3.x wrote. Core 4 writes `CID` as MS:1000133 and no longer chooses from the
+  analyzer. The mzML output is unchanged; `iter_records()` reports `"hcd"`
+  where 3.x reported `"cid"`.
+- **Breaking (Rust):** the TSQ Vantage peak-count flags added in 3.1.1 use
+  Core's warnings. A recovered or unverified scan carries the warning
+  `opentfraw.peak_count_recovered` or `opentfraw.peak_count_unverified` (a
+  userParam named `openmassspec: warning <code>` in mzML, counted in the write
+  summary) instead of the spectrum `extra` key of that name.
+  `OpenTfRawSource::recovered_peak_count_scans()` and
+  `unverified_peak_count_scans()` keep their meaning and are counted from those
+  warnings. `RECOVERED_PEAK_COUNT_KEY` / `UNVERIFIED_PEAK_COUNT_KEY` are
+  deprecated aliases of `RECOVERED_PEAK_COUNT_CODE` /
+  `UNVERIFIED_PEAK_COUNT_CODE` (the same strings, now warning codes, not `extra`
+  keys). With the recovery, PXD020246 converts by
+  default (35,098 spectra, 1,969 with the recovered warning); Core's writer
+  refuses only an unverified scan whose m/z is not finite and ascending.
+
+### Fixed
+
+- The unit of a scan-event collision energy was always reported as eV. On the
+  LTQ, Velos, Elite and FT files the embedded method says
+  `Normalized Coll. Energy: 35.0`, so those energies are NCE: mzML now writes
+  `normalized collision energy` (MS:1000138) instead of `collision energy`
+  (MS:1000045) for them. The statement is searched in every text block of the
+  method region, so it is found on Fusion Lumos and LTQ Orbitrap files, where
+  the longest text block is a device description. When the method states no
+  unit, the energy has none (see Known issues and gaps).
+- A stepped collision energy (a trailer label such as `"29.10,30.00,30.90"`)
+  gave one value from the scan event, in eV. It now carries every step with
+  the label's unit, and the single `collision_energy` is their mean. On
+  PXD064117 this also gives 1,343 EThcD scans a supplemental collision energy
+  they did not have in 3.1.0.
+- mzML written without `include_profile` labelled the centroid peak list of a
+  profile-mode scan as a profile spectrum (MS:1000128). It is now centroid.
+  This also gives such scans a scan mode where the scan event's mode is
+  unreadable.
+- mzML wrote the acquisition range of a scan (for example 300 to 2000) as its
+  lowest and highest observed m/z. Those terms now hold the first and last m/z
+  of the written peaks, and the acquisition range is written as the scan
+  window (`scanWindowList`), as Core 4 defines it. An SRM scan's windows are
+  its product-ion windows, to four decimals. `ScanMetadata` gains
+  `scan_windows`.
+- A scan with no peaks (8,822 of 11.9 million scans in the 291-file corpus,
+  mostly ion-trap MS2) was written with base peak m/z and intensity 0, the
+  scan index's values for it. It now has no base peak, and carries the Core
+  warning `empty_spectrum` (Core's `WarningKind::EmptySpectrum`; a userParam
+  in mzML, counted in the write summary).
+- A scan whose trailer states a charge but whose precursor has no m/z (50
+  scans in 5 corpus files, all with misread scan events) made Core's writer
+  refuse the file. The precursor now has no `charge`; the charge is kept in
+  the spectrum's `extra` as `opentfraw.precursor_charge`, with the warning
+  `opentfraw.charge_without_selected_mz` (public constants
+  `mzml::UNPLACED_CHARGE_KEY` and `mzml::CHARGE_WITHOUT_SELECTED_MZ_CODE`), so
+  the file converts and no decoded value is lost.
+
 ## [3.1.1] - 2026-11-27
 
 ### Added

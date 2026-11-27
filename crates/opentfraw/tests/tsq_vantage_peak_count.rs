@@ -7,7 +7,7 @@
 //! place it at `corpus/PXD020246_TSQVantage.RAW`.
 
 use openmassspec_core::SpectrumSource;
-use opentfraw::mzml::{OpenTfRawSource, RECOVERED_PEAK_COUNT_KEY, UNVERIFIED_PEAK_COUNT_KEY};
+use opentfraw::mzml::{OpenTfRawSource, RECOVERED_PEAK_COUNT_CODE, UNVERIFIED_PEAK_COUNT_CODE};
 use opentfraw::{iter_spectra, PeakCountCheck, RawFileReader};
 use std::fs::File;
 use std::io::BufReader;
@@ -41,7 +41,7 @@ fn pxd020246_recovers_1969_scans_and_leaves_none_unverified() {
     assert_eq!(raw.num_scans, 35_098);
     assert_eq!(raw.v63_transition_events_skipped, 0);
 
-    // Through the source: the extra keys and the counters.
+    // Through the source: the Core warnings.
     let mut file = BufReader::new(File::open(&path).expect("reopen raw"));
     let mut source = OpenTfRawSource::new(&raw, &mut file, "PXD020246_TSQVantage.RAW", false);
     let (mut n, mut flagged) = (0usize, 0usize);
@@ -50,13 +50,15 @@ fn pxd020246_recovers_1969_scans_and_leaves_none_unverified() {
         n += 1;
         assert!(record.mz.windows(2).all(|w| w[0] <= w[1]), "m/z ascends");
         assert!(record.mz.iter().all(|m| m.is_finite()));
-        assert!(!record.extra.contains_key(UNVERIFIED_PEAK_COUNT_KEY));
-        if record.extra.contains_key(RECOVERED_PEAK_COUNT_KEY) {
+        let codes: Vec<&str> = record.warnings.iter().map(|w| w.kind.code()).collect();
+        assert!(!codes.contains(&UNVERIFIED_PEAK_COUNT_CODE));
+        if codes.contains(&RECOVERED_PEAK_COUNT_CODE) {
             flagged += 1;
         }
     }
     assert_eq!(n, 35_098);
     assert_eq!(flagged, 1_969);
+    // The source's own counters, as in 3.1.1.
     assert_eq!(source.recovered_peak_count_scans(), 1_969);
     assert_eq!(source.unverified_peak_count_scans(), 0);
 

@@ -27,7 +27,7 @@ def test_to_mzml_recovers_the_peak_count_and_says_so(tmp_path):
 
     out = tmp_path / "out.mzML"
     with pytest.warns(
-        UserWarning, match=rf"wrote {RECOVERED} record\(s\) .* peak count was recovered"
+        UserWarning, match=rf"wrote {RECOVERED} record\(s\) .* warning opentfraw\.peak_count_recovered"
     ):
         left_out = raw.to_mzml(str(out))
     assert left_out == 0
@@ -37,7 +37,7 @@ def test_to_mzml_recovers_the_peak_count_and_says_so(tmp_path):
     flagged = [
         p
         for p in root.iter("{http://psi.hupo.org/ms/mzml}userParam")
-        if p.get("name") == "opentfraw.peak_count_recovered"
+        if p.get("name", "").endswith("warning opentfraw.peak_count_recovered")
     ]
     assert len(flagged) == RECOVERED
 
@@ -61,6 +61,9 @@ def test_iter_records_flags_recovered_scans():
     flagged = sum(
         1
         for record in raw.iter_records()
-        if "opentfraw.peak_count_recovered" in record["extra"]
+        if any(
+            w["kind"] == "opentfraw.peak_count_recovered"
+            for w in record.get("warnings", [])
+        )
     )
     assert flagged == RECOVERED

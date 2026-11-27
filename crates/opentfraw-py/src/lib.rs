@@ -30,7 +30,9 @@ use ::opentfraw::scan_filter::activation_str;
 use ::opentfraw::ExtraFields;
 use ::opentfraw::{scan_metadata, PeakCountCheck, Polarity, RawFileReader, ScanMetadata};
 use numpy::{PyArray1, ToPyArray};
-use openmassspec_core::{RecordErrorPolicy, SpectrumRecord, SpectrumSource, WriteOptions};
+use openmassspec_core::{
+    Check, Leniency, RecordErrorPolicy, SpectrumRecord, SpectrumSource, WriteOptions,
+};
 use pyo3::exceptions::{PyIOError, PyIndexError, PyRuntimeError, PyUserWarning, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -893,9 +895,17 @@ impl RawFile {
     /// isolation_target_mz : float | None  (isolation window center)
     /// isolation_width : float | None
     /// collision_energy : float | None
-    /// collision_energy_is_nce : bool  (True when collision_energy is a
-    ///     normalized collision energy rather than eV; when a scan stores
-    ///     both, the NCE value is reported)
+    /// collision_energy_steps : list[float] | None  (every step of a stepped
+    ///     collision energy; collision_energy is then their mean. None when
+    ///     the scan has a single energy)
+    /// collision_energy_unit : str | None  ("nce" or "ev"; None when the
+    ///     file does not state the unit of collision_energy)
+    /// collision_energy_source : str | None  (where collision_energy was
+    ///     read from: "trailer_nce", "trailer_ev", "scan_event" or
+    ///     "srm_transition"; when a trailer stores both an NCE and an eV
+    ///     value, the NCE value is reported)
+    /// collision_energy_is_nce : bool  (True when collision_energy_unit is
+    ///     "nce"; False for "ev" and for an unknown unit)
     /// activation : str | None  ("hcd", "cid", "etd", "ethcd")
     /// master_scan_number : int | None  (scan that triggered this one)
     /// extra : dict[str, str]  (every other decoded ``opentfraw.*`` value
@@ -1030,16 +1040,28 @@ impl RawFile {
     /// written, and a ``UserWarning`` states how many were left out. The
     /// ``<spectrumList count>`` attribute still counts the skipped scans.
     ///
+    /// The writer also raises ``OSError`` for a scan whose collision energy
+    /// has no stated unit, whose precursor references a spectrum that is not
+    /// in the output, or whose m/z values are not ascending. ``allow`` lists
+    /// the checks to relax (``"unknown_collision_energy_unit"``,
+    /// ``"dangling_precursor_ref"``, ``"unknown_scan_mode"``,
+    /// ``"spectrum_count_shortfall"``): such a scan is written with a
+    /// warning userParam. A ``UserWarning`` states how many scans carry each
+    /// warning, including ``empty_spectrum`` for a scan with no
+    /// peaks. Unsorted m/z has no check to relax. An unknown name raises
+    /// ``ValueError``.
+    ///
     /// A TSQ Vantage scan whose default peak count disagrees with the scan
     /// index is read with the one count the index confirms; each such record
-    /// has the userParam ``opentfraw.peak_count_recovered``. When no single
-    /// count agrees, the default peaks are written with the userParam
-    /// ``opentfraw.peak_count_unverified``. A ``UserWarning`` states how many
-    /// records of each kind were written.
+    /// has the warning ``opentfraw.peak_count_recovered``. When no single
+    /// count agrees, the default peaks carry the warning
+    /// ``opentfraw.peak_count_unverified`` and the writer refuses them unless
+    /// their m/z is finite and ascending. Both are counted in the
+    /// ``UserWarning`` above.
     ///
     /// Returns the number of records left out (always 0 unless
     /// ``skip_unreadable=True``).
-    #[pyo3(signature = (out_path, extra_fields=None, exclude_extra_fields=None, skip_unreadable=false))]
+    #[pyo3(signature = (out_path, extra_fields=None, exclude_extra_fields=None, skip_unreadable=false, allow=None))]
     fn to_mzml(
         &self,
         py: Python<'_>,
@@ -1047,7 +1069,15 @@ impl RawFile {
         extra_fields: Option<Vec<String>>,
         exclude_extra_fields: Option<Vec<String>>,
         skip_unreadable: bool,
+        allow: Option<Vec<String>>,
     ) -> PyResult<usize> {
+        let mut leniency = Leniency::strict();
+        for name in allow.unwrap_or_default() {
+            let check = name
+                .parse::<Check>()
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            leniency = leniency.with(check);
+        }
         let selection = match (extra_fields, exclude_extra_fields) {
             (Some(_), Some(_)) => {
                 return Err(PyValueError::new_err(
@@ -1069,7 +1099,9 @@ impl RawFile {
         } else {
             RecordErrorPolicy::Fail
         };
-        let options = WriteOptions::new().with_record_error_policy(policy);
+        let options = WriteOptions::new()
+            .with_record_error_policy(policy)
+            .with_leniency(leniency);
         let raw_filename = self
             .path
             .file_name()
@@ -1077,19 +1109,13 @@ impl RawFile {
             .ok_or_else(|| PyValueError::new_err("non-UTF8 file name"))?;
         let out_file = File::create(out_path).map_err(|e| PyIOError::new_err(e.to_string()))?;
         let mut out = std::io::BufWriter::new(out_file);
-        let (summary, recovered, unverified) = {
+        let summary = {
             // Release the source lock before any warning runs Python code.
             let mut src = self.locked_source()?;
             let mut source = OpenTfRawSource::new(&self.reader, &mut *src, raw_filename, false)
                 .with_extra_fields(selection);
-            let summary =
-                openmassspec_core::write_mzml_with_options(&mut source, &mut out, &options)
-                    .map_err(|e| PyIOError::new_err(e.to_string()))?;
-            (
-                summary,
-                source.recovered_peak_count_scans(),
-                source.unverified_peak_count_scans(),
-            )
+            openmassspec_core::write_mzml_with_options(&mut source, &mut out, &options)
+                .map_err(|e| PyIOError::new_err(e.to_string()))?
         };
         out.flush().map_err(|e| PyIOError::new_err(e.to_string()))?;
         let skipped = summary.skipped();
@@ -1100,25 +1126,12 @@ impl RawFile {
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
             PyErr::warn(py, &py.get_type::<PyUserWarning>(), &message, 1)?;
         }
-        if recovered > 0 {
-            warn_user(
-                py,
-                &format!(
-                    "to_mzml wrote {recovered} record(s) from {raw_filename} whose peak count \
-                     was recovered from the scan index (userParam opentfraw.peak_count_recovered)"
-                ),
-            )?;
-        }
-        if unverified > 0 {
-            warn_user(
-                py,
-                &format!(
-                    "to_mzml wrote {unverified} record(s) from {raw_filename} whose peak count \
-                     is unverified: the default count disagrees with the scan index and no \
-                     single other count agrees, so m/z may be non-finite or descending \
-                     (userParam opentfraw.peak_count_unverified)"
-                ),
-            )?;
+        for (code, count) in &summary.warning_counts {
+            let message = CString::new(format!(
+                "to_mzml wrote {count} record(s) from {raw_filename} with warning {code}"
+            ))
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            PyErr::warn(py, &py.get_type::<PyUserWarning>(), &message, 1)?;
         }
         Ok(skipped)
     }
@@ -1172,6 +1185,20 @@ fn metadata_dict<'py>(
     d.set_item(
         "collision_energy",
         precursor.and_then(|p| p.collision_energy),
+    )?;
+    d.set_item(
+        "collision_energy_steps",
+        precursor
+            .filter(|p| !p.collision_energy_steps.is_empty())
+            .map(|p| p.collision_energy_steps.clone()),
+    )?;
+    d.set_item(
+        "collision_energy_unit",
+        precursor.and_then(|p| p.collision_energy_unit.map(|u| u.as_str())),
+    )?;
+    d.set_item(
+        "collision_energy_source",
+        precursor.and_then(|p| p.collision_energy_source.map(|s| s.as_str())),
     )?;
     d.set_item(
         "collision_energy_is_nce",
